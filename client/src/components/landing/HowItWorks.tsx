@@ -1,7 +1,6 @@
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
-import { Mic, Sparkles, FileText, ArrowRight } from "lucide-react";
-import soundToText from "@assets/generated_images/sound_to_text_transformation.png";
+import { Mic, Sparkles, FileText, ArrowRight, AudioWaveform } from "lucide-react";
 
 const steps = [
   {
@@ -82,12 +81,16 @@ export default function HowItWorks() {
         >
           <div className="relative">
             <div className="absolute inset-0 bg-gradient-to-br from-primary/30 to-purple-500/30 rounded-3xl blur-2xl" />
-            <img
-              src={soundToText}
-              alt="Voice to text transformation"
-              className="relative w-64 md:w-80 rounded-3xl"
+            <div 
+              className="relative w-64 md:w-80 h-48 md:h-64 rounded-3xl bg-gradient-to-br from-primary/20 to-purple-500/20 border border-primary/30 flex items-center justify-center"
               data-testid="img-how-it-works"
-            />
+            >
+              <div className="flex items-center gap-4">
+                <AudioWaveform className="w-12 h-12 md:w-16 md:h-16 text-primary animate-pulse" />
+                <ArrowRight className="w-6 h-6 text-muted-foreground" />
+                <FileText className="w-12 h-12 md:w-16 md:h-16 text-primary" />
+              </div>
+            </div>
           </div>
         </motion.div>
       </div>

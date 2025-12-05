@@ -2,9 +2,7 @@ import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Apple, Smartphone, Globe, Monitor } from "lucide-react";
-import heroPhone from "@assets/generated_images/phone_with_voice_recording_app.png";
-import heroDevices from "@assets/generated_images/laptop_tablet_app_mockup.png";
+import { Sparkles, Apple, Smartphone, Globe, Monitor, Mic, FileText, Wand2 } from "lucide-react";
 
 const rotatingWords = ["message", "note", "email", "post", "journal"];
 
@@ -111,24 +109,43 @@ export default function HeroSection() {
               className="relative"
             >
               <div className="absolute inset-0 bg-gradient-to-br from-primary/30 to-purple-500/30 rounded-3xl blur-2xl" />
-              <img
-                src={heroPhone}
-                alt="MyVoicePost app on phone"
-                className="relative w-64 md:w-80 rounded-3xl shadow-2xl"
+              <div
+                className="relative w-64 md:w-80 h-96 md:h-[28rem] rounded-3xl shadow-2xl bg-gradient-to-br from-background to-muted border border-border overflow-hidden"
                 data-testid="img-hero-phone"
-              />
+              >
+                <div className="absolute top-0 left-0 right-0 h-8 bg-muted/50 flex items-center justify-center">
+                  <div className="w-16 h-1 bg-muted-foreground/30 rounded-full" />
+                </div>
+                <div className="flex flex-col items-center justify-center h-full p-6 gap-6">
+                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-primary to-purple-500 flex items-center justify-center animate-pulse">
+                    <Mic className="w-12 h-12 text-white" />
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <Wand2 className="w-6 h-6 text-primary" />
+                    <span className="text-sm text-muted-foreground">AI Processing</span>
+                  </div>
+                  <div className="w-full space-y-2">
+                    <div className="h-3 bg-muted rounded-full w-full" />
+                    <div className="h-3 bg-muted rounded-full w-4/5" />
+                    <div className="h-3 bg-muted rounded-full w-3/5" />
+                  </div>
+                  <FileText className="w-10 h-10 text-primary/60" />
+                </div>
+              </div>
               <motion.div
                 initial={{ opacity: 0, x: 50 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ duration: 0.8, delay: 0.5 }}
                 className="absolute -right-4 md:-right-20 top-10 hidden sm:block"
               >
-                <img
-                  src={heroDevices}
-                  alt="MyVoicePost on multiple devices"
-                  className="w-48 md:w-64 rounded-xl shadow-xl border border-border"
+                <div
+                  className="w-48 md:w-64 h-32 md:h-40 rounded-xl shadow-xl border border-border bg-gradient-to-br from-muted to-background flex items-center justify-center gap-4"
                   data-testid="img-hero-devices"
-                />
+                >
+                  <Monitor className="w-8 h-8 text-primary" />
+                  <Smartphone className="w-6 h-6 text-primary" />
+                  <Globe className="w-6 h-6 text-primary" />
+                </div>
               </motion.div>
             </motion.div>
           </div>

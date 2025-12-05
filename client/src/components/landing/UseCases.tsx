@@ -1,39 +1,49 @@
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import womanNotes from "@assets/generated_images/woman_using_voice_notes.png";
-import manRecording from "@assets/generated_images/man_recording_voice_note.png";
-import floatingUI from "@assets/generated_images/floating_app_ui_elements.png";
-import soundTransform from "@assets/generated_images/sound_to_text_transformation.png";
+import { StickyNote, MessageSquare, PenTool, BookOpen, type LucideIcon } from "lucide-react";
 
-const useCases = [
+interface UseCase {
+  title: string;
+  tags: string[];
+  description: string;
+  icon: LucideIcon;
+  gradient: string;
+  iconColor: string;
+}
+
+const useCases: UseCase[] = [
   {
     title: "Note-taking",
     tags: ["ideas", "to-dos", "shopping lists", "plans"],
     description: "Easily capture the moments that matter! Never let a thought slip away again.",
-    image: womanNotes,
+    icon: StickyNote,
     gradient: "from-orange-500/20 to-pink-500/20",
+    iconColor: "text-orange-500",
   },
   {
     title: "Communication",
     tags: ["messages", "emails", "comments"],
     description: "Craft clear, easy-to-read messages. Communicate with ease and save yourself time.",
-    image: floatingUI,
+    icon: MessageSquare,
     gradient: "from-blue-500/20 to-cyan-500/20",
+    iconColor: "text-blue-500",
   },
   {
     title: "Content creation",
     tags: ["social media", "articles", "newsletters", "scripts"],
     description: "Say goodbye to writer's block. Create compelling content with ease and inspiration.",
-    image: manRecording,
+    icon: PenTool,
     gradient: "from-purple-500/20 to-pink-500/20",
+    iconColor: "text-purple-500",
   },
   {
     title: "Journaling",
     tags: ["thoughts", "emotions", "memories", "gratitude"],
     description: "Keep a voice journal to reflect on your experiences and track what matters most.",
-    image: soundTransform,
+    icon: BookOpen,
     gradient: "from-green-500/20 to-emerald-500/20",
+    iconColor: "text-green-500",
   },
 ];
 
@@ -81,11 +91,9 @@ export default function UseCases() {
                       <p className="text-muted-foreground">{useCase.description}</p>
                     </div>
                     <div className="flex-shrink-0">
-                      <img
-                        src={useCase.image}
-                        alt={useCase.title}
-                        className="w-32 h-32 md:w-40 md:h-40 rounded-2xl object-cover shadow-lg group-hover:scale-105 transition-transform duration-300"
-                      />
+                      <div className={`w-32 h-32 md:w-40 md:h-40 rounded-2xl shadow-lg group-hover:scale-105 transition-transform duration-300 bg-gradient-to-br ${useCase.gradient} border border-border flex items-center justify-center`}>
+                        <useCase.icon className={`w-16 h-16 md:w-20 md:h-20 ${useCase.iconColor}`} />
+                      </div>
                     </div>
                   </div>
                 </div>
