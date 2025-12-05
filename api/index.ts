@@ -225,6 +225,7 @@ const upload = multer({
   },
 });
 
+// In-memory translations storage (for serverless)
 const translations = new Map<string, any>();
 
 // ============ ROUTES ============
@@ -342,6 +343,7 @@ app.get("/api/translations/:id", async (req, res) => {
   }
 });
 
+// Auth routes
 app.post("/api/auth/signup", async (req, res) => {
   try {
     const parseResult = signupSchema.safeParse(req.body);
@@ -440,15 +442,18 @@ app.get("/api/auth/me", (req, res) => {
   }
 });
 
+// Error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error("Error:", err);
   res.status(err.status || 500).json({ error: err.message || "Internal Server Error" });
 });
 
+// Vercel function config
 export const config = {
   maxDuration: 30,
 };
 
+// Export for Vercel
 export default (req: VercelRequest, res: VercelResponse) => {
   return app(req as any, res as any);
 };

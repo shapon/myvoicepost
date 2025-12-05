@@ -1,58 +1,42 @@
-import { type User, type TranslationResult, type InsertTranslation } from "@shared/schema";
+import { db } from "./supabase-db";
+import { users } from "@shared/schema";
+import { eq } from "drizzle-orm";
+import type { User, TranslationResult, InsertTranslation } from "@shared/schema";
+import type { IStorage, CreateUserInput } from "./storage";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 
-export interface CreateUserInput {
-  username: string;
-  password: string;
-  email?: string;
-}
-
-export interface IStorage {
-  getUser(id: string): Promise<User | undefined>;
-  getUserByUsername(username: string): Promise<User | undefined>;
-  getUserByEmail?(email: string): Promise<User | undefined>;
-  createUser(user: CreateUserInput): Promise<User>;
-  validatePassword?(user: User, password: string): Promise<boolean>;
-  
-  // Translation operations
-  createTranslation(translation: InsertTranslation): Promise<TranslationResult>;
-  getTranslation(id: string): Promise<TranslationResult | undefined>;
-  getRecentTranslations(limit?: number): Promise<TranslationResult[]>;
-}
-
-export class MemStorage implements IStorage {
-  private users: Map<string, User>;
+export class SupabaseStorage implements IStorage {
   private translations: Map<string, TranslationResult>;
 
   constructor() {
-    this.users = new Map();
     this.translations = new Map();
   }
 
   async getUser(id: string): Promise<User | undefined> {
-    return this.users.get(id);
+    const result = await db.select().from(users).where(eq(users.id, id)).limit(1);
+    return result[0];
   }
 
   async getUserByUsername(username: string): Promise<User | undefined> {
-    return Array.from(this.users.values()).find(
-      (user) => user.username === username,
-    );
+    const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    return result[0];
+  }
+
+  async getUserByEmail(email: string): Promise<User | undefined> {
+    if (!email) return undefined;
+    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    return result[0];
   }
 
   async createUser(input: CreateUserInput): Promise<User> {
-    const id = randomUUID();
     const hashedPassword = await bcrypt.hash(input.password, 10);
-    const user: User = { 
-      id, 
-      username: input.username, 
+    const result = await db.insert(users).values({
+      username: input.username,
       email: input.email || null,
       passwordHash: hashedPassword,
-      createdAt: new Date(),
-      updatedAt: new Date(),
-    };
-    this.users.set(id, user);
-    return user;
+    }).returning();
+    return result[0];
   }
 
   async validatePassword(user: User, password: string): Promise<boolean> {
@@ -82,4 +66,4 @@ export class MemStorage implements IStorage {
   }
 }
 
-export const storage = new MemStorage();
+export const supabaseStorage = new SupabaseStorage();

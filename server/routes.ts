@@ -1,9 +1,30 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
-import { storage } from "./storage";
-import { translateRequestSchema, polishRequestSchema } from "@shared/schema";
+import { supabaseStorage } from "./supabase-storage";
+import { translateRequestSchema, polishRequestSchema, insertUserSchema } from "@shared/schema";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
 import multer, { FileFilterCallback } from "multer";
+import { z } from "zod";
+
+// Use supabase storage for database operations
+const storage = supabaseStorage;
+
+// Login schema
+const loginSchema = z.object({
+  username: z.string().min(3, "Username must be at least 3 characters"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+});
+
+// Signup schema
+const signupSchema = z.object({
+  username: z.string().min(3, "Username must be at least 3 characters"),
+  email: z.string().email("Please enter a valid email address"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string(),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
 
 // Configure multer for audio file uploads (store in memory)
 const upload = multer({
@@ -179,6 +200,115 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Error fetching translation:", error);
       res.status(500).json({ error: "Failed to fetch translation" });
+    }
+  });
+
+  // ============ AUTHENTICATION ROUTES ============
+
+  // Signup endpoint
+  app.post("/api/auth/signup", async (req, res) => {
+    try {
+      const parseResult = signupSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Validation failed",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { username, email, password } = parseResult.data;
+
+      // Check if user already exists
+      const existingUser = await storage.getUserByUsername(username);
+      if (existingUser) {
+        return res.status(409).json({ error: "Username already exists" });
+      }
+
+      // Check if email already exists
+      const existingEmail = await storage.getUserByEmail?.(email);
+      if (existingEmail) {
+        return res.status(409).json({ error: "Email already exists" });
+      }
+
+      // Create new user
+      const user = await storage.createUser({ username, email, password });
+
+      // Set session
+      (req.session as any).userId = user.id;
+      (req.session as any).username = user.username;
+
+      res.status(201).json({
+        message: "Account created successfully",
+        user: { id: user.id, username: user.username },
+      });
+    } catch (error: any) {
+      console.error("Signup error:", error);
+      res.status(500).json({ error: "Failed to create account" });
+    }
+  });
+
+  // Login endpoint
+  app.post("/api/auth/login", async (req, res) => {
+    try {
+      const parseResult = loginSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Validation failed",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { username, password } = parseResult.data;
+
+      // Find user
+      const user = await storage.getUserByUsername(username);
+      if (!user) {
+        return res.status(401).json({ error: "Invalid username or password" });
+      }
+
+      // Validate password
+      const isValidPassword = await storage.validatePassword(user, password);
+      if (!isValidPassword) {
+        return res.status(401).json({ error: "Invalid username or password" });
+      }
+
+      // Set session
+      (req.session as any).userId = user.id;
+      (req.session as any).username = user.username;
+
+      res.json({
+        message: "Login successful",
+        user: { id: user.id, username: user.username },
+      });
+    } catch (error: any) {
+      console.error("Login error:", error);
+      res.status(500).json({ error: "Failed to login" });
+    }
+  });
+
+  // Logout endpoint
+  app.post("/api/auth/logout", (req, res) => {
+    req.session.destroy((err) => {
+      if (err) {
+        console.error("Logout error:", err);
+        return res.status(500).json({ error: "Failed to logout" });
+      }
+      res.clearCookie("connect.sid");
+      res.json({ message: "Logged out successfully" });
+    });
+  });
+
+  // Get current user endpoint
+  app.get("/api/auth/me", (req, res) => {
+    if ((req.session as any).userId) {
+      res.json({
+        user: {
+          id: (req.session as any).userId,
+          username: (req.session as any).username,
+        },
+      });
+    } else {
+      res.status(401).json({ error: "Not authenticated" });
     }
   });
 
