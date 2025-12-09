@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2 } from "lucide-react";
+import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2, MicOff, Radio, Pause, Play } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -16,6 +16,110 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import type { TranslationResult } from "@shared/schema";
+
+// Voice Input Button Component for inline voice recording
+interface VoiceInputButtonProps {
+  onTranscription: (text: string) => void;
+  language?: string;
+  disabled?: boolean;
+  className?: string;
+}
+
+function VoiceInputButton({ onTranscription, language = "en", disabled, className }: VoiceInputButtonProps) {
+  const [isRecording, setIsRecording] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const streamRef = useRef<MediaStream | null>(null);
+  const { toast } = useToast();
+
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      
+      const mediaRecorder = new MediaRecorder(stream);
+      mediaRecorderRef.current = mediaRecorder;
+      audioChunksRef.current = [];
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(audioChunksRef.current, { type: "audio/webm" });
+        stream.getTracks().forEach((track) => track.stop());
+        await processAudio(audioBlob);
+      };
+
+      mediaRecorder.start();
+      setIsRecording(true);
+    } catch (error) {
+      toast({
+        title: "Microphone access denied",
+        description: "Please allow microphone access to use voice input.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const stopRecording = () => {
+    if (mediaRecorderRef.current && isRecording) {
+      mediaRecorderRef.current.stop();
+      setIsRecording(false);
+      setIsProcessing(true);
+    }
+  };
+
+  const processAudio = async (audioBlob: Blob) => {
+    try {
+      const formData = new FormData();
+      formData.append("audio", audioBlob, "recording.webm");
+      formData.append("language", language);
+
+      const response = await fetch("/api/transcribe", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!response.ok) {
+        throw new Error("Transcription failed");
+      }
+
+      const data = await response.json();
+      onTranscription(data.text);
+    } catch (error) {
+      toast({
+        title: "Voice input failed",
+        description: "Could not process your voice input. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="icon"
+      onClick={isRecording ? stopRecording : startRecording}
+      disabled={disabled || isProcessing}
+      className={`${className} ${isRecording ? "text-red-500 animate-pulse" : ""}`}
+      data-testid="button-voice-input"
+    >
+      {isProcessing ? (
+        <Loader2 className="w-4 h-4 animate-spin" />
+      ) : isRecording ? (
+        <Square className="w-4 h-4 fill-current" />
+      ) : (
+        <Mic className="w-4 h-4" />
+      )}
+    </Button>
+  );
+}
 
 const supportedLanguages = [
   { code: "en", name: "English", flag: "US" },
@@ -51,6 +155,15 @@ const outputTypes = [
   { value: "email", label: "Email" },
   { value: "post", label: "Post" },
   { value: "journal", label: "Journal" },
+];
+
+const templateOptions = [
+  { value: "none", label: "No Template" },
+  { value: "meeting-followup", label: "Meeting Follow-Up Email" },
+  { value: "client-refusal", label: "Formal Client Refusal" },
+  { value: "project-proposal", label: "Project Proposal Outline" },
+  { value: "bullet-points", label: "Bullet Points" },
+  { value: "bolding", label: "Bold Key Points" },
 ];
 
 const polishSuggestions = [
@@ -110,8 +223,19 @@ function PolishRecorder() {
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [editableText, setEditableText] = useState("");
+  const [editablePolishedText, setEditablePolishedText] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const [isEditingPolished, setIsEditingPolished] = useState(false);
   const [isPolishingText, setIsPolishingText] = useState(false);
+  const [selectedTone, setSelectedTone] = useState("professional");
+  const [selectedTemplate, setSelectedTemplate] = useState("none");
+  const [isRepolishing, setIsRepolishing] = useState(false);
+  
+  // Continuous listening states
+  const [isContinuousMode, setIsContinuousMode] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [silenceTimer, setSilenceTimer] = useState(0);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<NodeJS.Timeout | null>(null);
@@ -119,7 +243,90 @@ function PolishRecorder() {
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   
+  // Continuous listening refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSpeechTimeRef = useRef<number>(Date.now());
+  
   const { toast } = useToast();
+  
+  // Voice Activity Detection - detects if user is speaking
+  const detectVoiceActivity = useCallback(() => {
+    if (!analyserRef.current) return false;
+    
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
+    
+    // Calculate average volume
+    const average = dataArray.reduce((sum, val) => sum + val, 0) / dataArray.length;
+    
+    // Threshold for speech detection (adjust as needed)
+    const threshold = 15;
+    return average > threshold;
+  }, []);
+  
+  // Handle visibility change (when user switches tabs/apps)
+  useEffect(() => {
+    if (!isContinuousMode || !isRecording) return;
+    
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        // Tab is hidden - pause recording but keep stream alive
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+          setIsPaused(true);
+          toast({
+            title: "Recording paused",
+            description: "Your recording is paused. Switch back to continue.",
+          });
+        }
+      } else {
+        // Tab is visible again - resume recording
+        if (isPaused && streamRef.current) {
+          setIsPaused(false);
+          toast({
+            title: "Recording resumed",
+            description: "Welcome back! Continue speaking.",
+          });
+        }
+      }
+    };
+    
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isContinuousMode, isRecording, isPaused, toast]);
+  
+  // Voice activity detection loop for continuous mode
+  useEffect(() => {
+    if (!isContinuousMode || !isRecording || isPaused) {
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = null;
+      }
+      return;
+    }
+    
+    vadIntervalRef.current = setInterval(() => {
+      const speaking = detectVoiceActivity();
+      setIsSpeaking(speaking);
+      
+      if (speaking) {
+        lastSpeechTimeRef.current = Date.now();
+        setSilenceTimer(0);
+      } else {
+        const silenceDuration = Math.floor((Date.now() - lastSpeechTimeRef.current) / 1000);
+        setSilenceTimer(silenceDuration);
+      }
+    }, 100);
+    
+    return () => {
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = null;
+      }
+    };
+  }, [isContinuousMode, isRecording, isPaused, detectVoiceActivity]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -172,6 +379,8 @@ function PolishRecorder() {
     onSuccess: (data) => {
       setResult(data);
       setEditableText(data.originalText);
+      setEditablePolishedText(data.polishedText);
+      setSelectedTone(outputFormat);
       setIsProcessing(false);
       toast({
         title: "Polishing complete!",
@@ -213,7 +422,10 @@ function PolishRecorder() {
     onSuccess: (data) => {
       setResult(data);
       setEditableText(data.originalText);
+      setEditablePolishedText(data.polishedText);
+      setSelectedTone(outputFormat);
       setIsEditing(false);
+      setIsEditingPolished(false);
       setIsPolishingText(false);
       toast({
         title: "Text polished!",
@@ -237,6 +449,58 @@ function PolishRecorder() {
     }
   };
 
+  const repolishMutation = useMutation({
+    mutationFn: async ({ text, tone, template }: { text: string; tone: string; template: string }) => {
+      const response = await fetch("/api/polish-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          language,
+          outputFormat: tone,
+          outputType,
+          template,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Re-polishing failed");
+      }
+
+      return response.json() as Promise<TranslationResult>;
+    },
+    onSuccess: (data) => {
+      setEditablePolishedText(data.polishedText);
+      setOutputFormat(selectedTone);
+      setIsRepolishing(false);
+      const templateLabel = templateOptions.find(t => t.value === selectedTemplate)?.label || "No Template";
+      toast({
+        title: "Text updated!",
+        description: selectedTemplate !== "none" 
+          ? `Applied ${templateLabel} template with ${selectedTone} tone.`
+          : `Re-polished with ${selectedTone} tone.`,
+      });
+    },
+    onError: (error: Error) => {
+      setIsRepolishing(false);
+      toast({
+        title: "Re-polishing failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleRepolish = () => {
+    if (editablePolishedText.trim()) {
+      setIsRepolishing(true);
+      repolishMutation.mutate({ text: editablePolishedText, tone: selectedTone, template: selectedTemplate });
+    }
+  };
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -247,6 +511,17 @@ function PolishRecorder() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      
+      // Set up audio context for voice activity detection in continuous mode
+      if (isContinuousMode) {
+        audioContextRef.current = new AudioContext();
+        analyserRef.current = audioContextRef.current.createAnalyser();
+        analyserRef.current.fftSize = 256;
+        
+        const source = audioContextRef.current.createMediaStreamSource(stream);
+        source.connect(analyserRef.current);
+        lastSpeechTimeRef.current = Date.now();
+      }
       
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4",
@@ -265,6 +540,13 @@ function PolishRecorder() {
         const audioBlob = new Blob(audioChunksRef.current, { 
           type: mediaRecorder.mimeType 
         });
+        
+        // Clean up audio context
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+          analyserRef.current = null;
+        }
         
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
@@ -287,6 +569,15 @@ function PolishRecorder() {
       setIsRecording(true);
       setRecordingTime(0);
       setResult(null);
+      setIsPaused(false);
+      setSilenceTimer(0);
+      
+      if (isContinuousMode) {
+        toast({
+          title: "Continuous listening active",
+          description: "Recording will continue even if you pause or switch apps.",
+        });
+      }
     } catch (error: any) {
       console.error("Microphone access error:", error);
       toast({
@@ -301,7 +592,28 @@ function PolishRecorder() {
     if (mediaRecorderRef.current && isRecording) {
       setIsRecording(false);
       setIsProcessing(true);
+      setIsPaused(false);
+      setSilenceTimer(0);
+      setIsSpeaking(false);
       mediaRecorderRef.current.stop();
+    }
+  };
+  
+  const togglePause = () => {
+    if (!isContinuousMode || !isRecording) return;
+    
+    if (isPaused) {
+      setIsPaused(false);
+      toast({
+        title: "Recording resumed",
+        description: "Continue speaking - your thoughts are being captured.",
+      });
+    } else {
+      setIsPaused(true);
+      toast({
+        title: "Recording paused",
+        description: "Take your time. Click play when ready to continue.",
+      });
     }
   };
 
@@ -439,22 +751,77 @@ function PolishRecorder() {
               </div>
             )}
 
-            <div className="text-2xl font-mono font-semibold text-primary mb-6" data-testid="text-polish-timer">
+            {/* Continuous Mode Toggle */}
+            {!isRecording && !result && (
+              <div className="flex items-center justify-center gap-2 mb-4">
+                <Button
+                  variant={isContinuousMode ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setIsContinuousMode(!isContinuousMode)}
+                  className={isContinuousMode ? "bg-gradient-to-r from-primary to-purple-500" : ""}
+                  data-testid="button-continuous-mode"
+                >
+                  <Radio className="w-4 h-4 mr-2" />
+                  Continuous Mode
+                </Button>
+                {isContinuousMode && (
+                  <span className="text-xs text-muted-foreground">
+                    Keeps listening when you pause or switch apps
+                  </span>
+                )}
+              </div>
+            )}
+
+            <div className="text-2xl font-mono font-semibold text-primary mb-2" data-testid="text-polish-timer">
               {formatTime(recordingTime)}
             </div>
+            
+            {/* Continuous Mode Status Indicators */}
+            {isContinuousMode && isRecording && (
+              <div className="flex items-center justify-center gap-4 mb-4">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${isPaused ? "bg-yellow-500" : isSpeaking ? "bg-green-500 animate-pulse" : "bg-blue-500"}`} />
+                  <span className="text-xs text-muted-foreground">
+                    {isPaused ? "Paused" : isSpeaking ? "Listening..." : "Waiting for speech"}
+                  </span>
+                </div>
+                {!isPaused && silenceTimer > 3 && (
+                  <span className="text-xs text-muted-foreground">
+                    Silent for {silenceTimer}s
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-center gap-1 h-20 mb-6" data-testid="polish-waveform">
               {waveformBars.map((height, i) => (
                 <motion.div
                   key={i}
-                  className="w-1.5 rounded-full bg-gradient-to-t from-primary to-purple-400"
-                  animate={{ height: `${height * 100}%` }}
+                  className={`w-1.5 rounded-full ${isPaused ? "bg-yellow-400/50" : "bg-gradient-to-t from-primary to-purple-400"}`}
+                  animate={{ height: isPaused ? "20%" : `${height * 100}%` }}
                   transition={{ duration: 0.1 }}
                 />
               ))}
             </div>
 
             <div className="flex items-center justify-center gap-4">
+              {/* Pause/Play button for continuous mode */}
+              {isContinuousMode && isRecording && (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  onClick={togglePause}
+                  className="w-14 h-14 rounded-full"
+                  data-testid="button-pause-resume"
+                >
+                  {isPaused ? (
+                    <Play className="w-6 h-6" />
+                  ) : (
+                    <Pause className="w-6 h-6" />
+                  )}
+                </Button>
+              )}
+              
               <Button
                 size="lg"
                 onClick={handleToggleRecording}
@@ -527,7 +894,7 @@ function PolishRecorder() {
                     <div className="relative rounded-lg bg-muted/50 border border-border">
                       <div className="flex items-center justify-between p-2 border-b border-border">
                         <span className="text-xs text-muted-foreground">
-                          {isEditing ? "Edit your text below" : "Click to edit"}
+                          {isEditing ? "Edit your text below" : "Click to edit or use voice"}
                         </span>
                         <div className="flex items-center gap-1">
                           {isEditing && (
@@ -551,6 +918,14 @@ function PolishRecorder() {
                               )}
                             </Button>
                           )}
+                          <VoiceInputButton
+                            language={language}
+                            onTranscription={(text) => {
+                              setEditableText((prev) => prev ? prev + " " + text : text);
+                              setIsEditing(true);
+                            }}
+                            disabled={isPolishingText}
+                          />
                           <Button
                             variant="ghost"
                             size="icon"
@@ -580,39 +955,109 @@ function PolishRecorder() {
                   </TabsContent>
                   
                   <TabsContent value="polished" className="mt-4">
-                    <div className="relative p-4 rounded-lg bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20">
-                      <div className="flex items-center gap-2 mb-2 flex-wrap">
-                        <Badge className="bg-gradient-to-r from-primary to-purple-500">
-                          <Sparkles className="w-3 h-3 mr-1" />
-                          AI Polished
-                        </Badge>
-                        <Badge variant="secondary">{outputType}</Badge>
-                        <Badge variant="secondary">{outputFormat}</Badge>
+                    <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20">
+                      <div className="flex items-center justify-between p-2 border-b border-border">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge className="bg-gradient-to-r from-primary to-purple-500">
+                            <Sparkles className="w-3 h-3 mr-1" />
+                            AI Polished
+                          </Badge>
+                          <Badge variant="secondary">{outputType}</Badge>
+                          <Badge variant="secondary">{outputFormat}</Badge>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <VoiceInputButton
+                            language={language}
+                            onTranscription={(text) => {
+                              setEditablePolishedText((prev) => prev ? prev + " " + text : text);
+                              setIsEditingPolished(true);
+                            }}
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => shareText(editablePolishedText || result.polishedText)}
+                            data-testid="button-share-polish-result"
+                          >
+                            <Share2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => copyToClipboard(editablePolishedText || result.polishedText, "polished")}
+                            data-testid="button-copy-polish-result"
+                          >
+                            {copiedField === "polished" ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
-                      <p className="pr-20 text-foreground" data-testid="text-polish-result">
-                        {result.polishedText}
-                      </p>
-                      <div className="absolute top-2 right-2 flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => shareText(result.polishedText)}
-                          data-testid="button-share-polish-result"
-                        >
-                          <Share2 className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => copyToClipboard(result.polishedText, "polished")}
-                          data-testid="button-copy-polish-result"
-                        >
-                          {copiedField === "polished" ? (
-                            <Check className="w-4 h-4 text-green-500" />
-                          ) : (
-                            <Copy className="w-4 h-4" />
-                          )}
-                        </Button>
+                      <Textarea
+                        value={editablePolishedText}
+                        onChange={(e) => {
+                          setEditablePolishedText(e.target.value);
+                          if (!isEditingPolished) setIsEditingPolished(true);
+                        }}
+                        onFocus={() => setIsEditingPolished(true)}
+                        className="min-h-[120px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                        placeholder="Your polished text will appear here..."
+                        data-testid="textarea-polish-result"
+                      />
+                      <div className="flex flex-col gap-2 p-2 border-t border-border">
+                        <div className="flex items-center flex-wrap gap-2">
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-muted-foreground">Tone:</span>
+                            <Select value={selectedTone} onValueChange={setSelectedTone}>
+                              <SelectTrigger className="w-28 h-8" data-testid="select-change-tone">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {outputFormats.map((format) => (
+                                  <SelectItem key={format.value} value={format.value} data-testid={`option-tone-${format.value}`}>
+                                    {format.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <div className="flex items-center gap-1">
+                            <span className="text-xs text-muted-foreground">Template:</span>
+                            <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
+                              <SelectTrigger className="w-44 h-8" data-testid="select-template">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {templateOptions.map((template) => (
+                                  <SelectItem key={template.value} value={template.value} data-testid={`option-template-${template.value}`}>
+                                    {template.label}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={handleRepolish}
+                            disabled={isRepolishing || !editablePolishedText.trim() || (selectedTone === outputFormat && selectedTemplate === "none")}
+                            className="bg-gradient-to-r from-primary to-purple-500 ml-auto"
+                            data-testid="button-repolish"
+                          >
+                            {isRepolishing ? (
+                              <>
+                                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                                Applying...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-3 h-3 mr-1" />
+                                Apply
+                              </>
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </TabsContent>
@@ -624,7 +1069,10 @@ function PolishRecorder() {
                     onClick={() => {
                       setResult(null);
                       setEditableText("");
+                      setEditablePolishedText("");
                       setIsEditing(false);
+                      setIsEditingPolished(false);
+                      setSelectedTemplate("none");
                     }}
                     data-testid="button-new-polish-recording"
                   >
@@ -653,7 +1101,11 @@ function TranslateRecorder() {
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
   const [editableText, setEditableText] = useState("");
+  const [editableTranslatedText, setEditableTranslatedText] = useState("");
+  const [editablePolishedText, setEditablePolishedText] = useState("");
   const [isEditing, setIsEditing] = useState(false);
+  const [isEditingTranslated, setIsEditingTranslated] = useState(false);
+  const [isEditingPolished, setIsEditingPolished] = useState(false);
   const [isTranslatingText, setIsTranslatingText] = useState(false);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
@@ -715,6 +1167,8 @@ function TranslateRecorder() {
     onSuccess: (data) => {
       setResult(data);
       setEditableText(data.originalText);
+      setEditableTranslatedText(data.translatedText);
+      setEditablePolishedText(data.polishedText);
       setIsProcessing(false);
       toast({
         title: "Translation complete!",
@@ -756,7 +1210,11 @@ function TranslateRecorder() {
     onSuccess: (data) => {
       setResult(data);
       setEditableText(data.originalText);
+      setEditableTranslatedText(data.translatedText);
+      setEditablePolishedText(data.polishedText);
       setIsEditing(false);
+      setIsEditingTranslated(false);
+      setIsEditingPolished(false);
       setIsTranslatingText(false);
       toast({
         title: "Text translated!",
@@ -1093,7 +1551,7 @@ function TranslateRecorder() {
                     <div className="relative rounded-lg bg-muted/50 border border-border">
                       <div className="flex items-center justify-between p-2 border-b border-border">
                         <span className="text-xs text-muted-foreground">
-                          {isEditing ? "Edit your text below" : "Click to edit"}
+                          {isEditing ? "Edit your text below" : "Click to edit or use voice"}
                         </span>
                         <div className="flex items-center gap-1">
                           {isEditing && (
@@ -1117,6 +1575,14 @@ function TranslateRecorder() {
                               )}
                             </Button>
                           )}
+                          <VoiceInputButton
+                            language={sourceLanguage}
+                            onTranscription={(text) => {
+                              setEditableText((prev) => prev ? prev + " " + text : text);
+                              setIsEditing(true);
+                            }}
+                            disabled={isTranslatingText}
+                          />
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1146,72 +1612,106 @@ function TranslateRecorder() {
                   </TabsContent>
                   
                   <TabsContent value="translated" className="mt-4">
-                    <div className="relative p-4 rounded-lg bg-muted/50 border border-border">
-                      <Badge variant="secondary" className="mb-2">
-                        {getLanguageName(result.targetLanguage)}
-                      </Badge>
-                      <p className="pr-20 text-foreground" data-testid="text-translated">
-                        {result.translatedText}
-                      </p>
-                      <div className="absolute top-2 right-2 flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => shareText(result.translatedText)}
-                          data-testid="button-share-translated"
-                        >
-                          <Share2 className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => copyToClipboard(result.translatedText, "translated")}
-                          data-testid="button-copy-translated"
-                        >
-                          {copiedField === "translated" ? (
-                            <Check className="w-4 h-4 text-green-500" />
-                          ) : (
-                            <Copy className="w-4 h-4" />
-                          )}
-                        </Button>
+                    <div className="relative rounded-lg bg-muted/50 border border-border">
+                      <div className="flex items-center justify-between p-2 border-b border-border">
+                        <Badge variant="secondary">
+                          {getLanguageName(result.targetLanguage)}
+                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <VoiceInputButton
+                            language={targetLanguage}
+                            onTranscription={(text) => {
+                              setEditableTranslatedText((prev) => prev ? prev + " " + text : text);
+                              setIsEditingTranslated(true);
+                            }}
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => shareText(editableTranslatedText || result.translatedText)}
+                            data-testid="button-share-translated"
+                          >
+                            <Share2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => copyToClipboard(editableTranslatedText || result.translatedText, "translated")}
+                            data-testid="button-copy-translated"
+                          >
+                            {copiedField === "translated" ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
+                      <Textarea
+                        value={editableTranslatedText}
+                        onChange={(e) => {
+                          setEditableTranslatedText(e.target.value);
+                          if (!isEditingTranslated) setIsEditingTranslated(true);
+                        }}
+                        onFocus={() => setIsEditingTranslated(true)}
+                        className="min-h-[120px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                        placeholder="Your translated text will appear here..."
+                        data-testid="textarea-translated"
+                      />
                     </div>
                   </TabsContent>
                   
                   <TabsContent value="polished" className="mt-4">
-                    <div className="relative p-4 rounded-lg bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20">
-                      <div className="flex items-center gap-2 mb-2 flex-wrap">
-                        <Badge className="bg-gradient-to-r from-primary to-purple-500">
-                          <Sparkles className="w-3 h-3 mr-1" />
-                          AI Polished
-                        </Badge>
-                        <Badge variant="secondary">{result.outputFormat}</Badge>
+                    <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20">
+                      <div className="flex items-center justify-between p-2 border-b border-border">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge className="bg-gradient-to-r from-primary to-purple-500">
+                            <Sparkles className="w-3 h-3 mr-1" />
+                            AI Polished
+                          </Badge>
+                          <Badge variant="secondary">{result.outputFormat}</Badge>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <VoiceInputButton
+                            language={targetLanguage}
+                            onTranscription={(text) => {
+                              setEditablePolishedText((prev) => prev ? prev + " " + text : text);
+                              setIsEditingPolished(true);
+                            }}
+                          />
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => shareText(editablePolishedText || result.polishedText)}
+                            data-testid="button-share-polished"
+                          >
+                            <Share2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => copyToClipboard(editablePolishedText || result.polishedText, "polished")}
+                            data-testid="button-copy-polished"
+                          >
+                            {copiedField === "polished" ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
                       </div>
-                      <p className="pr-20 text-foreground" data-testid="text-polished">
-                        {result.polishedText}
-                      </p>
-                      <div className="absolute top-2 right-2 flex items-center gap-1">
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => shareText(result.polishedText)}
-                          data-testid="button-share-polished"
-                        >
-                          <Share2 className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          onClick={() => copyToClipboard(result.polishedText, "polished")}
-                          data-testid="button-copy-polished"
-                        >
-                          {copiedField === "polished" ? (
-                            <Check className="w-4 h-4 text-green-500" />
-                          ) : (
-                            <Copy className="w-4 h-4" />
-                          )}
-                        </Button>
-                      </div>
+                      <Textarea
+                        value={editablePolishedText}
+                        onChange={(e) => {
+                          setEditablePolishedText(e.target.value);
+                          if (!isEditingPolished) setIsEditingPolished(true);
+                        }}
+                        onFocus={() => setIsEditingPolished(true)}
+                        className="min-h-[120px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                        placeholder="Your polished text will appear here..."
+                        data-testid="textarea-polished"
+                      />
                     </div>
                   </TabsContent>
                 </Tabs>
@@ -1222,7 +1722,11 @@ function TranslateRecorder() {
                     onClick={() => {
                       setResult(null);
                       setEditableText("");
+                      setEditableTranslatedText("");
+                      setEditablePolishedText("");
                       setIsEditing(false);
+                      setIsEditingTranslated(false);
+                      setIsEditingPolished(false);
                     }}
                     data-testid="button-new-recording"
                   >

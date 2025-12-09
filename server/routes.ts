@@ -51,6 +51,40 @@ export async function registerRoutes(
     res.json({ status: "ok" });
   });
 
+  // Transcribe-only endpoint - converts audio to text without polishing/translation
+  app.post("/api/transcribe", upload.single("audio"), async (req, res) => {
+    try {
+      // Check if Gemini AI integration is configured
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+        });
+      }
+
+      // Check if audio file was uploaded
+      if (!req.file) {
+        return res.status(400).json({ error: "No audio file provided" });
+      }
+
+      // Transcribe audio using Gemini
+      const text = await transcribeAudio(
+        req.file.buffer,
+        req.file.mimetype
+      );
+
+      if (!text || text.trim() === "") {
+        return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
+      }
+
+      res.json({ text: text.trim() });
+    } catch (error: any) {
+      console.error("Transcription error:", error);
+      res.status(500).json({
+        error: error.message || "Failed to transcribe audio",
+      });
+    }
+  });
+
   // Translation endpoint - accepts audio file and returns transcription + translation
   app.post("/api/translate-speech", upload.single("audio"), async (req, res) => {
     try {
@@ -192,6 +226,7 @@ export async function registerRoutes(
         language: z.string(),
         outputFormat: z.string(),
         outputType: z.string(),
+        template: z.string().optional(),
       });
 
       const parseResult = textPolishSchema.safeParse(req.body);
@@ -202,14 +237,15 @@ export async function registerRoutes(
         });
       }
 
-      const { text, language, outputFormat, outputType } = parseResult.data;
+      const { text, language, outputFormat, outputType, template } = parseResult.data;
 
       // Polish the text using Gemini
       const polishedText = await polishText(
         text,
         language,
         outputFormat,
-        outputType
+        outputType,
+        template
       );
 
       // Save to storage
