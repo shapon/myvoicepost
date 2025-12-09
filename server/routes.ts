@@ -54,10 +54,10 @@ export async function registerRoutes(
   // Translation endpoint - accepts audio file and returns transcription + translation
   app.post("/api/translate-speech", upload.single("audio"), async (req, res) => {
     try {
-      // Check if OpenAI API key is configured
-      if (!process.env.OPENAI_API_KEY) {
+      // Check if Gemini AI integration is configured
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
-          error: "OpenAI API key not configured. Please add your API key to use this feature.",
+          error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
         });
       }
 
@@ -77,7 +77,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "No audio file provided" });
       }
 
-      // Step 1: Transcribe audio using OpenAI Whisper
+      // Step 1: Transcribe audio using Gemini
       const originalText = await transcribeAudio(
         req.file.buffer,
         req.file.mimetype
@@ -87,7 +87,7 @@ export async function registerRoutes(
         return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
       }
 
-      // Step 2: Translate and polish using GPT
+      // Step 2: Translate and polish using Gemini
       const { translatedText, polishedText } = await translateAndPolish(
         originalText,
         sourceLanguage,
@@ -173,6 +173,114 @@ export async function registerRoutes(
       console.error("Polish error:", error);
       res.status(500).json({
         error: error.message || "Failed to process speech polishing",
+      });
+    }
+  });
+
+  // Polish text endpoint - accepts text and returns polished version (no audio)
+  app.post("/api/polish-text", async (req, res) => {
+    try {
+      // Check if Gemini AI integration is configured
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+        });
+      }
+
+      const textPolishSchema = z.object({
+        text: z.string().min(1, "Text is required"),
+        language: z.string(),
+        outputFormat: z.string(),
+        outputType: z.string(),
+      });
+
+      const parseResult = textPolishSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { text, language, outputFormat, outputType } = parseResult.data;
+
+      // Polish the text using Gemini
+      const polishedText = await polishText(
+        text,
+        language,
+        outputFormat,
+        outputType
+      );
+
+      // Save to storage
+      const translation = await storage.createTranslation({
+        originalText: text,
+        translatedText: text,
+        polishedText,
+        sourceLanguage: language,
+        targetLanguage: language,
+        outputFormat,
+      });
+
+      res.json(translation);
+    } catch (error: any) {
+      console.error("Text polish error:", error);
+      res.status(500).json({
+        error: error.message || "Failed to polish text",
+      });
+    }
+  });
+
+  // Translate text endpoint - accepts text and returns translated + polished version (no audio)
+  app.post("/api/translate-text", async (req, res) => {
+    try {
+      // Check if Gemini AI integration is configured
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+        });
+      }
+
+      const textTranslateSchema = z.object({
+        text: z.string().min(1, "Text is required"),
+        sourceLanguage: z.string(),
+        targetLanguage: z.string(),
+        outputFormat: z.string(),
+      });
+
+      const parseResult = textTranslateSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { text, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+
+      // Translate and polish the text using Gemini
+      const { translatedText, polishedText } = await translateAndPolish(
+        text,
+        sourceLanguage,
+        targetLanguage,
+        outputFormat
+      );
+
+      // Save to storage
+      const translation = await storage.createTranslation({
+        originalText: text,
+        translatedText,
+        polishedText,
+        sourceLanguage,
+        targetLanguage,
+        outputFormat,
+      });
+
+      res.json(translation);
+    } catch (error: any) {
+      console.error("Text translate error:", error);
+      res.status(500).json({
+        error: error.message || "Failed to translate text",
       });
     }
   });

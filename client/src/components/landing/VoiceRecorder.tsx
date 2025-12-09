@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine } from "lucide-react";
+import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation } from "@tanstack/react-query";
 import type { TranslationResult } from "@shared/schema";
@@ -108,6 +109,9 @@ function PolishRecorder() {
   const [outputType, setOutputType] = useState("message");
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [editableText, setEditableText] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [isPolishingText, setIsPolishingText] = useState(false);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<NodeJS.Timeout | null>(null);
@@ -167,6 +171,7 @@ function PolishRecorder() {
     },
     onSuccess: (data) => {
       setResult(data);
+      setEditableText(data.originalText);
       setIsProcessing(false);
       toast({
         title: "Polishing complete!",
@@ -182,6 +187,55 @@ function PolishRecorder() {
       });
     },
   });
+
+  const textPolishMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const response = await fetch("/api/polish-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          language,
+          outputFormat,
+          outputType,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Polishing failed");
+      }
+
+      return response.json() as Promise<TranslationResult>;
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      setEditableText(data.originalText);
+      setIsEditing(false);
+      setIsPolishingText(false);
+      toast({
+        title: "Text polished!",
+        description: "Your edited text has been polished.",
+      });
+    },
+    onError: (error: Error) => {
+      setIsPolishingText(false);
+      toast({
+        title: "Polishing failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handlePolishText = () => {
+    if (editableText.trim()) {
+      setIsPolishingText(true);
+      textPolishMutation.mutate(editableText);
+    }
+  };
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -267,6 +321,27 @@ function PolishRecorder() {
       title: "Copied!",
       description: "Text copied to clipboard.",
     });
+  };
+
+  const shareText = async (text: string) => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "MyVoicePost - Polished Text",
+          text: text,
+        });
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          await copyToClipboard(text, "shared");
+        }
+      }
+    } else {
+      await copyToClipboard(text, "shared");
+      toast({
+        title: "Copied for sharing!",
+        description: "Text copied to clipboard. Paste it anywhere to share.",
+      });
+    }
   };
 
   return (
@@ -449,23 +524,58 @@ function PolishRecorder() {
                   </TabsList>
                   
                   <TabsContent value="original" className="mt-4">
-                    <div className="relative p-4 rounded-lg bg-muted/50 border border-border">
-                      <p className="pr-10 text-foreground" data-testid="text-polish-original">
-                        {result.originalText}
-                      </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2"
-                        onClick={() => copyToClipboard(result.originalText, "original")}
-                        data-testid="button-copy-polish-original"
-                      >
-                        {copiedField === "original" ? (
-                          <Check className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </Button>
+                    <div className="relative rounded-lg bg-muted/50 border border-border">
+                      <div className="flex items-center justify-between p-2 border-b border-border">
+                        <span className="text-xs text-muted-foreground">
+                          {isEditing ? "Edit your text below" : "Click to edit"}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          {isEditing && (
+                            <Button
+                              size="sm"
+                              onClick={handlePolishText}
+                              disabled={isPolishingText || !editableText.trim()}
+                              className="bg-gradient-to-r from-primary to-purple-500"
+                              data-testid="button-polish-again"
+                            >
+                              {isPolishingText ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                                  Polishing...
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="w-3 h-3 mr-1" />
+                                  Polish Again
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => copyToClipboard(editableText || result.originalText, "original")}
+                            data-testid="button-copy-polish-original"
+                          >
+                            {copiedField === "original" ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <Textarea
+                        value={editableText}
+                        onChange={(e) => {
+                          setEditableText(e.target.value);
+                          if (!isEditing) setIsEditing(true);
+                        }}
+                        onFocus={() => setIsEditing(true)}
+                        className="min-h-[120px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                        placeholder="Your transcribed text will appear here..."
+                        data-testid="textarea-polish-original"
+                      />
                     </div>
                   </TabsContent>
                   
@@ -479,22 +589,31 @@ function PolishRecorder() {
                         <Badge variant="secondary">{outputType}</Badge>
                         <Badge variant="secondary">{outputFormat}</Badge>
                       </div>
-                      <p className="pr-10 text-foreground" data-testid="text-polish-result">
+                      <p className="pr-20 text-foreground" data-testid="text-polish-result">
                         {result.polishedText}
                       </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2"
-                        onClick={() => copyToClipboard(result.polishedText, "polished")}
-                        data-testid="button-copy-polish-result"
-                      >
-                        {copiedField === "polished" ? (
-                          <Check className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </Button>
+                      <div className="absolute top-2 right-2 flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => shareText(result.polishedText)}
+                          data-testid="button-share-polish-result"
+                        >
+                          <Share2 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => copyToClipboard(result.polishedText, "polished")}
+                          data-testid="button-copy-polish-result"
+                        >
+                          {copiedField === "polished" ? (
+                            <Check className="w-4 h-4 text-green-500" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </TabsContent>
                 </Tabs>
@@ -502,7 +621,11 @@ function PolishRecorder() {
                 <div className="mt-6 flex justify-center">
                   <Button
                     variant="outline"
-                    onClick={() => setResult(null)}
+                    onClick={() => {
+                      setResult(null);
+                      setEditableText("");
+                      setIsEditing(false);
+                    }}
                     data-testid="button-new-polish-recording"
                   >
                     <Mic className="w-4 h-4 mr-2" />
@@ -529,6 +652,9 @@ function TranslateRecorder() {
   const [outputFormat, setOutputFormat] = useState("professional");
   const [result, setResult] = useState<TranslationResult | null>(null);
   const [copiedField, setCopiedField] = useState<string | null>(null);
+  const [editableText, setEditableText] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [isTranslatingText, setIsTranslatingText] = useState(false);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<NodeJS.Timeout | null>(null);
@@ -588,6 +714,7 @@ function TranslateRecorder() {
     },
     onSuccess: (data) => {
       setResult(data);
+      setEditableText(data.originalText);
       setIsProcessing(false);
       toast({
         title: "Translation complete!",
@@ -603,6 +730,55 @@ function TranslateRecorder() {
       });
     },
   });
+
+  const textTranslateMutation = useMutation({
+    mutationFn: async (text: string) => {
+      const response = await fetch("/api/translate-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          sourceLanguage,
+          targetLanguage,
+          outputFormat,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Translation failed");
+      }
+
+      return response.json() as Promise<TranslationResult>;
+    },
+    onSuccess: (data) => {
+      setResult(data);
+      setEditableText(data.originalText);
+      setIsEditing(false);
+      setIsTranslatingText(false);
+      toast({
+        title: "Text translated!",
+        description: "Your edited text has been translated.",
+      });
+    },
+    onError: (error: Error) => {
+      setIsTranslatingText(false);
+      toast({
+        title: "Translation failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleTranslateText = () => {
+    if (editableText.trim()) {
+      setIsTranslatingText(true);
+      textTranslateMutation.mutate(editableText);
+    }
+  };
 
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
@@ -698,6 +874,27 @@ function TranslateRecorder() {
       title: "Copied!",
       description: "Text copied to clipboard.",
     });
+  };
+
+  const shareText = async (text: string) => {
+    if (navigator.share) {
+      try {
+        await navigator.share({
+          title: "MyVoicePost - Translation",
+          text: text,
+        });
+      } catch (err) {
+        if ((err as Error).name !== "AbortError") {
+          await copyToClipboard(text, "shared");
+        }
+      }
+    } else {
+      await copyToClipboard(text, "shared");
+      toast({
+        title: "Copied for sharing!",
+        description: "Text copied to clipboard. Paste it anywhere to share.",
+      });
+    }
   };
 
   return (
@@ -893,23 +1090,58 @@ function TranslateRecorder() {
                   </TabsList>
                   
                   <TabsContent value="original" className="mt-4">
-                    <div className="relative p-4 rounded-lg bg-muted/50 border border-border">
-                      <p className="pr-10 text-foreground" data-testid="text-original">
-                        {result.originalText}
-                      </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2"
-                        onClick={() => copyToClipboard(result.originalText, "original")}
-                        data-testid="button-copy-original"
-                      >
-                        {copiedField === "original" ? (
-                          <Check className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </Button>
+                    <div className="relative rounded-lg bg-muted/50 border border-border">
+                      <div className="flex items-center justify-between p-2 border-b border-border">
+                        <span className="text-xs text-muted-foreground">
+                          {isEditing ? "Edit your text below" : "Click to edit"}
+                        </span>
+                        <div className="flex items-center gap-1">
+                          {isEditing && (
+                            <Button
+                              size="sm"
+                              onClick={handleTranslateText}
+                              disabled={isTranslatingText || !editableText.trim()}
+                              className="bg-gradient-to-r from-primary to-purple-500"
+                              data-testid="button-translate-again"
+                            >
+                              {isTranslatingText ? (
+                                <>
+                                  <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                                  Translating...
+                                </>
+                              ) : (
+                                <>
+                                  <RefreshCw className="w-3 h-3 mr-1" />
+                                  Translate Again
+                                </>
+                              )}
+                            </Button>
+                          )}
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => copyToClipboard(editableText || result.originalText, "original")}
+                            data-testid="button-copy-original"
+                          >
+                            {copiedField === "original" ? (
+                              <Check className="w-4 h-4 text-green-500" />
+                            ) : (
+                              <Copy className="w-4 h-4" />
+                            )}
+                          </Button>
+                        </div>
+                      </div>
+                      <Textarea
+                        value={editableText}
+                        onChange={(e) => {
+                          setEditableText(e.target.value);
+                          if (!isEditing) setIsEditing(true);
+                        }}
+                        onFocus={() => setIsEditing(true)}
+                        className="min-h-[120px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                        placeholder="Your transcribed text will appear here..."
+                        data-testid="textarea-translate-original"
+                      />
                     </div>
                   </TabsContent>
                   
@@ -918,22 +1150,31 @@ function TranslateRecorder() {
                       <Badge variant="secondary" className="mb-2">
                         {getLanguageName(result.targetLanguage)}
                       </Badge>
-                      <p className="pr-10 text-foreground" data-testid="text-translated">
+                      <p className="pr-20 text-foreground" data-testid="text-translated">
                         {result.translatedText}
                       </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2"
-                        onClick={() => copyToClipboard(result.translatedText, "translated")}
-                        data-testid="button-copy-translated"
-                      >
-                        {copiedField === "translated" ? (
-                          <Check className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </Button>
+                      <div className="absolute top-2 right-2 flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => shareText(result.translatedText)}
+                          data-testid="button-share-translated"
+                        >
+                          <Share2 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => copyToClipboard(result.translatedText, "translated")}
+                          data-testid="button-copy-translated"
+                        >
+                          {copiedField === "translated" ? (
+                            <Check className="w-4 h-4 text-green-500" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </TabsContent>
                   
@@ -946,22 +1187,31 @@ function TranslateRecorder() {
                         </Badge>
                         <Badge variant="secondary">{result.outputFormat}</Badge>
                       </div>
-                      <p className="pr-10 text-foreground" data-testid="text-polished">
+                      <p className="pr-20 text-foreground" data-testid="text-polished">
                         {result.polishedText}
                       </p>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="absolute top-2 right-2"
-                        onClick={() => copyToClipboard(result.polishedText, "polished")}
-                        data-testid="button-copy-polished"
-                      >
-                        {copiedField === "polished" ? (
-                          <Check className="w-4 h-4 text-green-500" />
-                        ) : (
-                          <Copy className="w-4 h-4" />
-                        )}
-                      </Button>
+                      <div className="absolute top-2 right-2 flex items-center gap-1">
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => shareText(result.polishedText)}
+                          data-testid="button-share-polished"
+                        >
+                          <Share2 className="w-4 h-4" />
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => copyToClipboard(result.polishedText, "polished")}
+                          data-testid="button-copy-polished"
+                        >
+                          {copiedField === "polished" ? (
+                            <Check className="w-4 h-4 text-green-500" />
+                          ) : (
+                            <Copy className="w-4 h-4" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </TabsContent>
                 </Tabs>
@@ -969,7 +1219,11 @@ function TranslateRecorder() {
                 <div className="mt-6 flex justify-center">
                   <Button
                     variant="outline"
-                    onClick={() => setResult(null)}
+                    onClick={() => {
+                      setResult(null);
+                      setEditableText("");
+                      setIsEditing(false);
+                    }}
                     data-testid="button-new-recording"
                   >
                     <Mic className="w-4 h-4 mr-2" />
