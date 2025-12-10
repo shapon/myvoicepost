@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2, MicOff, Radio, Pause, Play } from "lucide-react";
+import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2, MicOff, Pause, Play, Volume2, VolumeX, Save, FolderOpen, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
+import { Label } from "@/components/ui/label";
 import {
   Select,
   SelectContent,
@@ -14,8 +16,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { useMutation } from "@tanstack/react-query";
-import type { TranslationResult } from "@shared/schema";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useAuth } from "@/contexts/AuthContext";
+import type { TranslationResult, SavedText } from "@shared/schema";
 
 // Voice Input Button Component for inline voice recording
 interface VoiceInputButtonProps {
@@ -231,11 +234,21 @@ function PolishRecorder() {
   const [selectedTemplate, setSelectedTemplate] = useState("none");
   const [isRepolishing, setIsRepolishing] = useState(false);
   
+  // Language conversion states
+  const [targetLanguage, setTargetLanguage] = useState("");
+  const [isTranslatingPolished, setIsTranslatingPolished] = useState(false);
+  
+  // Audio playback states
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  
   // Continuous listening states
   const [isContinuousMode, setIsContinuousMode] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [silenceTimer, setSilenceTimer] = useState(0);
+  
+  // Saved texts states
+  const [isSaving, setIsSaving] = useState(false);
   
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<NodeJS.Timeout | null>(null);
@@ -251,6 +264,96 @@ function PolishRecorder() {
   const lastSpeechTimeRef = useRef<number>(Date.now());
   
   const { toast } = useToast();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  
+  // Fetch saved texts for logged-in users
+  const { data: savedTexts = [] } = useQuery<SavedText[]>({
+    queryKey: ["/api/saved-texts", "polish"],
+    enabled: !!user,
+  });
+  
+  // Save text mutation
+  const saveMutation = useMutation({
+    mutationFn: async (data: { originalText: string; polishedText: string }) => {
+      const response = await fetch("/api/saved-texts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          type: "polish",
+          originalText: data.originalText,
+          polishedText: data.polishedText,
+          sourceLanguage: language,
+          outputFormat,
+          outputType,
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to save");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      setIsSaving(false);
+      toast({ title: "Saved!", description: "Your text has been saved." });
+    },
+    onError: () => {
+      setIsSaving(false);
+      toast({ title: "Save failed", description: "Could not save your text.", variant: "destructive" });
+    },
+  });
+  
+  // Delete saved text mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(`/api/saved-texts/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to delete");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      toast({ title: "Deleted", description: "Saved text removed." });
+    },
+  });
+  
+  const handleSaveText = () => {
+    if (editableText.trim() && editablePolishedText.trim()) {
+      setIsSaving(true);
+      saveMutation.mutate({ originalText: editableText, polishedText: editablePolishedText });
+    }
+  };
+  
+  const handleLoadSavedText = (saved: SavedText) => {
+    setEditableText(saved.originalText);
+    setEditablePolishedText(saved.polishedText);
+    setLanguage(saved.sourceLanguage);
+    if (saved.outputFormat) setOutputFormat(saved.outputFormat);
+    if (saved.outputType) setOutputType(saved.outputType);
+    setResult({
+      id: saved.id,
+      originalText: saved.originalText,
+      translatedText: "",
+      polishedText: saved.polishedText,
+      sourceLanguage: saved.sourceLanguage,
+      targetLanguage: saved.sourceLanguage,
+      outputFormat: saved.outputFormat || "professional",
+      createdAt: saved.createdAt || new Date(),
+    });
+    toast({ title: "Loaded", description: "Saved text loaded. You can continue editing." });
+  };
+  
+  const truncateText = (text: string, maxLength: number = 30) => {
+    return text.length > maxLength ? text.substring(0, maxLength) + "..." : text;
+  };
+  
+  const formatDate = (date: Date | null | undefined) => {
+    if (!date) return "";
+    const d = new Date(date);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
   
   // Voice Activity Detection - detects if user is speaking
   const detectVoiceActivity = useCallback(() => {
@@ -501,6 +604,55 @@ function PolishRecorder() {
     }
   };
 
+  // Translate polished text to another language
+  const translatePolishedMutation = useMutation({
+    mutationFn: async ({ text, targetLang }: { text: string; targetLang: string }) => {
+      const response = await fetch("/api/translate-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          sourceLanguage: language,
+          targetLanguage: targetLang,
+          outputFormat: outputFormat,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Translation failed");
+      }
+
+      return response.json() as Promise<TranslationResult>;
+    },
+    onSuccess: (data) => {
+      setEditablePolishedText(data.polishedText);
+      setIsTranslatingPolished(false);
+      const langName = supportedLanguages.find(l => l.code === targetLanguage)?.name || targetLanguage;
+      toast({
+        title: "Translated!",
+        description: `Text converted to ${langName}.`,
+      });
+    },
+    onError: (error: Error) => {
+      setIsTranslatingPolished(false);
+      toast({
+        title: "Translation failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleTranslatePolished = () => {
+    if (editablePolishedText.trim() && targetLanguage && targetLanguage !== language) {
+      setIsTranslatingPolished(true);
+      translatePolishedMutation.mutate({ text: editablePolishedText, targetLang: targetLanguage });
+    }
+  };
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -656,6 +808,73 @@ function PolishRecorder() {
     }
   };
 
+  const playAudio = (text: string) => {
+    // Check if speech synthesis is supported
+    if (!('speechSynthesis' in window)) {
+      toast({
+        title: "Not supported",
+        description: "Text-to-speech is not supported in your browser.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // If already playing, stop it
+    if (isPlayingAudio) {
+      window.speechSynthesis.cancel();
+      setIsPlayingAudio(false);
+      return;
+    }
+
+    // Create utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Map language code to speech synthesis language
+    const langMap: Record<string, string> = {
+      en: "en-US",
+      es: "es-ES",
+      fr: "fr-FR",
+      de: "de-DE",
+      it: "it-IT",
+      pt: "pt-PT",
+      nl: "nl-NL",
+      ru: "ru-RU",
+      zh: "zh-CN",
+      ja: "ja-JP",
+      ko: "ko-KR",
+      ar: "ar-SA",
+      hi: "hi-IN",
+      tr: "tr-TR",
+      pl: "pl-PL",
+      vi: "vi-VN",
+      th: "th-TH",
+      id: "id-ID",
+    };
+    
+    utterance.lang = langMap[language] || "en-US";
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    
+    utterance.onstart = () => {
+      setIsPlayingAudio(true);
+    };
+    
+    utterance.onend = () => {
+      setIsPlayingAudio(false);
+    };
+    
+    utterance.onerror = () => {
+      setIsPlayingAudio(false);
+      toast({
+        title: "Playback error",
+        description: "Failed to play audio. Please try again.",
+        variant: "destructive",
+      });
+    };
+
+    window.speechSynthesis.speak(utterance);
+  };
+
   return (
     <>
       <div className="text-center mb-12">
@@ -751,24 +970,21 @@ function PolishRecorder() {
               </div>
             )}
 
-            {/* Continuous Mode Toggle */}
+            {/* Continuous Mode Switch */}
             {!isRecording && !result && (
-              <div className="flex items-center justify-center gap-2 mb-4">
-                <Button
-                  variant={isContinuousMode ? "default" : "outline"}
-                  size="sm"
-                  onClick={() => setIsContinuousMode(!isContinuousMode)}
-                  className={isContinuousMode ? "bg-gradient-to-r from-primary to-purple-500" : ""}
-                  data-testid="button-continuous-mode"
+              <div className="flex items-center justify-center gap-3 mb-4">
+                <Switch
+                  id="polish-continuous-mode"
+                  checked={isContinuousMode}
+                  onCheckedChange={setIsContinuousMode}
+                  data-testid="switch-polish-continuous-mode"
+                />
+                <Label 
+                  htmlFor="polish-continuous-mode" 
+                  className="text-sm text-muted-foreground cursor-pointer"
                 >
-                  <Radio className="w-4 h-4 mr-2" />
-                  Continuous Mode
-                </Button>
-                {isContinuousMode && (
-                  <span className="text-xs text-muted-foreground">
-                    Keeps listening when you pause or switch apps
-                  </span>
-                )}
+                  Continuous listening {isContinuousMode && "- keeps recording when you pause or switch apps"}
+                </Label>
               </div>
             )}
 
@@ -966,6 +1182,19 @@ function PolishRecorder() {
                           <Badge variant="secondary">{outputFormat}</Badge>
                         </div>
                         <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => playAudio(editablePolishedText || result.polishedText)}
+                            disabled={!editablePolishedText.trim()}
+                            data-testid="button-play-polish-audio"
+                          >
+                            {isPlayingAudio ? (
+                              <VolumeX className="w-4 h-4 text-primary" />
+                            ) : (
+                              <Volume2 className="w-4 h-4" />
+                            )}
+                          </Button>
                           <VoiceInputButton
                             language={language}
                             onTranscription={(text) => {
@@ -1058,12 +1287,67 @@ function PolishRecorder() {
                             )}
                           </Button>
                         </div>
+                        <div className="flex items-center flex-wrap gap-2 pt-2 border-t border-border/50">
+                          <div className="flex items-center gap-1">
+                            <Languages className="w-3.5 h-3.5 text-muted-foreground" />
+                            <span className="text-xs text-muted-foreground">Convert to:</span>
+                            <Select value={targetLanguage} onValueChange={setTargetLanguage}>
+                              <SelectTrigger className="w-36 h-8" data-testid="select-convert-language">
+                                <SelectValue placeholder="Select language" />
+                              </SelectTrigger>
+                              <SelectContent>
+                                {supportedLanguages
+                                  .filter(lang => lang.code !== language)
+                                  .map((lang) => (
+                                    <SelectItem key={lang.code} value={lang.code} data-testid={`option-convert-${lang.code}`}>
+                                      {lang.name}
+                                    </SelectItem>
+                                  ))}
+                              </SelectContent>
+                            </Select>
+                          </div>
+                          <Button
+                            size="sm"
+                            onClick={handleTranslatePolished}
+                            disabled={isTranslatingPolished || !editablePolishedText.trim() || !targetLanguage || targetLanguage === language}
+                            className="bg-gradient-to-r from-blue-500 to-cyan-500 ml-auto"
+                            data-testid="button-translate-polished"
+                          >
+                            {isTranslatingPolished ? (
+                              <>
+                                <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                                Translating...
+                              </>
+                            ) : (
+                              <>
+                                <Languages className="w-3 h-3 mr-1" />
+                                Translate
+                              </>
+                            )}
+                          </Button>
+                        </div>
                       </div>
                     </div>
                   </TabsContent>
                 </Tabs>
 
-                <div className="mt-6 flex justify-center">
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+                  {user && (
+                    <Button
+                      variant="default"
+                      onClick={handleSaveText}
+                      disabled={isSaving || !editableText.trim() || !editablePolishedText.trim()}
+                      className="bg-gradient-to-r from-green-500 to-emerald-500"
+                      data-testid="button-save-polish"
+                    >
+                      {isSaving ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Save className="w-4 h-4 mr-2" />
+                      )}
+                      Save
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     onClick={() => {
@@ -1073,6 +1357,7 @@ function PolishRecorder() {
                       setIsEditing(false);
                       setIsEditingPolished(false);
                       setSelectedTemplate("none");
+                      setTargetLanguage("");
                     }}
                     data-testid="button-new-polish-recording"
                   >
@@ -1083,6 +1368,47 @@ function PolishRecorder() {
               </motion.div>
             )}
           </AnimatePresence>
+          
+          {user && savedTexts.length > 0 && (
+            <div className="mt-6 border-t pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Saved Texts</span>
+              </div>
+              <Select onValueChange={(id) => {
+                const saved = savedTexts.find(s => s.id === id);
+                if (saved) handleLoadSavedText(saved);
+              }}>
+                <SelectTrigger className="w-full" data-testid="select-saved-polish-texts">
+                  <SelectValue placeholder="Load a saved text..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {savedTexts.map((saved) => (
+                    <div key={saved.id} className="flex items-center justify-between px-2 py-1 hover:bg-accent rounded group">
+                      <SelectItem value={saved.id} className="flex-1 cursor-pointer" data-testid={`option-saved-${saved.id}`}>
+                        <div className="flex flex-col">
+                          <span className="text-sm">{truncateText(saved.originalText)}</span>
+                          <span className="text-xs text-muted-foreground">{formatDate(saved.createdAt)}</span>
+                        </div>
+                      </SelectItem>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteMutation.mutate(saved.id);
+                        }}
+                        data-testid={`button-delete-saved-${saved.id}`}
+                      >
+                        <Trash2 className="w-3 h-3 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
       </Card>
     </>
@@ -1108,13 +1434,202 @@ function TranslateRecorder() {
   const [isEditingPolished, setIsEditingPolished] = useState(false);
   const [isTranslatingText, setIsTranslatingText] = useState(false);
   
+  // Language conversion states for polished text
+  const [convertToLanguage, setConvertToLanguage] = useState("");
+  const [isConvertingLanguage, setIsConvertingLanguage] = useState(false);
+  
+  // Audio playback states
+  const [isPlayingAudio, setIsPlayingAudio] = useState(false);
+  
+  // Continuous listening states
+  const [isContinuousMode, setIsContinuousMode] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [silenceTimer, setSilenceTimer] = useState(0);
+  
+  // Saved texts states
+  const [isSaving, setIsSaving] = useState(false);
+  
   const timerRef = useRef<NodeJS.Timeout | null>(null);
   const animationRef = useRef<NodeJS.Timeout | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   
+  // Continuous listening refs
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const vadIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastSpeechTimeRef = useRef<number>(Date.now());
+  
   const { toast } = useToast();
+  const { user } = useAuth();
+  const queryClient = useQueryClient();
+  
+  // Fetch saved texts for logged-in users
+  const { data: savedTexts = [] } = useQuery<SavedText[]>({
+    queryKey: ["/api/saved-texts", "translate"],
+    enabled: !!user,
+  });
+  
+  // Save text mutation
+  const saveMutation = useMutation({
+    mutationFn: async (data: { originalText: string; translatedText: string; polishedText: string }) => {
+      const response = await fetch("/api/saved-texts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          type: "translate",
+          originalText: data.originalText,
+          polishedText: data.polishedText,
+          translatedText: data.translatedText,
+          sourceLanguage,
+          targetLanguage,
+          outputFormat,
+        }),
+      });
+      if (!response.ok) throw new Error("Failed to save");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      setIsSaving(false);
+      toast({ title: "Saved!", description: "Your translation has been saved." });
+    },
+    onError: () => {
+      setIsSaving(false);
+      toast({ title: "Save failed", description: "Could not save your translation.", variant: "destructive" });
+    },
+  });
+  
+  // Delete saved text mutation
+  const deleteMutation = useMutation({
+    mutationFn: async (id: string) => {
+      const response = await fetch(`/api/saved-texts/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!response.ok) throw new Error("Failed to delete");
+      return response.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      toast({ title: "Deleted", description: "Saved translation removed." });
+    },
+  });
+  
+  const handleSaveText = () => {
+    if (editableText.trim() && editablePolishedText.trim()) {
+      setIsSaving(true);
+      saveMutation.mutate({ 
+        originalText: editableText, 
+        translatedText: editableTranslatedText,
+        polishedText: editablePolishedText 
+      });
+    }
+  };
+  
+  const handleLoadSavedText = (saved: SavedText) => {
+    setEditableText(saved.originalText);
+    setEditableTranslatedText(saved.translatedText || "");
+    setEditablePolishedText(saved.polishedText);
+    if (saved.sourceLanguage) setSourceLanguage(saved.sourceLanguage);
+    if (saved.targetLanguage) setTargetLanguage(saved.targetLanguage);
+    if (saved.outputFormat) setOutputFormat(saved.outputFormat);
+    setResult({
+      id: saved.id,
+      originalText: saved.originalText,
+      translatedText: saved.translatedText || "",
+      polishedText: saved.polishedText,
+      sourceLanguage: saved.sourceLanguage,
+      targetLanguage: saved.targetLanguage || "",
+      outputFormat: saved.outputFormat || "professional",
+      createdAt: saved.createdAt || new Date(),
+    });
+    toast({ title: "Loaded", description: "Saved translation loaded. You can continue editing." });
+  };
+  
+  const truncateText = (text: string, maxLength: number = 30) => {
+    return text.length > maxLength ? text.substring(0, maxLength) + "..." : text;
+  };
+  
+  const formatDate = (date: Date | null | undefined) => {
+    if (!date) return "";
+    const d = new Date(date);
+    return d.toLocaleDateString("en-US", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  };
+  
+  // Voice Activity Detection
+  const detectVoiceActivity = useCallback(() => {
+    if (!analyserRef.current) return false;
+    
+    const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+    analyserRef.current.getByteFrequencyData(dataArray);
+    
+    const average = dataArray.reduce((sum, val) => sum + val, 0) / dataArray.length;
+    const threshold = 15;
+    return average > threshold;
+  }, []);
+  
+  // Handle visibility change for continuous mode
+  useEffect(() => {
+    if (!isContinuousMode || !isRecording) return;
+    
+    const handleVisibilityChange = () => {
+      if (document.hidden) {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state === "recording") {
+          setIsPaused(true);
+          toast({
+            title: "Recording paused",
+            description: "Your recording is paused. Switch back to continue.",
+          });
+        }
+      } else {
+        if (isPaused && streamRef.current) {
+          setIsPaused(false);
+          toast({
+            title: "Recording resumed",
+            description: "Welcome back! Continue speaking.",
+          });
+        }
+      }
+    };
+    
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
+  }, [isContinuousMode, isRecording, isPaused, toast]);
+  
+  // Voice activity detection loop
+  useEffect(() => {
+    if (!isContinuousMode || !isRecording || isPaused) {
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = null;
+      }
+      return;
+    }
+    
+    vadIntervalRef.current = setInterval(() => {
+      const speaking = detectVoiceActivity();
+      setIsSpeaking(speaking);
+      
+      if (speaking) {
+        lastSpeechTimeRef.current = Date.now();
+        setSilenceTimer(0);
+      } else {
+        const silenceDuration = Math.floor((Date.now() - lastSpeechTimeRef.current) / 1000);
+        setSilenceTimer(silenceDuration);
+      }
+    }, 100);
+    
+    return () => {
+      if (vadIntervalRef.current) {
+        clearInterval(vadIntervalRef.current);
+        vadIntervalRef.current = null;
+      }
+    };
+  }, [isContinuousMode, isRecording, isPaused, detectVoiceActivity]);
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -1238,6 +1753,55 @@ function TranslateRecorder() {
     }
   };
 
+  // Convert polished text to another language
+  const convertLanguageMutation = useMutation({
+    mutationFn: async ({ text, toLang }: { text: string; toLang: string }) => {
+      const response = await fetch("/api/translate-text", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          text,
+          sourceLanguage: targetLanguage,
+          targetLanguage: toLang,
+          outputFormat,
+        }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || "Conversion failed");
+      }
+
+      return response.json() as Promise<TranslationResult>;
+    },
+    onSuccess: (data) => {
+      setEditablePolishedText(data.polishedText);
+      setIsConvertingLanguage(false);
+      const langName = supportedLanguages.find(l => l.code === convertToLanguage)?.name || convertToLanguage;
+      toast({
+        title: "Converted!",
+        description: `Text converted to ${langName}.`,
+      });
+    },
+    onError: (error: Error) => {
+      setIsConvertingLanguage(false);
+      toast({
+        title: "Conversion failed",
+        description: error.message,
+        variant: "destructive",
+      });
+    },
+  });
+
+  const handleConvertLanguage = () => {
+    if (editablePolishedText.trim() && convertToLanguage && convertToLanguage !== targetLanguage) {
+      setIsConvertingLanguage(true);
+      convertLanguageMutation.mutate({ text: editablePolishedText, toLang: convertToLanguage });
+    }
+  };
+
   const formatTime = (seconds: number) => {
     const mins = Math.floor(seconds / 60);
     const secs = seconds % 60;
@@ -1248,6 +1812,17 @@ function TranslateRecorder() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
+      
+      // Set up audio context for voice activity detection in continuous mode
+      if (isContinuousMode) {
+        audioContextRef.current = new AudioContext();
+        analyserRef.current = audioContextRef.current.createAnalyser();
+        analyserRef.current.fftSize = 256;
+        
+        const source = audioContextRef.current.createMediaStreamSource(stream);
+        source.connect(analyserRef.current);
+        lastSpeechTimeRef.current = Date.now();
+      }
       
       const mediaRecorder = new MediaRecorder(stream, {
         mimeType: MediaRecorder.isTypeSupported("audio/webm") ? "audio/webm" : "audio/mp4",
@@ -1266,6 +1841,13 @@ function TranslateRecorder() {
         const audioBlob = new Blob(audioChunksRef.current, { 
           type: mediaRecorder.mimeType 
         });
+        
+        // Clean up audio context
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+          audioContextRef.current = null;
+          analyserRef.current = null;
+        }
         
         if (streamRef.current) {
           streamRef.current.getTracks().forEach(track => track.stop());
@@ -1288,6 +1870,15 @@ function TranslateRecorder() {
       setIsRecording(true);
       setRecordingTime(0);
       setResult(null);
+      setIsPaused(false);
+      setSilenceTimer(0);
+      
+      if (isContinuousMode) {
+        toast({
+          title: "Continuous listening active",
+          description: "Recording will continue even if you pause or switch apps.",
+        });
+      }
     } catch (error: any) {
       console.error("Microphone access error:", error);
       toast({
@@ -1302,7 +1893,28 @@ function TranslateRecorder() {
     if (mediaRecorderRef.current && isRecording) {
       setIsRecording(false);
       setIsProcessing(true);
+      setIsPaused(false);
+      setSilenceTimer(0);
+      setIsSpeaking(false);
       mediaRecorderRef.current.stop();
+    }
+  };
+  
+  const togglePause = () => {
+    if (!isContinuousMode || !isRecording) return;
+    
+    if (isPaused) {
+      setIsPaused(false);
+      toast({
+        title: "Recording resumed",
+        description: "Continue speaking - your thoughts are being captured.",
+      });
+    } else {
+      setIsPaused(true);
+      toast({
+        title: "Recording paused",
+        description: "Take your time. Click play when ready to continue.",
+      });
     }
   };
 
@@ -1353,6 +1965,73 @@ function TranslateRecorder() {
         description: "Text copied to clipboard. Paste it anywhere to share.",
       });
     }
+  };
+
+  const playAudio = (text: string, langCode: string) => {
+    // Check if speech synthesis is supported
+    if (!('speechSynthesis' in window)) {
+      toast({
+        title: "Not supported",
+        description: "Text-to-speech is not supported in your browser.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // If already playing, stop it
+    if (isPlayingAudio) {
+      window.speechSynthesis.cancel();
+      setIsPlayingAudio(false);
+      return;
+    }
+
+    // Create utterance
+    const utterance = new SpeechSynthesisUtterance(text);
+    
+    // Map language code to speech synthesis language
+    const langMap: Record<string, string> = {
+      en: "en-US",
+      es: "es-ES",
+      fr: "fr-FR",
+      de: "de-DE",
+      it: "it-IT",
+      pt: "pt-PT",
+      nl: "nl-NL",
+      ru: "ru-RU",
+      zh: "zh-CN",
+      ja: "ja-JP",
+      ko: "ko-KR",
+      ar: "ar-SA",
+      hi: "hi-IN",
+      tr: "tr-TR",
+      pl: "pl-PL",
+      vi: "vi-VN",
+      th: "th-TH",
+      id: "id-ID",
+    };
+    
+    utterance.lang = langMap[langCode] || "en-US";
+    utterance.rate = 1.0;
+    utterance.pitch = 1.0;
+    
+    utterance.onstart = () => {
+      setIsPlayingAudio(true);
+    };
+    
+    utterance.onend = () => {
+      setIsPlayingAudio(false);
+    };
+    
+    utterance.onerror = () => {
+      setIsPlayingAudio(false);
+      toast({
+        title: "Playback error",
+        description: "Failed to play audio. Please try again.",
+        variant: "destructive",
+      });
+    };
+
+    window.speechSynthesis.speak(utterance);
   };
 
   return (
@@ -1460,22 +2139,74 @@ function TranslateRecorder() {
               </div>
             )}
 
-            <div className="text-2xl font-mono font-semibold text-primary mb-6" data-testid="text-timer">
+            {/* Continuous Mode Switch */}
+            {!isRecording && !result && (
+              <div className="flex items-center justify-center gap-3 mb-4">
+                <Switch
+                  id="translate-continuous-mode"
+                  checked={isContinuousMode}
+                  onCheckedChange={setIsContinuousMode}
+                  data-testid="switch-translate-continuous-mode"
+                />
+                <Label 
+                  htmlFor="translate-continuous-mode" 
+                  className="text-sm text-muted-foreground cursor-pointer"
+                >
+                  Continuous listening {isContinuousMode && "- keeps recording when you pause or switch apps"}
+                </Label>
+              </div>
+            )}
+
+            <div className="text-2xl font-mono font-semibold text-primary mb-2" data-testid="text-timer">
               {formatTime(recordingTime)}
             </div>
+            
+            {/* Continuous Mode Status Indicators */}
+            {isContinuousMode && isRecording && (
+              <div className="flex items-center justify-center gap-4 mb-4">
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${isPaused ? "bg-yellow-500" : isSpeaking ? "bg-green-500 animate-pulse" : "bg-blue-500"}`} />
+                  <span className="text-xs text-muted-foreground">
+                    {isPaused ? "Paused" : isSpeaking ? "Listening..." : "Waiting for speech"}
+                  </span>
+                </div>
+                {!isPaused && silenceTimer > 3 && (
+                  <span className="text-xs text-muted-foreground">
+                    Silent for {silenceTimer}s
+                  </span>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-center gap-1 h-20 mb-6" data-testid="waveform">
               {waveformBars.map((height, i) => (
                 <motion.div
                   key={i}
-                  className="w-1.5 rounded-full bg-gradient-to-t from-primary to-purple-400"
-                  animate={{ height: `${height * 100}%` }}
+                  className={`w-1.5 rounded-full ${isPaused ? "bg-yellow-400/50" : "bg-gradient-to-t from-primary to-purple-400"}`}
+                  animate={{ height: isPaused ? "20%" : `${height * 100}%` }}
                   transition={{ duration: 0.1 }}
                 />
               ))}
             </div>
 
             <div className="flex items-center justify-center gap-4">
+              {/* Pause/Play button for continuous mode */}
+              {isContinuousMode && isRecording && (
+                <Button
+                  size="lg"
+                  variant="outline"
+                  onClick={togglePause}
+                  className="w-14 h-14 rounded-full"
+                  data-testid="button-translate-pause-resume"
+                >
+                  {isPaused ? (
+                    <Play className="w-6 h-6" />
+                  ) : (
+                    <Pause className="w-6 h-6" />
+                  )}
+                </Button>
+              )}
+              
               <Button
                 size="lg"
                 onClick={handleToggleRecording}
@@ -1672,6 +2403,19 @@ function TranslateRecorder() {
                           <Badge variant="secondary">{result.outputFormat}</Badge>
                         </div>
                         <div className="flex items-center gap-1">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => playAudio(editablePolishedText || result.polishedText, targetLanguage)}
+                            disabled={!editablePolishedText.trim()}
+                            data-testid="button-play-polished-audio"
+                          >
+                            {isPlayingAudio ? (
+                              <VolumeX className="w-4 h-4 text-primary" />
+                            ) : (
+                              <Volume2 className="w-4 h-4" />
+                            )}
+                          </Button>
                           <VoiceInputButton
                             language={targetLanguage}
                             onTranscription={(text) => {
@@ -1712,11 +2456,66 @@ function TranslateRecorder() {
                         placeholder="Your polished text will appear here..."
                         data-testid="textarea-polished"
                       />
+                      <div className="flex items-center flex-wrap gap-2 p-2 border-t border-border/50">
+                        <div className="flex items-center gap-1">
+                          <Languages className="w-3.5 h-3.5 text-muted-foreground" />
+                          <span className="text-xs text-muted-foreground">Convert to:</span>
+                          <Select value={convertToLanguage} onValueChange={setConvertToLanguage}>
+                            <SelectTrigger className="w-36 h-8" data-testid="select-translate-convert-language">
+                              <SelectValue placeholder="Select language" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {supportedLanguages
+                                .filter(lang => lang.code !== targetLanguage)
+                                .map((lang) => (
+                                  <SelectItem key={lang.code} value={lang.code} data-testid={`option-translate-convert-${lang.code}`}>
+                                    {lang.name}
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Button
+                          size="sm"
+                          onClick={handleConvertLanguage}
+                          disabled={isConvertingLanguage || !editablePolishedText.trim() || !convertToLanguage || convertToLanguage === targetLanguage}
+                          className="bg-gradient-to-r from-blue-500 to-cyan-500 ml-auto"
+                          data-testid="button-translate-convert-language"
+                        >
+                          {isConvertingLanguage ? (
+                            <>
+                              <Loader2 className="w-3 h-3 mr-1 animate-spin" />
+                              Converting...
+                            </>
+                          ) : (
+                            <>
+                              <Languages className="w-3 h-3 mr-1" />
+                              Convert
+                            </>
+                          )}
+                        </Button>
+                      </div>
                     </div>
                   </TabsContent>
                 </Tabs>
 
-                <div className="mt-6 flex justify-center">
+                <div className="mt-6 flex flex-wrap items-center justify-center gap-2">
+                  {user && (
+                    <Button
+                      variant="default"
+                      onClick={handleSaveText}
+                      disabled={isSaving || !editableText.trim() || !editablePolishedText.trim()}
+                      className="bg-gradient-to-r from-green-500 to-emerald-500"
+                      data-testid="button-save-translate"
+                    >
+                      {isSaving ? (
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      ) : (
+                        <Save className="w-4 h-4 mr-2" />
+                      )}
+                      Save
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     onClick={() => {
@@ -1727,6 +2526,7 @@ function TranslateRecorder() {
                       setIsEditing(false);
                       setIsEditingTranslated(false);
                       setIsEditingPolished(false);
+                      setConvertToLanguage("");
                     }}
                     data-testid="button-new-recording"
                   >
@@ -1737,6 +2537,47 @@ function TranslateRecorder() {
               </motion.div>
             )}
           </AnimatePresence>
+          
+          {user && savedTexts.length > 0 && (
+            <div className="mt-6 border-t pt-4">
+              <div className="flex items-center gap-2 mb-2">
+                <FolderOpen className="w-4 h-4 text-muted-foreground" />
+                <span className="text-sm text-muted-foreground">Saved Translations</span>
+              </div>
+              <Select onValueChange={(id) => {
+                const saved = savedTexts.find(s => s.id === id);
+                if (saved) handleLoadSavedText(saved);
+              }}>
+                <SelectTrigger className="w-full" data-testid="select-saved-translate-texts">
+                  <SelectValue placeholder="Load a saved translation..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {savedTexts.map((saved) => (
+                    <div key={saved.id} className="flex items-center justify-between px-2 py-1 hover:bg-accent rounded group">
+                      <SelectItem value={saved.id} className="flex-1 cursor-pointer" data-testid={`option-saved-translate-${saved.id}`}>
+                        <div className="flex flex-col">
+                          <span className="text-sm">{truncateText(saved.originalText)}</span>
+                          <span className="text-xs text-muted-foreground">{formatDate(saved.createdAt)}</span>
+                        </div>
+                      </SelectItem>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-6 w-6 opacity-0 group-hover:opacity-100 transition-opacity"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          deleteMutation.mutate(saved.id);
+                        }}
+                        data-testid={`button-delete-saved-translate-${saved.id}`}
+                      >
+                        <Trash2 className="w-3 h-3 text-destructive" />
+                      </Button>
+                    </div>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
         </div>
       </Card>
     </>

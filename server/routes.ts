@@ -1,7 +1,7 @@
 import type { Express, Request, Response } from "express";
 import { createServer, type Server } from "http";
 import { supabaseStorage } from "./supabase-storage";
-import { translateRequestSchema, polishRequestSchema, insertUserSchema } from "@shared/schema";
+import { translateRequestSchema, polishRequestSchema, insertUserSchema, insertSavedTextSchema } from "@shared/schema";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
 import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
@@ -453,6 +453,92 @@ export async function registerRoutes(
       });
     } else {
       res.status(401).json({ error: "Not authenticated" });
+    }
+  });
+
+  // Save text endpoint (requires authentication)
+  app.post("/api/saved-texts", async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const savedTextData = {
+        ...req.body,
+        userId,
+      };
+
+      const parseResult = insertSavedTextSchema.safeParse(savedTextData);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const savedText = await storage.createSavedText(parseResult.data);
+      res.status(201).json(savedText);
+    } catch (error: any) {
+      console.error("Save text error:", error);
+      res.status(500).json({ error: "Failed to save text" });
+    }
+  });
+
+  // Get saved texts for current user
+  app.get("/api/saved-texts", async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const type = req.query.type as string | undefined;
+      const savedTexts = await storage.getSavedTextsByUser(userId, type);
+      res.json(savedTexts);
+    } catch (error: any) {
+      console.error("Get saved texts error:", error);
+      res.status(500).json({ error: "Failed to get saved texts" });
+    }
+  });
+
+  // Get single saved text
+  app.get("/api/saved-texts/:id", async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const savedText = await storage.getSavedText(req.params.id);
+      if (!savedText || savedText.userId !== userId) {
+        return res.status(404).json({ error: "Saved text not found" });
+      }
+
+      res.json(savedText);
+    } catch (error: any) {
+      console.error("Get saved text error:", error);
+      res.status(500).json({ error: "Failed to get saved text" });
+    }
+  });
+
+  // Delete saved text
+  app.delete("/api/saved-texts/:id", async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const deleted = await storage.deleteSavedText(req.params.id, userId);
+      if (!deleted) {
+        return res.status(404).json({ error: "Saved text not found" });
+      }
+
+      res.json({ message: "Saved text deleted" });
+    } catch (error: any) {
+      console.error("Delete saved text error:", error);
+      res.status(500).json({ error: "Failed to delete saved text" });
     }
   });
 

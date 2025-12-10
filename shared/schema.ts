@@ -84,3 +84,26 @@ export interface InsertTranslation {
   targetLanguage: string;
   outputFormat: string;
 }
+
+// Saved texts table for logged-in users
+export const savedTexts = pgTable("saved_texts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  type: varchar("type", { length: 50 }).notNull(), // "polish" or "translate"
+  originalText: text("original_text").notNull(),
+  polishedText: text("polished_text").notNull(),
+  translatedText: text("translated_text"), // only for translate type
+  sourceLanguage: varchar("source_language", { length: 10 }).notNull(),
+  targetLanguage: varchar("target_language", { length: 10 }), // only for translate type
+  outputFormat: varchar("output_format", { length: 50 }).notNull(),
+  outputType: varchar("output_type", { length: 50 }), // only for polish type
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertSavedTextSchema = createInsertSchema(savedTexts).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertSavedText = z.infer<typeof insertSavedTextSchema>;
+export type SavedText = typeof savedTexts.$inferSelect;

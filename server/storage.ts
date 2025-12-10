@@ -1,4 +1,4 @@
-import { type User, type TranslationResult, type InsertTranslation } from "@shared/schema";
+import { type User, type TranslationResult, type InsertTranslation, type SavedText, type InsertSavedText } from "@shared/schema";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 
@@ -19,15 +19,23 @@ export interface IStorage {
   createTranslation(translation: InsertTranslation): Promise<TranslationResult>;
   getTranslation(id: string): Promise<TranslationResult | undefined>;
   getRecentTranslations(limit?: number): Promise<TranslationResult[]>;
+  
+  // Saved text operations
+  createSavedText(savedText: InsertSavedText): Promise<SavedText>;
+  getSavedTextsByUser(userId: string, type?: string): Promise<SavedText[]>;
+  getSavedText(id: string): Promise<SavedText | undefined>;
+  deleteSavedText(id: string, userId: string): Promise<boolean>;
 }
 
 export class MemStorage implements IStorage {
   private users: Map<string, User>;
   private translations: Map<string, TranslationResult>;
+  private savedTexts: Map<string, SavedText>;
 
   constructor() {
     this.users = new Map();
     this.translations = new Map();
+    this.savedTexts = new Map();
   }
 
   async getUser(id: string): Promise<User | undefined> {
@@ -79,6 +87,45 @@ export class MemStorage implements IStorage {
     return translations
       .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
       .slice(0, limit);
+  }
+
+  async createSavedText(savedText: InsertSavedText): Promise<SavedText> {
+    const id = randomUUID();
+    const saved: SavedText = {
+      id,
+      userId: savedText.userId,
+      type: savedText.type,
+      originalText: savedText.originalText,
+      polishedText: savedText.polishedText,
+      translatedText: savedText.translatedText ?? null,
+      sourceLanguage: savedText.sourceLanguage,
+      targetLanguage: savedText.targetLanguage ?? null,
+      outputFormat: savedText.outputFormat,
+      outputType: savedText.outputType ?? null,
+      createdAt: new Date(),
+    };
+    this.savedTexts.set(id, saved);
+    return saved;
+  }
+
+  async getSavedTextsByUser(userId: string, type?: string): Promise<SavedText[]> {
+    const texts = Array.from(this.savedTexts.values())
+      .filter(t => t.userId === userId && (!type || t.type === type))
+      .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
+    return texts;
+  }
+
+  async getSavedText(id: string): Promise<SavedText | undefined> {
+    return this.savedTexts.get(id);
+  }
+
+  async deleteSavedText(id: string, userId: string): Promise<boolean> {
+    const text = this.savedTexts.get(id);
+    if (text && text.userId === userId) {
+      this.savedTexts.delete(id);
+      return true;
+    }
+    return false;
   }
 }
 

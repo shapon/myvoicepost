@@ -51,6 +51,45 @@ const outputTypeInstructions: Record<string, string> = {
   journal: "Format as a reflective journal entry with personal insights.",
 };
 
+// Template formatting instructions
+const templateInstructions: Record<string, string> = {
+  none: "",
+  "meeting-followup": `Format as a professional Meeting Follow-Up Email with the following structure:
+- Subject line suggestion
+- Greeting
+- Brief meeting summary
+- Action items as a numbered or bulleted list with assigned owners and deadlines if mentioned
+- Next steps
+- Professional closing`,
+  "client-refusal": `Format as a Formal Client Refusal email with the following structure:
+- Professional greeting
+- Express appreciation for the opportunity
+- Clear but polite decline
+- Brief reasoning (if appropriate)
+- Offer alternative solutions or future collaboration possibilities
+- Maintain positive relationship tone
+- Professional closing`,
+  "project-proposal": `Format as a Project Proposal Outline with the following structure:
+- Executive Summary
+- Project Objectives
+- Scope of Work
+- Timeline/Milestones
+- Resources Required
+- Budget Considerations (if mentioned)
+- Expected Outcomes
+- Next Steps`,
+  "bullet-points": `Format the content as clear, organized bullet points:
+- Use consistent bullet formatting
+- Each point should be concise and actionable
+- Group related points together
+- Use sub-bullets for nested information`,
+  "bolding": `Format the content with strategic bolding:
+- **Bold key terms**, important concepts, and action items
+- Use **bold text** for emphasis on critical information
+- Bold names, dates, and important numbers
+- Keep the overall structure readable with bold highlights`,
+};
+
 // Helper function to check if error is rate limit or quota violation
 function isRateLimitError(error: any): boolean {
   const errorMsg = error?.message || String(error);
@@ -199,22 +238,26 @@ export async function polishText(
   text: string,
   language: string,
   outputFormat: string,
-  outputType: string
+  outputType: string,
+  template?: string
 ): Promise<string> {
   const langName = languageNames[language] || language;
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
   const typeGuide = outputTypeInstructions[outputType] || outputTypeInstructions.message;
+  const templateGuide = template && template !== "none" ? templateInstructions[template] || "" : "";
 
   return pRetry(
     async () => {
       try {
+        const templateSection = templateGuide ? `\n\nTemplate Format:\n${templateGuide}` : "";
+        
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: `You are an expert writer and editor. Transform the following speech transcription into well-written ${outputType}.
 
 Language: ${langName}
 Tone: ${toneGuide}
-Format: ${typeGuide}
+Format: ${typeGuide}${templateSection}
 
 Make the text clear, well-structured, and grammatically correct while preserving the original meaning and intent.
 
@@ -252,3 +295,4 @@ ${text}`,
     }
   );
 }
+
