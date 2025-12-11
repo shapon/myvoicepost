@@ -1,10 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import express, { type Request, Response, NextFunction } from "express";
-import session from "express-session";
 import cors from "cors";
 import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
@@ -41,9 +41,44 @@ type User = typeof users.$inferSelect;
 type SavedText = typeof savedTexts.$inferSelect;
 
 // ============ DATABASE CONNECTION ============
-const connectionString = process.env.DATABASE_URL!;
+const connectionString = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL!;
 const client = postgres(connectionString, { prepare: false });
 const db = drizzle(client);
+
+// ============ JWT CONFIG ============
+const JWT_SECRET = process.env.SESSION_SECRET || "myvoicepost-jwt-secret-key";
+const JWT_EXPIRES_IN = "7d";
+
+interface JwtPayload {
+  userId: string;
+  username: string;
+}
+
+function generateToken(payload: JwtPayload): string {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
+
+function verifyToken(token: string): JwtPayload | null {
+  try {
+    return jwt.verify(token, JWT_SECRET) as JwtPayload;
+  } catch {
+    return null;
+  }
+}
+
+function getTokenFromRequest(req: Request): string | null {
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    return authHeader.substring(7);
+  }
+  return null;
+}
+
+function getUserFromRequest(req: Request): JwtPayload | null {
+  const token = getTokenFromRequest(req);
+  if (!token) return null;
+  return verifyToken(token);
+}
 
 // ============ GEMINI AI SETUP ============
 const ai = new GoogleGenAI({
@@ -212,25 +247,13 @@ const app = express();
 
 app.use(cors({
   origin: process.env.NODE_ENV === 'production' 
-    ? ['https://myvoicepost.com', 'https://www.myvoicepost.com']
+    ? ['https://myvoicepost.com', 'https://www.myvoicepost.com', 'https://myvoicepost.vercel.app']
     : true,
   credentials: true,
 }));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: false }));
-
-app.use(session({
-  secret: process.env.SESSION_SECRET || "myvoicepost-secret-key",
-  resave: false,
-  saveUninitialized: false,
-  cookie: {
-    secure: process.env.NODE_ENV === "production",
-    httpOnly: true,
-    maxAge: 7 * 24 * 60 * 60 * 1000,
-    sameSite: 'lax',
-  },
-}));
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -359,7 +382,7 @@ app.get("/api/translations/:id", async (req, res) => {
   }
 });
 
-// Auth routes
+// Auth routes with JWT
 app.post("/api/auth/signup", async (req, res) => {
   try {
     const parseResult = signupSchema.safeParse(req.body);
@@ -387,11 +410,11 @@ app.post("/api/auth/signup", async (req, res) => {
     }).returning();
 
     const user = result[0];
-    (req.session as any).userId = user.id;
-    (req.session as any).username = user.username;
+    const token = generateToken({ userId: user.id, username: user.username });
 
     res.status(201).json({
       message: "Account created successfully",
+      token,
       user: { id: user.id, username: user.username },
     });
   } catch (error: any) {
@@ -421,11 +444,11 @@ app.post("/api/auth/login", async (req, res) => {
       return res.status(401).json({ error: "Invalid username or password" });
     }
 
-    (req.session as any).userId = user.id;
-    (req.session as any).username = user.username;
+    const token = generateToken({ userId: user.id, username: user.username });
 
     res.json({
       message: "Login successful",
+      token,
       user: { id: user.id, username: user.username },
     });
   } catch (error: any) {
@@ -435,22 +458,16 @@ app.post("/api/auth/login", async (req, res) => {
 });
 
 app.post("/api/auth/logout", (req, res) => {
-  req.session.destroy((err) => {
-    if (err) {
-      console.error("Logout error:", err);
-      return res.status(500).json({ error: "Failed to logout" });
-    }
-    res.clearCookie("connect.sid");
-    res.json({ message: "Logged out successfully" });
-  });
+  res.json({ message: "Logged out successfully" });
 });
 
 app.get("/api/auth/me", (req, res) => {
-  if ((req.session as any).userId) {
+  const payload = getUserFromRequest(req);
+  if (payload) {
     res.json({
       user: {
-        id: (req.session as any).userId,
-        username: (req.session as any).username,
+        id: payload.userId,
+        username: payload.username,
       },
     });
   } else {
@@ -461,8 +478,8 @@ app.get("/api/auth/me", (req, res) => {
 // ============ SAVED TEXTS ENDPOINTS ============
 app.post("/api/saved-texts", async (req, res) => {
   try {
-    const userId = (req.session as any).userId;
-    if (!userId) {
+    const payload = getUserFromRequest(req);
+    if (!payload) {
       return res.status(401).json({ error: "Not authenticated" });
     }
 
@@ -473,7 +490,7 @@ app.post("/api/saved-texts", async (req, res) => {
     }
 
     const result = await db.insert(savedTexts).values({
-      userId,
+      userId: payload.userId,
       type,
       originalText,
       polishedText,
@@ -493,14 +510,14 @@ app.post("/api/saved-texts", async (req, res) => {
 
 app.get("/api/saved-texts/:type", async (req, res) => {
   try {
-    const userId = (req.session as any).userId;
-    if (!userId) {
+    const payload = getUserFromRequest(req);
+    if (!payload) {
       return res.status(401).json({ error: "Not authenticated" });
     }
 
     const { type } = req.params;
     const result = await db.select().from(savedTexts)
-      .where(and(eq(savedTexts.userId, userId), eq(savedTexts.type, type)))
+      .where(and(eq(savedTexts.userId, payload.userId), eq(savedTexts.type, type)))
       .orderBy(desc(savedTexts.createdAt));
 
     res.json(result);
@@ -512,14 +529,14 @@ app.get("/api/saved-texts/:type", async (req, res) => {
 
 app.delete("/api/saved-texts/:id", async (req, res) => {
   try {
-    const userId = (req.session as any).userId;
-    if (!userId) {
+    const payload = getUserFromRequest(req);
+    if (!payload) {
       return res.status(401).json({ error: "Not authenticated" });
     }
 
     const { id } = req.params;
     const result = await db.select().from(savedTexts)
-      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)));
+      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, payload.userId)));
 
     if (result.length === 0) {
       return res.status(404).json({ error: "Saved text not found" });

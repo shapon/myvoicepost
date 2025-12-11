@@ -276,9 +276,13 @@ function PolishRecorder() {
   // Save text mutation
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; polishedText: string }) => {
+      const token = localStorage.getItem("mvp_auth_token");
       const response = await fetch("/api/saved-texts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         credentials: "include",
         body: JSON.stringify({
           type: "polish",
@@ -306,8 +310,10 @@ function PolishRecorder() {
   // Delete saved text mutation
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      const token = localStorage.getItem("mvp_auth_token");
       const response = await fetch(`/api/saved-texts/${id}`, {
         method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to delete");
@@ -1475,9 +1481,13 @@ function TranslateRecorder() {
   // Save text mutation
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; translatedText: string; polishedText: string }) => {
+      const token = localStorage.getItem("mvp_auth_token");
       const response = await fetch("/api/saved-texts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         credentials: "include",
         body: JSON.stringify({
           type: "translate",
@@ -1506,8 +1516,10 @@ function TranslateRecorder() {
   // Delete saved text mutation
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
+      const token = localStorage.getItem("mvp_auth_token");
       const response = await fetch(`/api/saved-texts/${id}`, {
         method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to delete");

@@ -1,5 +1,5 @@
 import { createContext, useContext, useState, useEffect, useCallback, type ReactNode } from "react";
-import { apiRequest } from "@/lib/queryClient";
+import { apiRequest, setAuthToken, removeAuthToken, getAuthToken } from "@/lib/queryClient";
 
 interface User {
   id: string;
@@ -22,16 +22,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const checkAuth = useCallback(async () => {
     try {
+      const token = getAuthToken();
+      if (!token) {
+        setUser(null);
+        setIsLoading(false);
+        return;
+      }
+
       const response = await fetch("/api/auth/me", {
-        credentials: "include",
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
       });
       if (response.ok) {
         const data = await response.json();
         setUser(data.user);
       } else {
+        removeAuthToken();
         setUser(null);
       }
     } catch (error) {
+      removeAuthToken();
       setUser(null);
     } finally {
       setIsLoading(false);
@@ -48,6 +59,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!response.ok) {
       throw new Error(data.error || "Login failed");
     }
+    if (data.token) {
+      setAuthToken(data.token);
+    }
     setUser(data.user);
   };
 
@@ -62,11 +76,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (!response.ok) {
       throw new Error(data.error || "Signup failed");
     }
+    if (data.token) {
+      setAuthToken(data.token);
+    }
     setUser(data.user);
   };
 
   const logout = async () => {
     await apiRequest("POST", "/api/auth/logout", {});
+    removeAuthToken();
     setUser(null);
   };
 
