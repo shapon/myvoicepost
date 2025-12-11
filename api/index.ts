@@ -6,8 +6,8 @@ import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
-import { drizzle } from "drizzle-orm/neon-http";
-import { neon } from "@neondatabase/serverless";
+import { drizzle } from "drizzle-orm/postgres-js";
+import postgres from "postgres";
 import { eq, and, desc } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
@@ -41,8 +41,9 @@ type User = typeof users.$inferSelect;
 type SavedText = typeof savedTexts.$inferSelect;
 
 // ============ DATABASE CONNECTION ============
-const sql = neon(process.env.DATABASE_URL!);
-const db = drizzle(sql);
+const connectionString = process.env.DATABASE_URL!;
+const client = postgres(connectionString, { prepare: false });
+const db = drizzle(client);
 
 // ============ GEMINI AI SETUP ============
 const ai = new GoogleGenAI({
