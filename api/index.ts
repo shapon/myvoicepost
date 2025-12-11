@@ -113,6 +113,15 @@ function isRateLimitError(error: any): boolean {
     errorMsg.toLowerCase().includes("quota") || errorMsg.toLowerCase().includes("rate limit");
 }
 
+function safeJsonParse(text: string, fallback: any = {}): any {
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    console.error("JSON parse error:", e, "Text:", text?.substring(0, 200));
+    return fallback;
+  }
+}
+
 async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
   return pRetry(async () => {
     try {
@@ -156,7 +165,7 @@ Text: ${text}`,
           }
         }
       });
-      const result = JSON.parse(response.text || "{}");
+      const result = safeJsonParse(response.text || "{}", { polishedText: text });
       return result.polishedText || text;
     } catch (error: any) {
       if (isRateLimitError(error)) throw error;
@@ -187,7 +196,7 @@ Text: ${text}`,
             }
           }
         });
-        const result = JSON.parse(response.text || "{}");
+        const result = safeJsonParse(response.text || "{}", { polishedText: text });
         return { translatedText: text, polishedText: result.polishedText || text };
       }
 
@@ -205,7 +214,7 @@ Text: ${text}`,
           }
         }
       });
-      const result = JSON.parse(response.text || "{}");
+      const result = safeJsonParse(response.text || "{}", { translatedText: text, polishedText: text });
       return { translatedText: result.translatedText || text, polishedText: result.polishedText || result.translatedText || text };
     } catch (error: any) {
       if (isRateLimitError(error)) throw error;
