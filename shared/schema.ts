@@ -3,7 +3,7 @@ import { pgTable, text, varchar, uuid, timestamp } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const users = pgTable("users", {
+export const users = pgTable("mvp_users", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   username: varchar("username", { length: 255 }).notNull().unique(),
   email: varchar("email", { length: 255 }),
@@ -86,7 +86,7 @@ export interface InsertTranslation {
 }
 
 // Saved texts table for logged-in users
-export const savedTexts = pgTable("saved_texts", {
+export const savedTexts = pgTable("mvp_saved_texts", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id").notNull().references(() => users.id),
   type: varchar("type", { length: 50 }).notNull(), // "polish" or "translate"

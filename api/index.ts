@@ -8,13 +8,13 @@ import bcrypt from "bcryptjs";
 import { randomUUID } from "crypto";
 import { drizzle } from "drizzle-orm/neon-http";
 import { neon } from "@neondatabase/serverless";
-import { eq } from "drizzle-orm";
+import { eq, and, desc } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
 
 // ============ DATABASE SCHEMA ============
-const users = pgTable("users", {
+const users = pgTable("mvp_users", {
   id: uuid("id").defaultRandom().primaryKey(),
   username: varchar("username", { length: 255 }).notNull().unique(),
   email: varchar("email", { length: 255 }),
@@ -23,7 +23,22 @@ const users = pgTable("users", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
+const savedTexts = pgTable("mvp_saved_texts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  type: varchar("type", { length: 50 }).notNull(),
+  originalText: text("original_text").notNull(),
+  polishedText: text("polished_text").notNull(),
+  translatedText: text("translated_text"),
+  sourceLanguage: varchar("source_language", { length: 10 }).notNull(),
+  targetLanguage: varchar("target_language", { length: 10 }),
+  outputFormat: varchar("output_format", { length: 50 }).notNull(),
+  outputType: varchar("output_type", { length: 50 }),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 type User = typeof users.$inferSelect;
+type SavedText = typeof savedTexts.$inferSelect;
 
 // ============ DATABASE CONNECTION ============
 const sql = neon(process.env.DATABASE_URL!);
@@ -439,6 +454,81 @@ app.get("/api/auth/me", (req, res) => {
     });
   } else {
     res.status(401).json({ error: "Not authenticated" });
+  }
+});
+
+// ============ SAVED TEXTS ENDPOINTS ============
+app.post("/api/saved-texts", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const { type, originalText, polishedText, translatedText, sourceLanguage, targetLanguage, outputFormat, outputType } = req.body;
+
+    if (!type || !originalText || !polishedText || !sourceLanguage || !outputFormat) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
+    const result = await db.insert(savedTexts).values({
+      userId,
+      type,
+      originalText,
+      polishedText,
+      translatedText: translatedText || null,
+      sourceLanguage,
+      targetLanguage: targetLanguage || null,
+      outputFormat,
+      outputType: outputType || null,
+    }).returning();
+
+    res.json(result[0]);
+  } catch (error: any) {
+    console.error("Save text error:", error);
+    res.status(500).json({ error: "Failed to save text" });
+  }
+});
+
+app.get("/api/saved-texts/:type", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const { type } = req.params;
+    const result = await db.select().from(savedTexts)
+      .where(and(eq(savedTexts.userId, userId), eq(savedTexts.type, type)))
+      .orderBy(desc(savedTexts.createdAt));
+
+    res.json(result);
+  } catch (error: any) {
+    console.error("Get saved text error:", error);
+    res.status(500).json({ error: "Failed to get saved text" });
+  }
+});
+
+app.delete("/api/saved-texts/:id", async (req, res) => {
+  try {
+    const userId = (req.session as any).userId;
+    if (!userId) {
+      return res.status(401).json({ error: "Not authenticated" });
+    }
+
+    const { id } = req.params;
+    const result = await db.select().from(savedTexts)
+      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)));
+
+    if (result.length === 0) {
+      return res.status(404).json({ error: "Saved text not found" });
+    }
+
+    await db.delete(savedTexts).where(eq(savedTexts.id, id));
+    res.json({ message: "Deleted successfully" });
+  } catch (error: any) {
+    console.error("Delete saved text error:", error);
+    res.status(500).json({ error: "Failed to delete saved text" });
   }
 });
 
