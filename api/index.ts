@@ -370,6 +370,105 @@ app.post("/api/translate-speech", upload.single("audio"), async (req, res) => {
   }
 });
 
+// Base64 endpoints for mobile app
+const base64PolishSchema = z.object({
+  audio: z.string(),
+  language: z.string(),
+  outputFormat: z.string().default("professional"),
+  outputType: z.string().default("message"),
+  mimeType: z.string().default("audio/m4a"),
+});
+
+const base64TranslateSchema = z.object({
+  audio: z.string(),
+  sourceLanguage: z.string(),
+  targetLanguage: z.string(),
+  outputFormat: z.string().default("professional"),
+  mimeType: z.string().default("audio/m4a"),
+});
+
+app.post("/api/polish-speech-base64", async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "Gemini API key not configured." });
+    }
+
+    const parseResult = base64PolishSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: "Invalid request", details: parseResult.error.errors });
+    }
+
+    const { audio, language, outputFormat, outputType, mimeType } = parseResult.data;
+
+    const audioBuffer = Buffer.from(audio, "base64");
+    const originalText = await transcribeAudio(audioBuffer, mimeType);
+    if (!originalText || originalText.trim() === "") {
+      return res.status(400).json({ error: "Could not transcribe audio." });
+    }
+
+    const polishedText = await polishText(originalText, language, outputFormat, outputType);
+
+    const id = randomUUID();
+    const translation = {
+      id,
+      originalText,
+      translatedText: originalText,
+      polishedText,
+      sourceLanguage: language,
+      targetLanguage: language,
+      outputFormat,
+      createdAt: new Date(),
+    };
+    translations.set(id, translation);
+
+    res.json(translation);
+  } catch (error: any) {
+    console.error("Polish base64 error:", error);
+    res.status(500).json({ error: error.message || "Failed to process speech polishing" });
+  }
+});
+
+app.post("/api/translate-speech-base64", async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ error: "Gemini API key not configured." });
+    }
+
+    const parseResult = base64TranslateSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ error: "Invalid request", details: parseResult.error.errors });
+    }
+
+    const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType } = parseResult.data;
+
+    const audioBuffer = Buffer.from(audio, "base64");
+    const originalText = await transcribeAudio(audioBuffer, mimeType);
+    if (!originalText || originalText.trim() === "") {
+      return res.status(400).json({ error: "Could not transcribe audio." });
+    }
+
+    const { translatedText, polishedText } = await translateAndPolish(originalText, sourceLanguage, targetLanguage, outputFormat);
+
+    const id = randomUUID();
+    const translation = {
+      id,
+      originalText,
+      translatedText,
+      polishedText,
+      sourceLanguage,
+      targetLanguage,
+      outputFormat,
+      createdAt: new Date(),
+    };
+    translations.set(id, translation);
+
+    res.json(translation);
+  } catch (error: any) {
+    console.error("Translation base64 error:", error);
+    res.status(500).json({ error: error.message || "Failed to process translation" });
+  }
+});
+
 app.get("/api/translations", async (req, res) => {
   try {
     const limit = parseInt(req.query.limit as string) || 10;
