@@ -211,6 +211,121 @@ export async function registerRoutes(
     }
   });
 
+  // Polish speech base64 endpoint - accepts base64 audio for mobile apps
+  app.post("/api/polish-speech-base64", async (req, res) => {
+    try {
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+        });
+      }
+
+      const base64Schema = z.object({
+        audio: z.string().min(1, "Audio data is required"),
+        language: z.string(),
+        outputFormat: z.string(),
+        outputType: z.string(),
+        mimeType: z.string().optional().default("audio/m4a"),
+      });
+
+      const parseResult = base64Schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { audio, language, outputFormat, outputType, mimeType } = parseResult.data;
+
+      const audioBuffer = Buffer.from(audio, 'base64');
+
+      const originalText = await transcribeAudio(audioBuffer, mimeType);
+
+      if (!originalText || originalText.trim() === "") {
+        return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
+      }
+
+      const polishedText = await polishText(originalText, language, outputFormat, outputType);
+
+      const translation = await storage.createTranslation({
+        originalText,
+        translatedText: originalText,
+        polishedText,
+        sourceLanguage: language,
+        targetLanguage: language,
+        outputFormat,
+      });
+
+      res.json(translation);
+    } catch (error: any) {
+      console.error("Polish base64 error:", error);
+      res.status(500).json({
+        error: error.message || "Failed to process speech polishing",
+      });
+    }
+  });
+
+  // Translate speech base64 endpoint - accepts base64 audio for mobile apps
+  app.post("/api/translate-speech-base64", async (req, res) => {
+    try {
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+        });
+      }
+
+      const base64Schema = z.object({
+        audio: z.string().min(1, "Audio data is required"),
+        sourceLanguage: z.string(),
+        targetLanguage: z.string(),
+        outputFormat: z.string(),
+        mimeType: z.string().optional().default("audio/m4a"),
+      });
+
+      const parseResult = base64Schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType } = parseResult.data;
+
+      const audioBuffer = Buffer.from(audio, 'base64');
+
+      const originalText = await transcribeAudio(audioBuffer, mimeType);
+
+      if (!originalText || originalText.trim() === "") {
+        return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
+      }
+
+      const { translatedText, polishedText } = await translateAndPolish(
+        originalText,
+        sourceLanguage,
+        targetLanguage,
+        outputFormat
+      );
+
+      const translation = await storage.createTranslation({
+        originalText,
+        translatedText,
+        polishedText,
+        sourceLanguage,
+        targetLanguage,
+        outputFormat,
+      });
+
+      res.json(translation);
+    } catch (error: any) {
+      console.error("Translate base64 error:", error);
+      res.status(500).json({
+        error: error.message || "Failed to process translation",
+      });
+    }
+  });
+
   // Polish text endpoint - accepts text and returns polished version (no audio)
   app.post("/api/polish-text", async (req, res) => {
     try {
