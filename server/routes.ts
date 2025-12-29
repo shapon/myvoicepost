@@ -617,20 +617,30 @@ export async function registerRoutes(
     }
   });
 
-  // Get single saved text
-  app.get("/api/saved-texts/:id", async (req, res) => {
+  // Get saved texts by type or single saved text by ID
+  app.get("/api/saved-texts/:param", async (req, res) => {
     try {
       const userId = (req.session as any).userId;
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
 
-      const savedText = await storage.getSavedText(req.params.id);
-      if (!savedText || savedText.userId !== userId) {
-        return res.status(404).json({ error: "Saved text not found" });
+      const { param } = req.params;
+      const validTypes = ['all', 'polish', 'translate'];
+      
+      if (validTypes.includes(param)) {
+        // It's a type filter
+        const filterType = param === 'all' ? undefined : param;
+        const savedTexts = await storage.getSavedTextsByUser(userId, filterType);
+        res.json(savedTexts);
+      } else {
+        // It's an ID
+        const savedText = await storage.getSavedText(param);
+        if (!savedText || savedText.userId !== userId) {
+          return res.status(404).json({ error: "Saved text not found" });
+        }
+        res.json(savedText);
       }
-
-      res.json(savedText);
     } catch (error: any) {
       console.error("Get saved text error:", error);
       res.status(500).json({ error: "Failed to get saved text" });
