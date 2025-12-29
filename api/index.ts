@@ -624,9 +624,17 @@ app.get("/api/saved-texts/:type", async (req, res) => {
     }
 
     const { type } = req.params;
-    const result = await db.select().from(savedTexts)
-      .where(and(eq(savedTexts.userId, payload.userId), eq(savedTexts.type, type)))
-      .orderBy(desc(savedTexts.createdAt));
+    let result;
+    
+    if (type === 'all') {
+      result = await db.select().from(savedTexts)
+        .where(eq(savedTexts.userId, payload.userId))
+        .orderBy(desc(savedTexts.createdAt));
+    } else {
+      result = await db.select().from(savedTexts)
+        .where(and(eq(savedTexts.userId, payload.userId), eq(savedTexts.type, type)))
+        .orderBy(desc(savedTexts.createdAt));
+    }
 
     res.json(result);
   } catch (error: any) {
