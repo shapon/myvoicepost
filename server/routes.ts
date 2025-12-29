@@ -600,12 +600,14 @@ export async function registerRoutes(
     }
   });
 
-  // Get saved texts for current user
+  // Get saved texts for current user (allows guest access - returns empty array)
   app.get("/api/saved-texts", async (req, res) => {
     try {
       const userId = (req.session as any).userId;
+      
+      // Allow guest access - return empty array for unauthenticated users
       if (!userId) {
-        return res.status(401).json({ error: "Not authenticated" });
+        return res.json([]);
       }
 
       const type = req.query.type as string | undefined;
@@ -617,12 +619,14 @@ export async function registerRoutes(
     }
   });
 
-  // Get saved texts by type or single saved text by ID
+  // Get saved texts by type or single saved text by ID (allows guest access - returns empty array)
   app.get("/api/saved-texts/:param", async (req, res) => {
     try {
       const userId = (req.session as any).userId;
+      
+      // Allow guest access - return empty array for unauthenticated users
       if (!userId) {
-        return res.status(401).json({ error: "Not authenticated" });
+        return res.json([]);
       }
 
       const { param } = req.params;

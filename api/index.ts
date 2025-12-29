@@ -628,8 +628,11 @@ app.post("/api/saved-texts", async (req, res) => {
 app.get("/api/saved-texts/:type", async (req, res) => {
   try {
     const payload = getUserFromRequest(req);
+    
+    // Allow guest access - return empty array for unauthenticated users
     if (!payload) {
-      return res.status(401).json({ error: "Not authenticated" });
+      console.log("[Auth] Guest access to saved-texts - returning empty array");
+      return res.json([]);
     }
 
     const { type } = req.params;
