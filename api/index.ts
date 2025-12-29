@@ -627,6 +627,11 @@ app.post("/api/saved-texts", async (req, res) => {
 
 app.get("/api/saved-texts/:type", async (req, res) => {
   try {
+    // Log all headers for debugging
+    console.log("[Debug] GET /api/saved-texts - All headers:", JSON.stringify(req.headers, null, 2));
+    console.log("[Debug] User-Agent:", req.headers['user-agent']);
+    console.log("[Debug] Authorization header raw:", req.headers.authorization);
+    
     const payload = getUserFromRequest(req);
     
     // Allow guest access - return empty array for unauthenticated users
