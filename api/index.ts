@@ -264,10 +264,23 @@ const translateRequestSchema = z.object({
 const app = express();
 
 app.use(cors({
-  origin: process.env.NODE_ENV === 'production' 
-    ? ['https://myvoicepost.com', 'https://www.myvoicepost.com', 'https://myvoicepost.vercel.app']
-    : true,
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, Postman, etc.)
+    if (!origin) {
+      console.log('[CORS] Allowing request with no origin (mobile app)');
+      return callback(null, true);
+    }
+    // Allow specific web origins
+    const allowedOrigins = ['https://myvoicepost.com', 'https://www.myvoicepost.com', 'https://myvoicepost.vercel.app'];
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      return callback(null, true);
+    }
+    console.log('[CORS] Blocked origin:', origin);
+    return callback(new Error('Not allowed by CORS'));
+  },
   credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'Cache-Control', 'Pragma'],
+  exposedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.use(express.json({ limit: '50mb' }));
