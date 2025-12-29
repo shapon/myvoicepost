@@ -68,16 +68,25 @@ function verifyToken(token: string): JwtPayload | null {
 
 function getTokenFromRequest(req: Request): string | null {
   const authHeader = req.headers.authorization;
+  console.log("[Auth] Authorization header present:", !!authHeader);
   if (authHeader && authHeader.startsWith("Bearer ")) {
-    return authHeader.substring(7);
+    const token = authHeader.substring(7);
+    console.log("[Auth] Token extracted, length:", token.length);
+    return token;
   }
+  console.log("[Auth] No valid Bearer token found");
   return null;
 }
 
 function getUserFromRequest(req: Request): JwtPayload | null {
   const token = getTokenFromRequest(req);
-  if (!token) return null;
-  return verifyToken(token);
+  if (!token) {
+    console.log("[Auth] No token in request");
+    return null;
+  }
+  const payload = verifyToken(token);
+  console.log("[Auth] Token verification result:", payload ? "valid" : "invalid");
+  return payload;
 }
 
 // ============ GEMINI AI SETUP ============
