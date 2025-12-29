@@ -627,10 +627,13 @@ app.post("/api/saved-texts", async (req, res) => {
 
 app.get("/api/saved-texts/:type", async (req, res) => {
   try {
+    // Disable caching for authenticated endpoints
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+    res.set('Pragma', 'no-cache');
+    res.set('Expires', '0');
+    
     // Log all headers for debugging
-    console.log("[Debug] GET /api/saved-texts - All headers:", JSON.stringify(req.headers, null, 2));
-    console.log("[Debug] User-Agent:", req.headers['user-agent']);
-    console.log("[Debug] Authorization header raw:", req.headers.authorization);
+    console.log("[Debug] GET /api/saved-texts - Authorization:", req.headers.authorization ? 'present' : 'missing');
     
     const payload = getUserFromRequest(req);
     
