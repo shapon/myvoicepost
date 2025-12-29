@@ -562,6 +562,7 @@ app.post("/api/auth/login", async (req, res) => {
     }
 
     const token = generateToken({ userId: user.id, username: user.username });
+    console.log("[Login] Login successful for:", username, "| Token generated, length:", token.length);
 
     res.json({
       message: "Login successful",
