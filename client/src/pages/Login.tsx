@@ -22,7 +22,7 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      await login(username, password);
+      await login(username.toLowerCase().trim(), password);
       toast({
         title: "Welcome back!",
         description: "You've successfully logged in.",

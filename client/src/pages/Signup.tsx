@@ -43,7 +43,7 @@ export default function Signup() {
     setIsLoading(true);
 
     try {
-      await signup(username, email, password, confirmPassword);
+      await signup(username.toLowerCase().trim(), email.toLowerCase().trim(), password, confirmPassword);
       toast({
         title: "Account created!",
         description: "Welcome to MyVoicePost.",
