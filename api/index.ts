@@ -648,6 +648,7 @@ app.get("/api/saved-texts/:type", async (req, res) => {
     
     // Log all headers for debugging
     console.log("[Debug] GET /api/saved-texts - Authorization:", req.headers.authorization ? 'present' : 'missing');
+    console.log("[Debug] All headers:", JSON.stringify(req.headers));
     
     const payload = getUserFromRequest(req);
     
