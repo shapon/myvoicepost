@@ -239,8 +239,10 @@ export async function registerRoutes(
       const { audio, language, outputFormat, outputType, mimeType } = parseResult.data;
 
       const audioBuffer = Buffer.from(audio, 'base64');
+      console.log(`[Polish-Base64] Audio buffer size: ${audioBuffer.length} bytes, mimeType: ${mimeType}`);
 
       const originalText = await transcribeAudio(audioBuffer, mimeType);
+      console.log(`[Polish-Base64] Transcribed text (${originalText.length} chars): ${originalText.substring(0, 200)}...`);
 
       if (!originalText || originalText.trim() === "") {
         return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
@@ -294,8 +296,10 @@ export async function registerRoutes(
       const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType } = parseResult.data;
 
       const audioBuffer = Buffer.from(audio, 'base64');
+      console.log(`[Translate-Base64] Audio buffer size: ${audioBuffer.length} bytes, mimeType: ${mimeType}`);
 
       const originalText = await transcribeAudio(audioBuffer, mimeType);
+      console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): ${originalText.substring(0, 200)}...`);
 
       if (!originalText || originalText.trim() === "") {
         return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });

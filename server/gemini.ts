@@ -113,6 +113,8 @@ function safeJsonParse(text: string, fallback: any = {}): any {
 
 // Transcribe audio using Gemini with retry logic
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
+  console.log(`[Gemini] Transcribing audio: ${audioBuffer.length} bytes, mimeType: ${mimeType}`);
+  
   return pRetry(
     async () => {
       try {
@@ -121,19 +123,22 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
           contents: [{
             role: "user",
             parts: [
-              { text: "Please transcribe this audio accurately. Return only the transcribed text, nothing else." },
               { 
                 inlineData: { 
                   mimeType, 
                   data: audioBuffer.toString("base64") 
                 } 
-              }
+              },
+              { text: "Listen to the ENTIRE audio recording from start to finish and transcribe EVERY word spoken. Do not skip or truncate any part. Return the complete transcription as plain text only, with no additional commentary or formatting." }
             ]
           }]
         });
         
-        return response.text || "";
+        const transcription = response.text || "";
+        console.log(`[Gemini] Transcription result (${transcription.length} chars): ${transcription}`);
+        return transcription;
       } catch (error: any) {
+        console.error(`[Gemini] Transcription error:`, error);
         if (isRateLimitError(error)) {
           throw error; // Rethrow to trigger p-retry
         }
