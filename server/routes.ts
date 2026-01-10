@@ -1,10 +1,67 @@
-import type { Express, Request, Response } from "express";
+import type { Express, Request, Response, NextFunction } from "express";
 import { createServer, type Server } from "http";
 import { supabaseStorage } from "./supabase-storage";
 import { translateRequestSchema, polishRequestSchema, insertUserSchema, insertSavedTextSchema } from "@shared/schema";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
 import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
+import jwt from "jsonwebtoken";
+
+// JWT configuration - JWT_SECRET is required for security
+const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET;
+if (!JWT_SECRET) {
+  console.error("FATAL: JWT_SECRET or SESSION_SECRET environment variable must be set");
+  process.exit(1);
+}
+const JWT_EXPIRES_IN = "7d";
+
+// Extend Express Request to include user from JWT
+declare global {
+  namespace Express {
+    interface Request {
+      jwtUser?: {
+        userId: string;
+        username: string;
+      };
+    }
+  }
+}
+
+// JWT middleware - extracts user from Bearer token
+function jwtAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  
+  if (authHeader && authHeader.startsWith("Bearer ")) {
+    const token = authHeader.substring(7);
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; username: string };
+      req.jwtUser = decoded;
+    } catch (err) {
+      // Token invalid or expired - continue without user
+      console.log("[JWT] Token verification failed:", (err as Error).message);
+    }
+  }
+  
+  next();
+}
+
+// Helper to get userId from JWT or session (prefers JWT)
+function getUserId(req: Request): string | null {
+  // First check JWT token
+  if (req.jwtUser?.userId) {
+    return req.jwtUser.userId;
+  }
+  // Fallback to session for web compatibility
+  if ((req.session as any)?.userId) {
+    return (req.session as any).userId;
+  }
+  return null;
+}
+
+// Helper to generate JWT token
+function generateToken(userId: string, username: string): string {
+  return jwt.sign({ userId, username }, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
+}
 
 // Use supabase storage for database operations
 const storage = supabaseStorage;
@@ -46,6 +103,9 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express
 ): Promise<Server> {
+  // Apply JWT middleware to all API routes
+  app.use("/api", jwtAuthMiddleware);
+
   // Health check endpoint
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
@@ -496,13 +556,17 @@ export async function registerRoutes(
       // Create new user
       const user = await storage.createUser({ username, email, password });
 
-      // Set session
+      // Generate JWT token
+      const token = generateToken(user.id, user.username);
+
+      // Also set session for web compatibility
       (req.session as any).userId = user.id;
       (req.session as any).username = user.username;
 
       res.status(201).json({
         message: "Account created successfully",
-        user: { id: user.id, username: user.username },
+        token,
+        user: { id: user.id, username: user.username, email: user.email },
       });
     } catch (error: any) {
       console.error("Signup error:", error);
@@ -535,13 +599,17 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Invalid username or password" });
       }
 
-      // Set session
+      // Generate JWT token
+      const token = generateToken(user.id, user.username);
+
+      // Also set session for web compatibility
       (req.session as any).userId = user.id;
       (req.session as any).username = user.username;
 
       res.json({
         message: "Login successful",
-        user: { id: user.id, username: user.username },
+        token,
+        user: { id: user.id, username: user.username, email: user.email },
       });
     } catch (error: any) {
       console.error("Login error:", error);
@@ -562,14 +630,29 @@ export async function registerRoutes(
   });
 
   // Get current user endpoint
-  app.get("/api/auth/me", (req, res) => {
-    if ((req.session as any).userId) {
-      res.json({
-        user: {
-          id: (req.session as any).userId,
-          username: (req.session as any).username,
-        },
-      });
+  app.get("/api/auth/me", async (req, res) => {
+    const userId = getUserId(req);
+    
+    if (userId) {
+      // If we have JWT user info, use it directly
+      if (req.jwtUser) {
+        res.json({
+          user: {
+            id: req.jwtUser.userId,
+            username: req.jwtUser.username,
+          },
+        });
+      } else if ((req.session as any).userId) {
+        // Fallback to session
+        res.json({
+          user: {
+            id: (req.session as any).userId,
+            username: (req.session as any).username,
+          },
+        });
+      } else {
+        res.status(401).json({ error: "Not authenticated" });
+      }
     } else {
       res.status(401).json({ error: "Not authenticated" });
     }
@@ -578,7 +661,7 @@ export async function registerRoutes(
   // Save text endpoint (requires authentication)
   app.post("/api/saved-texts", async (req, res) => {
     try {
-      const userId = (req.session as any).userId;
+      const userId = getUserId(req);
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
@@ -607,7 +690,7 @@ export async function registerRoutes(
   // Get saved texts for current user (allows guest access - returns empty array)
   app.get("/api/saved-texts", async (req, res) => {
     try {
-      const userId = (req.session as any).userId;
+      const userId = getUserId(req);
       
       // Allow guest access - return empty array for unauthenticated users
       if (!userId) {
@@ -626,7 +709,7 @@ export async function registerRoutes(
   // Get saved texts by type or single saved text by ID (allows guest access - returns empty array)
   app.get("/api/saved-texts/:param", async (req, res) => {
     try {
-      const userId = (req.session as any).userId;
+      const userId = getUserId(req);
       
       // Allow guest access - return empty array for unauthenticated users
       if (!userId) {
@@ -658,7 +741,7 @@ export async function registerRoutes(
   // Update saved text
   app.put("/api/saved-texts/:id", async (req, res) => {
     try {
-      const userId = (req.session as any).userId;
+      const userId = getUserId(req);
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
@@ -691,7 +774,7 @@ export async function registerRoutes(
   // Delete saved text
   app.delete("/api/saved-texts/:id", async (req, res) => {
     try {
-      const userId = (req.session as any).userId;
+      const userId = getUserId(req);
       if (!userId) {
         return res.status(401).json({ error: "Not authenticated" });
       }
