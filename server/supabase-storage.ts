@@ -92,25 +92,6 @@ export class SupabaseStorage implements IStorage {
       .returning();
     return result.length > 0;
   }
-
-  async updateSavedText(id: string, userId: string, updates: Partial<InsertSavedText>): Promise<SavedText | undefined> {
-    // First verify the user owns this record
-    const existing = await this.getSavedText(id);
-    if (!existing || existing.userId !== userId) {
-      return undefined;
-    }
-
-    // Update the record
-    const result = await db.update(savedTexts)
-      .set({
-        ...updates,
-        updatedAt: new Date(),
-      })
-      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)))
-      .returning();
-    
-    return result[0];
-  }
 }
 
 export const supabaseStorage = new SupabaseStorage();

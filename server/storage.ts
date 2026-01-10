@@ -25,6 +25,7 @@ export interface IStorage {
   getSavedTextsByUser(userId: string, type?: string): Promise<SavedText[]>;
   getSavedText(id: string): Promise<SavedText | undefined>;
   deleteSavedText(id: string, userId: string): Promise<boolean>;
+  updateSavedText(id: string, userId: string, data: Partial<Omit<SavedText, 'id' | 'userId' | 'createdAt'>>): Promise<SavedText | null>;
 }
 
 export class MemStorage implements IStorage {
@@ -126,6 +127,28 @@ export class MemStorage implements IStorage {
       return true;
     }
     return false;
+  }
+
+  async updateSavedText(id: string, userId: string, data: Partial<Omit<SavedText, 'id' | 'userId' | 'createdAt'>>): Promise<SavedText | null> {
+    const text = this.savedTexts.get(id);
+    if (!text || text.userId !== userId) {
+      return null;
+    }
+    
+    const updated: SavedText = {
+      ...text,
+      type: data.type ?? text.type,
+      originalText: data.originalText ?? text.originalText,
+      polishedText: data.polishedText ?? text.polishedText,
+      translatedText: data.translatedText !== undefined ? data.translatedText : text.translatedText,
+      sourceLanguage: data.sourceLanguage ?? text.sourceLanguage,
+      targetLanguage: data.targetLanguage !== undefined ? data.targetLanguage : text.targetLanguage,
+      outputFormat: data.outputFormat ?? text.outputFormat,
+      outputType: data.outputType !== undefined ? data.outputType : text.outputType,
+    };
+    
+    this.savedTexts.set(id, updated);
+    return updated;
   }
 }
 
