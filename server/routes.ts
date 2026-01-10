@@ -675,5 +675,43 @@ export async function registerRoutes(
     }
   });
 
+  // Update saved text
+  app.put("/api/saved-texts/:id", async (req, res) => {
+    try {
+      const userId = (req.session as any).userId;
+      if (!userId) {
+        return res.status(401).json({ error: "Not authenticated" });
+      }
+
+      const { id } = req.params;
+      
+      // Validate the update data
+      const updateData = {
+        type: req.body.type,
+        originalText: req.body.originalText,
+        polishedText: req.body.polishedText,
+        translatedText: req.body.translatedText,
+        sourceLanguage: req.body.sourceLanguage,
+        targetLanguage: req.body.targetLanguage,
+        outputFormat: req.body.outputFormat,
+        outputType: req.body.outputType,
+      };
+
+      // Update the saved text
+      const updatedText = await storage.updateSavedText(id, userId, updateData);
+      
+      if (!updatedText) {
+        return res.status(404).json({ error: "Saved text not found or you do not have permission to edit it" });
+      }
+
+      res.json(updatedText);
+    } catch (error: any) {
+      console.error("Update saved text error:", error);
+      res.status(500).json({ error: "Failed to update saved text" });
+    }
+  });
+
+  });
+
   return httpServer;
 }
