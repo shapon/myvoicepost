@@ -115,12 +115,14 @@ function safeJsonParse(text: string, fallback: any = {}): any {
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
   // Generate unique transcription request ID
   const transcriptionId = `trans_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const timestamp = new Date().toISOString();
   
   // Generate audio fingerprint for debugging
   const bufferHash = audioBuffer.slice(0, 20).toString('hex') + '...' + audioBuffer.slice(-20).toString('hex');
   const base64Preview = audioBuffer.toString('base64').substring(0, 50);
   
   console.log(`[Gemini] ========== TRANSCRIPTION ${transcriptionId} ==========`);
+  console.log(`[Gemini] Timestamp: ${timestamp}`);
   console.log(`[Gemini] Audio size: ${audioBuffer.length} bytes`);
   console.log(`[Gemini] MIME type: ${mimeType}`);
   console.log(`[Gemini] Buffer fingerprint: ${bufferHash}`);
@@ -132,6 +134,19 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
         const base64Data = audioBuffer.toString("base64");
         console.log(`[Gemini] ${transcriptionId} - Sending to Gemini API, base64 length: ${base64Data.length}`);
         
+        // Use a unique prompt with timestamp to prevent any caching
+        const uniquePrompt = `[Request ID: ${transcriptionId}] [Timestamp: ${timestamp}]
+
+CRITICAL INSTRUCTIONS FOR AUDIO TRANSCRIPTION:
+1. This is a voice recording that needs to be transcribed word-for-word
+2. Listen to the ACTUAL audio content in the attached file
+3. Do NOT generate, fabricate, or hallucinate any text
+4. Do NOT use any cached or previous transcription results
+5. Transcribe ONLY what you hear in THIS specific audio file
+6. If the audio is unclear or empty, respond with "[AUDIO_UNCLEAR]" or "[AUDIO_EMPTY]"
+
+Return ONLY the exact transcription of the spoken words, with no additional commentary, formatting, or explanations.`;
+
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: [{
@@ -143,7 +158,7 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
                   data: base64Data 
                 } 
               },
-              { text: "Listen to the ENTIRE audio recording from start to finish and transcribe EVERY word spoken. Do not skip or truncate any part. Return the complete transcription as plain text only, with no additional commentary or formatting." }
+              { text: uniquePrompt }
             ]
           }]
         });
@@ -152,6 +167,13 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
         console.log(`[Gemini] ${transcriptionId} - Transcription completed`);
         console.log(`[Gemini] ${transcriptionId} - Result (${transcription.length} chars): "${transcription}"`);
         console.log(`[Gemini] ========== END ${transcriptionId} ==========`);
+        
+        // Check for error responses
+        if (transcription.includes("[AUDIO_UNCLEAR]") || transcription.includes("[AUDIO_EMPTY]")) {
+          console.log(`[Gemini] ${transcriptionId} - Audio was unclear or empty`);
+          return "";
+        }
+        
         return transcription;
       } catch (error: any) {
         console.error(`[Gemini] ${transcriptionId} - ERROR:`, error);
