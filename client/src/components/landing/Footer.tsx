@@ -1,3 +1,4 @@
+import { Link } from "wouter";
 import { Mic } from "lucide-react";
 import { SiX, SiDiscord, SiInstagram } from "react-icons/si";
 
@@ -9,7 +10,7 @@ const footerLinks = {
     { label: "Support", href: "#" },
   ],
   legal: [
-    { label: "Privacy Policy", href: "#" },
+    { label: "Privacy Policy", href: "/privacy-policy", isRoute: true },
     { label: "Terms of Service", href: "#" },
     { label: "Cookie Preferences", href: "#" },
     { label: "Affiliate Program", href: "#" },
@@ -79,12 +80,22 @@ export default function Footer() {
             <ul className="space-y-3">
               {footerLinks.legal.map((link) => (
                 <li key={link.label}>
-                  <a
-                    href={link.href}
-                    className="text-muted-foreground hover:text-foreground transition-colors"
-                  >
-                    {link.label}
-                  </a>
+                  {link.isRoute ? (
+                    <Link
+                      href={link.href}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      data-testid={`link-${link.label.toLowerCase().replace(/\s+/g, '-')}`}
+                    >
+                      {link.label}
+                    </Link>
+                  ) : (
+                    <a
+                      href={link.href}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                    >
+                      {link.label}
+                    </a>
+                  )}
                 </li>
               ))}
             </ul>

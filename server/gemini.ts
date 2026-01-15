@@ -113,11 +113,25 @@ function safeJsonParse(text: string, fallback: any = {}): any {
 
 // Transcribe audio using Gemini with retry logic
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
-  console.log(`[Gemini] Transcribing audio: ${audioBuffer.length} bytes, mimeType: ${mimeType}`);
+  // Generate unique transcription request ID
+  const transcriptionId = `trans_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  
+  // Generate audio fingerprint for debugging
+  const bufferHash = audioBuffer.slice(0, 20).toString('hex') + '...' + audioBuffer.slice(-20).toString('hex');
+  const base64Preview = audioBuffer.toString('base64').substring(0, 50);
+  
+  console.log(`[Gemini] ========== TRANSCRIPTION ${transcriptionId} ==========`);
+  console.log(`[Gemini] Audio size: ${audioBuffer.length} bytes`);
+  console.log(`[Gemini] MIME type: ${mimeType}`);
+  console.log(`[Gemini] Buffer fingerprint: ${bufferHash}`);
+  console.log(`[Gemini] Base64 preview: ${base64Preview}...`);
   
   return pRetry(
     async () => {
       try {
+        const base64Data = audioBuffer.toString("base64");
+        console.log(`[Gemini] ${transcriptionId} - Sending to Gemini API, base64 length: ${base64Data.length}`);
+        
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: [{
@@ -126,7 +140,7 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
               { 
                 inlineData: { 
                   mimeType, 
-                  data: audioBuffer.toString("base64") 
+                  data: base64Data 
                 } 
               },
               { text: "Listen to the ENTIRE audio recording from start to finish and transcribe EVERY word spoken. Do not skip or truncate any part. Return the complete transcription as plain text only, with no additional commentary or formatting." }
@@ -135,10 +149,12 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
         });
         
         const transcription = response.text || "";
-        console.log(`[Gemini] Transcription result (${transcription.length} chars): ${transcription}`);
+        console.log(`[Gemini] ${transcriptionId} - Transcription completed`);
+        console.log(`[Gemini] ${transcriptionId} - Result (${transcription.length} chars): "${transcription}"`);
+        console.log(`[Gemini] ========== END ${transcriptionId} ==========`);
         return transcription;
       } catch (error: any) {
-        console.error(`[Gemini] Transcription error:`, error);
+        console.error(`[Gemini] ${transcriptionId} - ERROR:`, error);
         if (isRateLimitError(error)) {
           throw error; // Rethrow to trigger p-retry
         }

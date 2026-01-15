@@ -273,10 +273,19 @@ export async function registerRoutes(
 
   // Polish speech base64 endpoint - accepts base64 audio for mobile apps
   app.post("/api/polish-speech-base64", async (req, res) => {
+    // Generate unique server request ID for tracking
+    const serverRequestId = `srv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const requestTimestamp = new Date().toISOString();
+    
     try {
+      console.log(`\n========== [Polish-Base64] NEW REQUEST ==========`);
+      console.log(`[Polish-Base64] Server Request ID: ${serverRequestId}`);
+      console.log(`[Polish-Base64] Timestamp: ${requestTimestamp}`);
+      
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
           error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+          serverRequestId,
         });
       }
 
@@ -286,6 +295,7 @@ export async function registerRoutes(
         outputFormat: z.string(),
         outputType: z.string(),
         mimeType: z.string().optional().default("audio/m4a"),
+        clientRequestId: z.string().optional(), // Track client request ID if provided
       });
 
       const parseResult = base64Schema.safeParse(req.body);
@@ -293,22 +303,59 @@ export async function registerRoutes(
         return res.status(400).json({
           error: "Invalid request",
           details: parseResult.error.errors,
+          serverRequestId,
         });
       }
 
-      const { audio, language, outputFormat, outputType, mimeType } = parseResult.data;
+      const { audio, language, outputFormat, outputType, mimeType, clientRequestId } = parseResult.data;
 
-      const audioBuffer = Buffer.from(audio, 'base64');
-      console.log(`[Polish-Base64] Audio buffer size: ${audioBuffer.length} bytes, mimeType: ${mimeType}`);
-
-      const originalText = await transcribeAudio(audioBuffer, mimeType);
-      console.log(`[Polish-Base64] Transcribed text (${originalText.length} chars): ${originalText.substring(0, 200)}...`);
-
-      if (!originalText || originalText.trim() === "") {
-        return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
+      // Log client request ID if provided
+      if (clientRequestId) {
+        console.log(`[Polish-Base64] Client Request ID: ${clientRequestId}`);
       }
 
+      const audioBuffer = Buffer.from(audio, 'base64');
+      
+      // Generate audio fingerprint for verification
+      const audioFirst100 = audio.substring(0, 100);
+      const audioLast50 = audio.substring(audio.length - 50);
+      const audioHash = `${audioFirst100}...${audioLast50}`;
+      
+      console.log(`[Polish-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
+      console.log(`[Polish-Base64] Audio fingerprint start: ${audioFirst100}`);
+      console.log(`[Polish-Base64] Audio fingerprint end: ${audioLast50}`);
+      console.log(`[Polish-Base64] MIME type: ${mimeType}`);
+      console.log(`[Polish-Base64] Language: ${language}, Format: ${outputFormat}, Type: ${outputType}`);
+      
+      // Verify audio buffer integrity
+      const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
+      const bufferLast20 = audioBuffer.slice(-20).toString('hex');
+      console.log(`[Polish-Base64] Buffer HEX start: ${bufferFirst20}`);
+      console.log(`[Polish-Base64] Buffer HEX end: ${bufferLast20}`);
+
+      console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
+      const transcribeStart = Date.now();
+      const originalText = await transcribeAudio(audioBuffer, mimeType);
+      const transcribeTime = Date.now() - transcribeStart;
+      
+      console.log(`[Polish-Base64] Transcription completed in ${transcribeTime}ms`);
+      console.log(`[Polish-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
+
+      if (!originalText || originalText.trim() === "") {
+        console.log(`[Polish-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+        return res.status(400).json({ 
+          error: "Could not transcribe audio. Please try speaking more clearly.",
+          serverRequestId,
+        });
+      }
+
+      console.log(`[Polish-Base64] Calling polishText...`);
+      const polishStart = Date.now();
       const polishedText = await polishText(originalText, language, outputFormat, outputType);
+      const polishTime = Date.now() - polishStart;
+      
+      console.log(`[Polish-Base64] Polish completed in ${polishTime}ms`);
+      console.log(`[Polish-Base64] Polished text (${polishedText.length} chars): "${polishedText.substring(0, 200)}..."`);
 
       const translation = await storage.createTranslation({
         originalText,
@@ -319,21 +366,38 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      res.json(translation);
+      console.log(`[Polish-Base64] Request ${serverRequestId} completed successfully`);
+      console.log(`========== [Polish-Base64] END REQUEST ==========\n`);
+
+      res.json({
+        ...translation,
+        serverRequestId, // Include for debugging
+      });
     } catch (error: any) {
-      console.error("Polish base64 error:", error);
+      console.error(`[Polish-Base64] ERROR for request ${serverRequestId}:`, error);
+      console.log(`========== [Polish-Base64] END REQUEST (ERROR) ==========\n`);
       res.status(500).json({
         error: error.message || "Failed to process speech polishing",
+        serverRequestId,
       });
     }
   });
 
   // Translate speech base64 endpoint - accepts base64 audio for mobile apps
   app.post("/api/translate-speech-base64", async (req, res) => {
+    // Generate unique server request ID for tracking
+    const serverRequestId = `srv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+    const requestTimestamp = new Date().toISOString();
+    
     try {
+      console.log(`\n========== [Translate-Base64] NEW REQUEST ==========`);
+      console.log(`[Translate-Base64] Server Request ID: ${serverRequestId}`);
+      console.log(`[Translate-Base64] Timestamp: ${requestTimestamp}`);
+      
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
           error: "Gemini AI integration not configured. Please ensure the integration is set up correctly.",
+          serverRequestId,
         });
       }
 
@@ -343,6 +407,7 @@ export async function registerRoutes(
         targetLanguage: z.string(),
         outputFormat: z.string(),
         mimeType: z.string().optional().default("audio/m4a"),
+        clientRequestId: z.string().optional(), // Track client request ID if provided
       });
 
       const parseResult = base64Schema.safeParse(req.body);
@@ -350,27 +415,63 @@ export async function registerRoutes(
         return res.status(400).json({
           error: "Invalid request",
           details: parseResult.error.errors,
+          serverRequestId,
         });
       }
 
-      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType } = parseResult.data;
+      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType, clientRequestId } = parseResult.data;
 
-      const audioBuffer = Buffer.from(audio, 'base64');
-      console.log(`[Translate-Base64] Audio buffer size: ${audioBuffer.length} bytes, mimeType: ${mimeType}`);
-
-      const originalText = await transcribeAudio(audioBuffer, mimeType);
-      console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): ${originalText.substring(0, 200)}...`);
-
-      if (!originalText || originalText.trim() === "") {
-        return res.status(400).json({ error: "Could not transcribe audio. Please try speaking more clearly." });
+      // Log client request ID if provided
+      if (clientRequestId) {
+        console.log(`[Translate-Base64] Client Request ID: ${clientRequestId}`);
       }
 
+      const audioBuffer = Buffer.from(audio, 'base64');
+      
+      // Generate audio fingerprint for verification
+      const audioFirst100 = audio.substring(0, 100);
+      const audioLast50 = audio.substring(audio.length - 50);
+      
+      console.log(`[Translate-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
+      console.log(`[Translate-Base64] Audio fingerprint start: ${audioFirst100}`);
+      console.log(`[Translate-Base64] Audio fingerprint end: ${audioLast50}`);
+      console.log(`[Translate-Base64] MIME type: ${mimeType}`);
+      console.log(`[Translate-Base64] Source: ${sourceLanguage}, Target: ${targetLanguage}, Format: ${outputFormat}`);
+      
+      // Verify audio buffer integrity
+      const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
+      const bufferLast20 = audioBuffer.slice(-20).toString('hex');
+      console.log(`[Translate-Base64] Buffer HEX start: ${bufferFirst20}`);
+      console.log(`[Translate-Base64] Buffer HEX end: ${bufferLast20}`);
+
+      console.log(`[Translate-Base64] Calling Gemini transcribeAudio...`);
+      const transcribeStart = Date.now();
+      const originalText = await transcribeAudio(audioBuffer, mimeType);
+      const transcribeTime = Date.now() - transcribeStart;
+      
+      console.log(`[Translate-Base64] Transcription completed in ${transcribeTime}ms`);
+      console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
+
+      if (!originalText || originalText.trim() === "") {
+        console.log(`[Translate-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+        return res.status(400).json({ 
+          error: "Could not transcribe audio. Please try speaking more clearly.",
+          serverRequestId,
+        });
+      }
+
+      console.log(`[Translate-Base64] Calling translateAndPolish...`);
+      const translateStart = Date.now();
       const { translatedText, polishedText } = await translateAndPolish(
         originalText,
         sourceLanguage,
         targetLanguage,
         outputFormat
       );
+      const translateTime = Date.now() - translateStart;
+      
+      console.log(`[Translate-Base64] Translation completed in ${translateTime}ms`);
+      console.log(`[Translate-Base64] Translated text: "${translatedText.substring(0, 200)}..."`);
 
       const translation = await storage.createTranslation({
         originalText,
@@ -381,11 +482,19 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      res.json(translation);
+      console.log(`[Translate-Base64] Request ${serverRequestId} completed successfully`);
+      console.log(`========== [Translate-Base64] END REQUEST ==========\n`);
+
+      res.json({
+        ...translation,
+        serverRequestId, // Include for debugging
+      });
     } catch (error: any) {
-      console.error("Translate base64 error:", error);
+      console.error(`[Translate-Base64] ERROR for request ${serverRequestId}:`, error);
+      console.log(`========== [Translate-Base64] END REQUEST (ERROR) ==========\n`);
       res.status(500).json({
         error: error.message || "Failed to process translation",
+        serverRequestId,
       });
     }
   });
