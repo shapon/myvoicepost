@@ -153,6 +153,36 @@ function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
   return false;
 }
 
+// Validate M4A/AAC audio file header
+function validateAudioHeader(buffer: Buffer, mimeType: string): { valid: boolean; details: string } {
+  const hex = buffer.slice(0, 32).toString('hex');
+  
+  // M4A/MP4 files start with ftyp box
+  if (hex.includes('66747970')) { // 'ftyp' in hex
+    return { valid: true, details: 'Valid M4A/MP4 header (ftyp box found)' };
+  }
+  
+  // AAC files may start with ADTS sync word (0xFFF)
+  if (buffer[0] === 0xFF && (buffer[1] & 0xF0) === 0xF0) {
+    return { valid: true, details: 'Valid AAC ADTS header' };
+  }
+  
+  // WAV files start with RIFF
+  if (hex.startsWith('52494646')) { // 'RIFF' in hex
+    return { valid: true, details: 'Valid WAV header' };
+  }
+  
+  // MP3 files start with ID3 or sync word
+  if (hex.startsWith('494433') || buffer[0] === 0xFF) { // 'ID3' or sync
+    return { valid: true, details: 'Valid MP3 header' };
+  }
+  
+  return { 
+    valid: false, 
+    details: `Unknown format. First 32 bytes hex: ${hex}` 
+  };
+}
+
 // Transcribe audio using Gemini with retry logic
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
   // Generate unique transcription request ID
@@ -170,6 +200,15 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
   console.log(`[Gemini] Buffer fingerprint: ${bufferHash}`);
   console.log(`[Gemini] Base64 preview: ${base64Preview}...`);
   
+  // Validate audio file header
+  const headerCheck = validateAudioHeader(audioBuffer, mimeType);
+  console.log(`[Gemini] ${transcriptionId} - Header validation: ${headerCheck.details}`);
+  
+  if (!headerCheck.valid) {
+    console.log(`[Gemini] ${transcriptionId} - WARNING: Audio header validation failed!`);
+    // Continue anyway but log the warning
+  }
+  
   // Check for very small audio files (likely empty/corrupt)
   if (audioBuffer.length < 5000) {
     console.log(`[Gemini] ${transcriptionId} - Audio too small (${audioBuffer.length} bytes), likely empty`);
@@ -182,25 +221,25 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
         const base64Data = audioBuffer.toString("base64");
         console.log(`[Gemini] ${transcriptionId} - Sending to Gemini API, base64 length: ${base64Data.length}`);
         
-        // Enhanced prompt with stronger anti-hallucination instructions
-        const uniquePrompt = `[Request ID: ${transcriptionId}] [Timestamp: ${timestamp}]
+        // Simple, direct prompt for transcription
+        const uniquePrompt = `Transcribe the audio file attached to this message.
 
-CRITICAL AUDIO TRANSCRIPTION INSTRUCTIONS:
+Rules:
+- Return ONLY the exact words spoken in the audio
+- If silent or no speech: return [SILENT]
+- If unclear: return [UNCLEAR]  
+- Do not make up content or guess
 
-1. LISTEN CAREFULLY to the attached audio file
-2. Transcribe ONLY the actual spoken words you can clearly hear
-3. If you hear:
-   - Silence: Return exactly "[SILENCE]"
-   - Static/noise only: Return exactly "[NOISE]"
-   - Unclear/unintelligible speech: Return exactly "[UNCLEAR]"
-   - Very quiet or distant speech: Return exactly "[UNCLEAR]"
-4. Do NOT guess, infer, or make up content
-5. Do NOT return filler phrases like "It's just that there's that" for noise
-6. If less than 3 clear words are audible, return "[UNCLEAR]"
-7. Transcribe word-for-word with no additions or interpretations
+Transcription:`;
 
-Return ONLY the transcription or one of the markers above. No explanations.`;
-
+        // Use audio/* for better compatibility if m4a
+        let effectiveMimeType = mimeType;
+        if (mimeType === 'audio/m4a') {
+          effectiveMimeType = 'audio/mp4'; // M4A is MP4 audio container
+        }
+        
+        console.log(`[Gemini] ${transcriptionId} - Using MIME type: ${effectiveMimeType} (original: ${mimeType})`);
+        
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: [{
@@ -208,22 +247,25 @@ Return ONLY the transcription or one of the markers above. No explanations.`;
             parts: [
               { 
                 inlineData: { 
-                  mimeType, 
+                  mimeType: effectiveMimeType, 
                   data: base64Data 
                 } 
               },
               { text: uniquePrompt }
             ]
-          }]
+          }],
+          config: {
+            temperature: 0, // Use 0 temperature for deterministic output
+          }
         });
         
         let transcription = response.text?.trim() || "";
         console.log(`[Gemini] ${transcriptionId} - Raw result (${transcription.length} chars): "${transcription}"`);
         
         // Check for explicit error markers
-        const errorMarkers = ["[SILENCE]", "[NOISE]", "[UNCLEAR]", "[AUDIO_UNCLEAR]", "[AUDIO_EMPTY]"];
+        const errorMarkers = ["[SILENCE]", "[SILENT]", "[NOISE]", "[UNCLEAR]", "[AUDIO_UNCLEAR]", "[AUDIO_EMPTY]", "[NO AUDIO]", "[NO SPEECH]"];
         for (const marker of errorMarkers) {
-          if (transcription.includes(marker)) {
+          if (transcription.toUpperCase().includes(marker)) {
             console.log(`[Gemini] ${transcriptionId} - Audio issue detected: ${marker}`);
             return "";
           }

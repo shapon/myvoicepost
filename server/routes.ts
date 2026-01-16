@@ -8,7 +8,7 @@ import { z } from "zod";
 import jwt from "jsonwebtoken";
 
 // JWT configuration - JWT_SECRET is required for security
-const JWT_SECRET = process.env.JWT_SECRET || process.env.SESSION_SECRET;
+const JWT_SECRET: string = process.env.JWT_SECRET || process.env.SESSION_SECRET || '';
 if (!JWT_SECRET) {
   console.error("FATAL: JWT_SECRET or SESSION_SECRET environment variable must be set");
   process.exit(1);
@@ -34,7 +34,7 @@ function jwtAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   if (authHeader && authHeader.startsWith("Bearer ")) {
     const token = authHeader.substring(7);
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as { userId: string; username: string };
+      const decoded = jwt.verify(token, JWT_SECRET) as unknown as { userId: string; username: string };
       req.jwtUser = decoded;
     } catch (err) {
       // Token invalid or expired - continue without user
@@ -278,9 +278,12 @@ export async function registerRoutes(
     const requestTimestamp = new Date().toISOString();
     
     try {
-      console.log(`\n========== [Polish-Base64] NEW REQUEST ==========`);
+      console.log(`\n${'='.repeat(60)}`);
+      console.log(`[Polish-Base64] NEW REQUEST`);
+      console.log(`${'='.repeat(60)}`);
       console.log(`[Polish-Base64] Server Request ID: ${serverRequestId}`);
       console.log(`[Polish-Base64] Timestamp: ${requestTimestamp}`);
+      console.log(`[Polish-Base64] User Agent: ${req.headers['user-agent']}`);
       
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
@@ -296,10 +299,12 @@ export async function registerRoutes(
         outputType: z.string(),
         mimeType: z.string().optional().default("audio/m4a"),
         clientRequestId: z.string().optional(), // Track client request ID if provided
+        requestId: z.string().optional(), // Alternative name for client request ID
       });
 
       const parseResult = base64Schema.safeParse(req.body);
       if (!parseResult.success) {
+        console.log(`[Polish-Base64] Validation failed:`, parseResult.error.errors);
         return res.status(400).json({
           error: "Invalid request",
           details: parseResult.error.errors,
@@ -307,55 +312,79 @@ export async function registerRoutes(
         });
       }
 
-      const { audio, language, outputFormat, outputType, mimeType, clientRequestId } = parseResult.data;
+      const { audio, language, outputFormat, outputType, mimeType, clientRequestId, requestId } = parseResult.data;
 
       // Log client request ID if provided
-      if (clientRequestId) {
-        console.log(`[Polish-Base64] Client Request ID: ${clientRequestId}`);
+      const clientReqId = clientRequestId || requestId;
+      if (clientReqId) {
+        console.log(`[Polish-Base64] Client Request ID: ${clientReqId}`);
       }
 
       const audioBuffer = Buffer.from(audio, 'base64');
       
+      // Generate simple checksum for audio verification
+      let checksum = 0;
+      for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
+        checksum = (checksum + audioBuffer[i]) % 65536;
+      }
+      
       // Generate audio fingerprint for verification
       const audioFirst100 = audio.substring(0, 100);
       const audioLast50 = audio.substring(audio.length - 50);
-      const audioHash = `${audioFirst100}...${audioLast50}`;
       
-      console.log(`[Polish-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
-      console.log(`[Polish-Base64] Audio fingerprint start: ${audioFirst100}`);
-      console.log(`[Polish-Base64] Audio fingerprint end: ${audioLast50}`);
+      console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
+      console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
+      console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
+      console.log(`[Polish-Base64] Checksum (first 1000 bytes): ${checksum}`);
       console.log(`[Polish-Base64] MIME type: ${mimeType}`);
-      console.log(`[Polish-Base64] Language: ${language}, Format: ${outputFormat}, Type: ${outputType}`);
+      console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
+      console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
       
-      // Verify audio buffer integrity
-      const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
-      const bufferLast20 = audioBuffer.slice(-20).toString('hex');
-      console.log(`[Polish-Base64] Buffer HEX start: ${bufferFirst20}`);
-      console.log(`[Polish-Base64] Buffer HEX end: ${bufferLast20}`);
+      // Verify audio buffer integrity with hex dump
+      const bufferFirst32 = audioBuffer.slice(0, 32).toString('hex');
+      const bufferLast32 = audioBuffer.slice(-32).toString('hex');
+      console.log(`[Polish-Base64] HEX first 32 bytes: ${bufferFirst32}`);
+      console.log(`[Polish-Base64] HEX last 32 bytes: ${bufferLast32}`);
+      
+      // Check for M4A/MP4 signature (ftyp)
+      const hasFtyp = bufferFirst32.includes('66747970');
+      console.log(`[Polish-Base64] Has M4A/MP4 ftyp header: ${hasFtyp}`);
+      
+      console.log(`[Polish-Base64] ---- SETTINGS ----`);
+      console.log(`[Polish-Base64] Language: ${language}`);
+      console.log(`[Polish-Base64] Output Format: ${outputFormat}`);
+      console.log(`[Polish-Base64] Output Type: ${outputType}`);
 
+      console.log(`[Polish-Base64] ---- TRANSCRIPTION ----`);
       console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
       const transcribeStart = Date.now();
       const originalText = await transcribeAudio(audioBuffer, mimeType);
       const transcribeTime = Date.now() - transcribeStart;
       
-      console.log(`[Polish-Base64] Transcription completed in ${transcribeTime}ms`);
-      console.log(`[Polish-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
+      console.log(`[Polish-Base64] Transcription time: ${transcribeTime}ms`);
+      console.log(`[Polish-Base64] Transcribed length: ${originalText.length} chars`);
+      console.log(`[Polish-Base64] TRANSCRIBED TEXT: "${originalText}"`);
 
       if (!originalText || originalText.trim() === "") {
         console.log(`[Polish-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+        console.log(`${'='.repeat(60)}`);
+        console.log(`[Polish-Base64] END REQUEST (EMPTY TRANSCRIPTION)`);
+        console.log(`${'='.repeat(60)}\n`);
         return res.status(400).json({ 
           error: "Could not transcribe audio. Please try speaking more clearly.",
           serverRequestId,
         });
       }
 
+      console.log(`[Polish-Base64] ---- POLISHING ----`);
       console.log(`[Polish-Base64] Calling polishText...`);
       const polishStart = Date.now();
       const polishedText = await polishText(originalText, language, outputFormat, outputType);
       const polishTime = Date.now() - polishStart;
       
-      console.log(`[Polish-Base64] Polish completed in ${polishTime}ms`);
-      console.log(`[Polish-Base64] Polished text (${polishedText.length} chars): "${polishedText.substring(0, 200)}..."`);
+      console.log(`[Polish-Base64] Polish time: ${polishTime}ms`);
+      console.log(`[Polish-Base64] Polished length: ${polishedText.length} chars`);
+      console.log(`[Polish-Base64] POLISHED TEXT: "${polishedText}"`);
 
       const translation = await storage.createTranslation({
         originalText,
@@ -366,8 +395,12 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      console.log(`[Polish-Base64] Request ${serverRequestId} completed successfully`);
-      console.log(`========== [Polish-Base64] END REQUEST ==========\n`);
+      console.log(`[Polish-Base64] ---- RESULT ----`);
+      console.log(`[Polish-Base64] Saved to storage with ID: ${translation.id}`);
+      console.log(`[Polish-Base64] Total time: ${Date.now() - new Date(requestTimestamp).getTime()}ms`);
+      console.log(`${'='.repeat(60)}`);
+      console.log(`[Polish-Base64] END REQUEST (SUCCESS)`);
+      console.log(`${'='.repeat(60)}\n`);
 
       res.json({
         ...translation,
@@ -375,7 +408,9 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error(`[Polish-Base64] ERROR for request ${serverRequestId}:`, error);
-      console.log(`========== [Polish-Base64] END REQUEST (ERROR) ==========\n`);
+      console.log(`${'='.repeat(60)}`);
+      console.log(`[Polish-Base64] END REQUEST (ERROR)`);
+      console.log(`${'='.repeat(60)}\n`);
       res.status(500).json({
         error: error.message || "Failed to process speech polishing",
         serverRequestId,
