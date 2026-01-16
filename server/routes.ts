@@ -297,7 +297,7 @@ export async function registerRoutes(
         language: z.string(),
         outputFormat: z.string(),
         outputType: z.string(),
-        mimeType: z.string().optional().default("audio/mp4"),
+        mimeType: z.string().optional().default("audio/wav"),
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
         clientChecksum: z.number().optional(), // Checksum from client for verification
