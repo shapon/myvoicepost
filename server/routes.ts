@@ -297,9 +297,10 @@ export async function registerRoutes(
         language: z.string(),
         outputFormat: z.string(),
         outputType: z.string(),
-        mimeType: z.string().optional().default("audio/m4a"),
+        mimeType: z.string().optional().default("audio/mp4"),
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
+        clientChecksum: z.number().optional(), // Checksum from client for verification
       });
 
       const parseResult = base64Schema.safeParse(req.body);
@@ -312,7 +313,7 @@ export async function registerRoutes(
         });
       }
 
-      const { audio, language, outputFormat, outputType, mimeType, clientRequestId, requestId } = parseResult.data;
+      const { audio, language, outputFormat, outputType, mimeType, clientRequestId, requestId, clientChecksum } = parseResult.data;
 
       // Log client request ID if provided
       const clientReqId = clientRequestId || requestId;
@@ -322,11 +323,26 @@ export async function registerRoutes(
 
       const audioBuffer = Buffer.from(audio, 'base64');
       
-      // Generate simple checksum for audio verification
-      let checksum = 0;
-      for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
-        checksum = (checksum + audioBuffer[i]) % 65536;
+      // Generate checksum for audio verification (from base64, same as client)
+      let base64Checksum = 0;
+      const sample = audio.substring(0, Math.min(1000, audio.length));
+      for (let i = 0; i < sample.length; i++) {
+        base64Checksum = (base64Checksum + sample.charCodeAt(i)) % 65536;
       }
+      
+      // Also generate checksum from buffer for extra verification
+      let bufferChecksum = 0;
+      for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
+        bufferChecksum = (bufferChecksum + audioBuffer[i]) % 65536;
+      }
+      
+      // Verify checksum matches client
+      const checksumMatch = clientChecksum !== undefined ? (clientChecksum === base64Checksum) : 'N/A';
+      console.log(`[Polish-Base64] ---- CHECKSUM VERIFICATION ----`);
+      console.log(`[Polish-Base64] Client checksum: ${clientChecksum || 'not provided'}`);
+      console.log(`[Polish-Base64] Server base64 checksum: ${base64Checksum}`);
+      console.log(`[Polish-Base64] Server buffer checksum: ${bufferChecksum}`);
+      console.log(`[Polish-Base64] Checksum match: ${checksumMatch}`);
       
       // Generate audio fingerprint for verification
       const audioFirst100 = audio.substring(0, 100);
@@ -335,7 +351,6 @@ export async function registerRoutes(
       console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
       console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
       console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
-      console.log(`[Polish-Base64] Checksum (first 1000 bytes): ${checksum}`);
       console.log(`[Polish-Base64] MIME type: ${mimeType}`);
       console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
       console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
