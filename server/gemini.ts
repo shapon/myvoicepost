@@ -111,6 +111,48 @@ function safeJsonParse(text: string, fallback: any = {}): any {
   }
 }
 
+// Common hallucination patterns for short audio with silence/noise
+const HALLUCINATION_PATTERNS = [
+  /^it'?s?\s+just\s+that\s+there'?s?\s+that\.?$/i,
+  /^(um+|uh+|hmm+|ah+|oh+|eh+)[\s.,!?]*$/i,
+  /^that'?s?\s+it\.?$/i,
+  /^okay\.?$/i,
+  /^yes\.?$/i,
+  /^no\.?$/i,
+  /^right\.?$/i,
+  /^so\.?$/i,
+  /^well\.?$/i,
+  /^\.+$/,
+  /^\s*$/,
+];
+
+// Check if transcription looks like a hallucination from noise/silence
+function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
+  const trimmed = text.trim();
+  
+  // Empty or very short text
+  if (trimmed.length < 5) {
+    return true;
+  }
+  
+  // Very short text relative to audio size (less than 1 char per 10KB of audio suggests silence)
+  const charsPerKb = trimmed.length / (audioSizeBytes / 1024);
+  if (charsPerKb < 0.5 && trimmed.length < 50) {
+    console.log(`[Gemini] Suspiciously low text density: ${charsPerKb.toFixed(2)} chars/KB`);
+    return true;
+  }
+  
+  // Check known hallucination patterns
+  for (const pattern of HALLUCINATION_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      console.log(`[Gemini] Detected hallucination pattern: "${trimmed}"`);
+      return true;
+    }
+  }
+  
+  return false;
+}
+
 // Transcribe audio using Gemini with retry logic
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
   // Generate unique transcription request ID
@@ -128,24 +170,36 @@ export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Pr
   console.log(`[Gemini] Buffer fingerprint: ${bufferHash}`);
   console.log(`[Gemini] Base64 preview: ${base64Preview}...`);
   
+  // Check for very small audio files (likely empty/corrupt)
+  if (audioBuffer.length < 5000) {
+    console.log(`[Gemini] ${transcriptionId} - Audio too small (${audioBuffer.length} bytes), likely empty`);
+    return "";
+  }
+  
   return pRetry(
     async () => {
       try {
         const base64Data = audioBuffer.toString("base64");
         console.log(`[Gemini] ${transcriptionId} - Sending to Gemini API, base64 length: ${base64Data.length}`);
         
-        // Use a unique prompt with timestamp to prevent any caching
+        // Enhanced prompt with stronger anti-hallucination instructions
         const uniquePrompt = `[Request ID: ${transcriptionId}] [Timestamp: ${timestamp}]
 
-CRITICAL INSTRUCTIONS FOR AUDIO TRANSCRIPTION:
-1. This is a voice recording that needs to be transcribed word-for-word
-2. Listen to the ACTUAL audio content in the attached file
-3. Do NOT generate, fabricate, or hallucinate any text
-4. Do NOT use any cached or previous transcription results
-5. Transcribe ONLY what you hear in THIS specific audio file
-6. If the audio is unclear or empty, respond with "[AUDIO_UNCLEAR]" or "[AUDIO_EMPTY]"
+CRITICAL AUDIO TRANSCRIPTION INSTRUCTIONS:
 
-Return ONLY the exact transcription of the spoken words, with no additional commentary, formatting, or explanations.`;
+1. LISTEN CAREFULLY to the attached audio file
+2. Transcribe ONLY the actual spoken words you can clearly hear
+3. If you hear:
+   - Silence: Return exactly "[SILENCE]"
+   - Static/noise only: Return exactly "[NOISE]"
+   - Unclear/unintelligible speech: Return exactly "[UNCLEAR]"
+   - Very quiet or distant speech: Return exactly "[UNCLEAR]"
+4. Do NOT guess, infer, or make up content
+5. Do NOT return filler phrases like "It's just that there's that" for noise
+6. If less than 3 clear words are audible, return "[UNCLEAR]"
+7. Transcribe word-for-word with no additions or interpretations
+
+Return ONLY the transcription or one of the markers above. No explanations.`;
 
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
@@ -163,16 +217,26 @@ Return ONLY the exact transcription of the spoken words, with no additional comm
           }]
         });
         
-        const transcription = response.text || "";
-        console.log(`[Gemini] ${transcriptionId} - Transcription completed`);
-        console.log(`[Gemini] ${transcriptionId} - Result (${transcription.length} chars): "${transcription}"`);
-        console.log(`[Gemini] ========== END ${transcriptionId} ==========`);
+        let transcription = response.text?.trim() || "";
+        console.log(`[Gemini] ${transcriptionId} - Raw result (${transcription.length} chars): "${transcription}"`);
         
-        // Check for error responses
-        if (transcription.includes("[AUDIO_UNCLEAR]") || transcription.includes("[AUDIO_EMPTY]")) {
-          console.log(`[Gemini] ${transcriptionId} - Audio was unclear or empty`);
+        // Check for explicit error markers
+        const errorMarkers = ["[SILENCE]", "[NOISE]", "[UNCLEAR]", "[AUDIO_UNCLEAR]", "[AUDIO_EMPTY]"];
+        for (const marker of errorMarkers) {
+          if (transcription.includes(marker)) {
+            console.log(`[Gemini] ${transcriptionId} - Audio issue detected: ${marker}`);
+            return "";
+          }
+        }
+        
+        // Check for hallucination patterns
+        if (isLikelyHallucination(transcription, audioBuffer.length)) {
+          console.log(`[Gemini] ${transcriptionId} - Detected likely hallucination, returning empty`);
           return "";
         }
+        
+        console.log(`[Gemini] ${transcriptionId} - Valid transcription: "${transcription}"`);
+        console.log(`[Gemini] ========== END ${transcriptionId} ==========`);
         
         return transcription;
       } catch (error: any) {
