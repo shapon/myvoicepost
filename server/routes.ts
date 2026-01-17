@@ -271,8 +271,30 @@ export async function registerRoutes(
     }
   });
 
+  // Supported audio formats mapping
+  const audioFormatMimeTypes: Record<string, string> = {
+    'mp4': 'audio/mp4',
+    'm4a': 'audio/mp4',
+    'wav': 'audio/wav',
+    'webm': 'audio/webm',
+    'ogg': 'audio/ogg',
+    'mp3': 'audio/mpeg',
+    'mpeg': 'audio/mpeg',
+    'aac': 'audio/aac',
+    'flac': 'audio/flac',
+  };
+
+  // Helper function to get MIME type from format
+  function getMimeTypeFromFormat(format: string | undefined, defaultMime: string = 'audio/mp4'): string {
+    if (!format) return defaultMime;
+    const cleanFormat = format.toLowerCase().replace('.', '');
+    return audioFormatMimeTypes[cleanFormat] || defaultMime;
+  }
+
   // Polish speech base64 endpoint - accepts base64 audio for mobile apps
-  app.post("/api/polish-speech-base64", async (req, res) => {
+  // Supports both /api/polish-speech-base64 and /api/polish-speech-base64/:format
+  app.post("/api/polish-speech-base64/:format?", async (req, res) => {
+    const formatParam = req.params.format;
     // Generate unique server request ID for tracking
     const serverRequestId = `srv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const requestTimestamp = new Date().toISOString();
@@ -297,7 +319,7 @@ export async function registerRoutes(
         language: z.string(),
         outputFormat: z.string(),
         outputType: z.string(),
-        mimeType: z.string().optional().default("audio/wav"),
+        mimeType: z.string().optional().default("audio/mp4"),
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
         clientChecksum: z.number().optional(), // Checksum from client for verification
@@ -313,7 +335,16 @@ export async function registerRoutes(
         });
       }
 
-      const { audio, language, outputFormat, outputType, mimeType, clientRequestId, requestId, clientChecksum } = parseResult.data;
+      const { audio, language, outputFormat, outputType, mimeType: bodyMimeType, clientRequestId, requestId, clientChecksum } = parseResult.data;
+
+      // Determine MIME type: URL format param takes priority, then body mimeType, then default
+      const effectiveMimeType = formatParam 
+        ? getMimeTypeFromFormat(formatParam) 
+        : bodyMimeType;
+      
+      console.log(`[Polish-Base64] URL format param: ${formatParam || 'not provided'}`);
+      console.log(`[Polish-Base64] Body mimeType: ${bodyMimeType}`);
+      console.log(`[Polish-Base64] Effective MIME type: ${effectiveMimeType}`);
 
       // Log client request ID if provided
       const clientReqId = clientRequestId || requestId;
@@ -351,7 +382,7 @@ export async function registerRoutes(
       console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
       console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
       console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
-      console.log(`[Polish-Base64] MIME type: ${mimeType}`);
+      console.log(`[Polish-Base64] MIME type: ${effectiveMimeType}`);
       console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
       console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
       
@@ -373,7 +404,7 @@ export async function registerRoutes(
       console.log(`[Polish-Base64] ---- TRANSCRIPTION ----`);
       console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
       const transcribeStart = Date.now();
-      const originalText = await transcribeAudio(audioBuffer, mimeType);
+      const originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
       const transcribeTime = Date.now() - transcribeStart;
       
       console.log(`[Polish-Base64] Transcription time: ${transcribeTime}ms`);
@@ -434,7 +465,9 @@ export async function registerRoutes(
   });
 
   // Translate speech base64 endpoint - accepts base64 audio for mobile apps
-  app.post("/api/translate-speech-base64", async (req, res) => {
+  // Supports both /api/translate-speech-base64 and /api/translate-speech-base64/:format
+  app.post("/api/translate-speech-base64/:format?", async (req, res) => {
+    const formatParam = req.params.format;
     // Generate unique server request ID for tracking
     const serverRequestId = `srv_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
     const requestTimestamp = new Date().toISOString();
@@ -443,6 +476,7 @@ export async function registerRoutes(
       console.log(`\n========== [Translate-Base64] NEW REQUEST ==========`);
       console.log(`[Translate-Base64] Server Request ID: ${serverRequestId}`);
       console.log(`[Translate-Base64] Timestamp: ${requestTimestamp}`);
+      console.log(`[Translate-Base64] URL format param: ${formatParam || 'not provided'}`);
       
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
@@ -456,7 +490,7 @@ export async function registerRoutes(
         sourceLanguage: z.string(),
         targetLanguage: z.string(),
         outputFormat: z.string(),
-        mimeType: z.string().optional().default("audio/m4a"),
+        mimeType: z.string().optional().default("audio/mp4"),
         clientRequestId: z.string().optional(), // Track client request ID if provided
       });
 
@@ -469,7 +503,12 @@ export async function registerRoutes(
         });
       }
 
-      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType, clientRequestId } = parseResult.data;
+      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType: bodyMimeType, clientRequestId } = parseResult.data;
+
+      // Determine MIME type: URL format param takes priority, then body mimeType, then default
+      const effectiveMimeType = formatParam 
+        ? getMimeTypeFromFormat(formatParam) 
+        : bodyMimeType;
 
       // Log client request ID if provided
       if (clientRequestId) {
@@ -485,7 +524,8 @@ export async function registerRoutes(
       console.log(`[Translate-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
       console.log(`[Translate-Base64] Audio fingerprint start: ${audioFirst100}`);
       console.log(`[Translate-Base64] Audio fingerprint end: ${audioLast50}`);
-      console.log(`[Translate-Base64] MIME type: ${mimeType}`);
+      console.log(`[Translate-Base64] Body mimeType: ${bodyMimeType}`);
+      console.log(`[Translate-Base64] Effective MIME type: ${effectiveMimeType}`);
       console.log(`[Translate-Base64] Source: ${sourceLanguage}, Target: ${targetLanguage}, Format: ${outputFormat}`);
       
       // Verify audio buffer integrity
@@ -496,7 +536,7 @@ export async function registerRoutes(
 
       console.log(`[Translate-Base64] Calling Gemini transcribeAudio...`);
       const transcribeStart = Date.now();
-      const originalText = await transcribeAudio(audioBuffer, mimeType);
+      const originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
       const transcribeTime = Date.now() - transcribeStart;
       
       console.log(`[Translate-Base64] Transcription completed in ${transcribeTime}ms`);
