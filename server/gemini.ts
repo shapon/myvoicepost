@@ -111,7 +111,8 @@ function safeJsonParse(text: string, fallback: any = {}): any {
   }
 }
 
-// Common hallucination patterns for short audio with silence/noise
+// Common hallucination patterns for audio with silence/noise
+// These are phrases Gemini generates when it receives no real speech
 const HALLUCINATION_PATTERNS = [
   /^it'?s?\s+just\s+that\s+there'?s?\s+that\.?$/i,
   /^(um+|uh+|hmm+|ah+|oh+|eh+)[\s.,!?]*$/i,
@@ -123,6 +124,19 @@ const HALLUCINATION_PATTERNS = [
   /^so\.?$/i,
   /^well\.?$/i,
   /^\.+$/,
+  // Common elaborate hallucination patterns - Gemini often generates these
+  /welcome\s+to\s+(the\s+)?(new\s+)?episode\s+of/i,
+  /welcome\s+to\s+this\s+new\s+episode/i,
+  /welcome\s+to\s+(the\s+)?podcast/i,
+  /today\s+we\s+are\s+joined\s+by/i,
+  /today\s+we'?re?\s+joined\s+by/i,
+  /our\s+very\s+special\s+guest/i,
+  /thank\s+you\s+for\s+joining\s+us/i,
+  /thank\s+you\s+for\s+being\s+with\s+us/i,
+  /john\s+smith/i,  // Common placeholder name in hallucinations
+  /jane\s+doe/i,    // Common placeholder name in hallucinations
+  /mr\.\s+smith/i,
+  /mrs?\.\s+john/i,
   /^\s*$/,
 ];
 
@@ -132,6 +146,7 @@ function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
   
   // Empty or very short text
   if (trimmed.length < 5) {
+    console.log(`[Gemini] Hallucination check: Text too short (${trimmed.length} chars)`);
     return true;
   }
   
@@ -142,12 +157,35 @@ function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
     return true;
   }
   
-  // Check known hallucination patterns
+  // Check known hallucination patterns - these can appear ANYWHERE in the text
   for (const pattern of HALLUCINATION_PATTERNS) {
     if (pattern.test(trimmed)) {
-      console.log(`[Gemini] Detected hallucination pattern: "${trimmed}"`);
+      console.log(`[Gemini] Detected hallucination pattern in text: ${pattern.source}`);
+      console.log(`[Gemini] Flagged text: "${trimmed.substring(0, 200)}..."`);
       return true;
     }
+  }
+  
+  // Additional check: if text contains multiple common "filler" hallucination phrases
+  const hallucinationKeywords = [
+    'podcast', 'episode', 'special guest', 'john smith', 'jane doe',
+    'welcome to the show', 'thank you for joining', 'honored to have',
+    'our guest today', 'joining us today'
+  ];
+  
+  const lowerText = trimmed.toLowerCase();
+  let keywordCount = 0;
+  for (const keyword of hallucinationKeywords) {
+    if (lowerText.includes(keyword)) {
+      keywordCount++;
+      console.log(`[Gemini] Found hallucination keyword: "${keyword}"`);
+    }
+  }
+  
+  // If 2+ hallucination keywords found, it's likely fabricated
+  if (keywordCount >= 2) {
+    console.log(`[Gemini] Multiple hallucination keywords (${keywordCount}) detected - likely fabricated content`);
+    return true;
   }
   
   return false;

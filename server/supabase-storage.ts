@@ -92,6 +92,32 @@ export class SupabaseStorage implements IStorage {
       .returning();
     return result.length > 0;
   }
+
+  async updateSavedText(id: string, userId: string, data: Partial<Omit<SavedText, 'id' | 'userId' | 'createdAt'>>): Promise<SavedText | null> {
+    // Build update object with only provided fields
+    const updateData: Record<string, any> = {};
+    if (data.type !== undefined) updateData.type = data.type;
+    if (data.originalText !== undefined) updateData.originalText = data.originalText;
+    if (data.polishedText !== undefined) updateData.polishedText = data.polishedText;
+    if (data.translatedText !== undefined) updateData.translatedText = data.translatedText;
+    if (data.sourceLanguage !== undefined) updateData.sourceLanguage = data.sourceLanguage;
+    if (data.targetLanguage !== undefined) updateData.targetLanguage = data.targetLanguage;
+    if (data.outputFormat !== undefined) updateData.outputFormat = data.outputFormat;
+    if (data.outputType !== undefined) updateData.outputType = data.outputType;
+
+    if (Object.keys(updateData).length === 0) {
+      // No fields to update, return existing record
+      const existing = await this.getSavedText(id);
+      return existing ?? null;
+    }
+
+    const result = await db.update(savedTexts)
+      .set(updateData)
+      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)))
+      .returning();
+    
+    return result.length > 0 ? result[0] : null;
+  }
 }
 
 export const supabaseStorage = new SupabaseStorage();
