@@ -337,7 +337,9 @@ export async function registerRoutes(
       }
 
       const base64Schema = z.object({
-        audio: z.string().min(1, "Audio data is required"),
+        audio: z.string().optional(), // Made optional for text-only requests
+        originalText: z.string().optional(), // For text-only re-polish requests
+        isTextOnly: z.boolean().optional(), // Flag to indicate text-only mode
         language: z.string(),
         outputFormat: z.string(),
         outputType: z.string(),
@@ -346,7 +348,15 @@ export async function registerRoutes(
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
         clientChecksum: z.number().optional(), // Checksum from client for verification
-      });
+      }).refine(
+        (data) => {
+          // Either audio OR originalText must be provided
+          return data.audio || data.originalText;
+        },
+        {
+          message: "Either audio or originalText must be provided",
+        }
+      );
 
       const parseResult = base64Schema.safeParse(req.body);
       if (!parseResult.success) {
@@ -358,109 +368,142 @@ export async function registerRoutes(
         });
       }
 
-      const { audio, language, outputFormat, outputType, mimeType: bodyMimeType, clientRequestId, requestId, clientChecksum } = parseResult.data;
+      const { 
+        audio, 
+        originalText: providedOriginalText,
+        isTextOnly,
+        language, 
+        outputFormat, 
+        outputType, 
+        mimeType: bodyMimeType, 
+        clientRequestId, 
+        requestId, 
+        clientChecksum 
+      } = parseResult.data;
 
-      // Determine MIME type: URL format param takes priority, then body mimeType, then default
-      const effectiveMimeType = formatParam 
-        ? getMimeTypeFromFormat(formatParam) 
-        : bodyMimeType;
-      
-      console.log(`[Polish-Base64] URL format param: ${formatParam || 'not provided'}`);
-      console.log(`[Polish-Base64] Body mimeType: ${bodyMimeType}`);
-      console.log(`[Polish-Base64] Effective MIME type: ${effectiveMimeType}`);
+      console.log(`[Polish-Base64] Request type: ${isTextOnly ? 'TEXT-ONLY' : 'AUDIO'}`);
 
-      // Log client request ID if provided
-      const clientReqId = clientRequestId || requestId;
-      if (clientReqId) {
-        console.log(`[Polish-Base64] Client Request ID: ${clientReqId}`);
-      }
+      let originalText: string;
+      let audioHash: string | null = null;
 
-      const audioBuffer = Buffer.from(audio, 'base64');
-      
-      // Generate SHA-256 hash for unique audio identification
-      const audioHash = generateAudioHash(audioBuffer);
-      const userId = req.jwtUser?.userId || 'anonymous';
-      
-      console.log(`[Polish-Base64] ---- AUDIO HASH VERIFICATION ----`);
-      console.log(`[Polish-Base64] Audio SHA-256 hash: ${audioHash}`);
-      console.log(`[Polish-Base64] User ID: ${userId}`);
-      
-      // Check for duplicate audio (same hash sent recently)
-      const existingEntry = recentAudioHashes.get(audioHash);
-      if (existingEntry) {
-        const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
-        console.log(`[Polish-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
-        console.log(`[Polish-Base64] Same audio was sent ${ageSeconds}s ago`);
-        console.log(`[Polish-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
-        // Don't return cached result - process fresh but log the duplicate
+      if (isTextOnly && providedOriginalText) {
+        // TEXT-ONLY MODE: Skip transcription, use provided text
+        console.log(`[Polish-Base64] ---- TEXT-ONLY MODE ----`);
+        console.log(`[Polish-Base64] Skipping audio transcription`);
+        console.log(`[Polish-Base64] Using provided text: "${providedOriginalText}"`);
+        originalText = providedOriginalText;
+        
+      } else if (audio) {
+        // AUDIO MODE: Original behavior - transcribe audio
+        console.log(`[Polish-Base64] ---- AUDIO MODE ----`);
+        
+        // Determine MIME type: URL format param takes priority, then body mimeType, then default
+        const effectiveMimeType = formatParam 
+          ? getMimeTypeFromFormat(formatParam) 
+          : bodyMimeType;
+        
+        console.log(`[Polish-Base64] URL format param: ${formatParam || 'not provided'}`);
+        console.log(`[Polish-Base64] Body mimeType: ${bodyMimeType}`);
+        console.log(`[Polish-Base64] Effective MIME type: ${effectiveMimeType}`);
+
+        // Log client request ID if provided
+        const clientReqId = clientRequestId || requestId;
+        if (clientReqId) {
+          console.log(`[Polish-Base64] Client Request ID: ${clientReqId}`);
+        }
+
+        const audioBuffer = Buffer.from(audio, 'base64');
+        
+        // Generate SHA-256 hash for unique audio identification
+        audioHash = generateAudioHash(audioBuffer);
+        const userId = req.jwtUser?.userId || 'anonymous';
+        
+        console.log(`[Polish-Base64] ---- AUDIO HASH VERIFICATION ----`);
+        console.log(`[Polish-Base64] Audio SHA-256 hash: ${audioHash}`);
+        console.log(`[Polish-Base64] User ID: ${userId}`);
+        
+        // Check for duplicate audio (same hash sent recently)
+        const existingEntry = recentAudioHashes.get(audioHash);
+        if (existingEntry) {
+          const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
+          console.log(`[Polish-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
+          console.log(`[Polish-Base64] Same audio was sent ${ageSeconds}s ago`);
+          console.log(`[Polish-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
+          // Don't return cached result - process fresh but log the duplicate
+        } else {
+          console.log(`[Polish-Base64] New unique audio (not seen in last 60s)`);
+        }
+        
+        // Generate checksum for audio verification (from base64, same as client)
+        let base64Checksum = 0;
+        const sample = audio.substring(0, Math.min(1000, audio.length));
+        for (let i = 0; i < sample.length; i++) {
+          base64Checksum = (base64Checksum + sample.charCodeAt(i)) % 65536;
+        }
+        
+        // Also generate checksum from buffer for extra verification
+        let bufferChecksum = 0;
+        for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
+          bufferChecksum = (bufferChecksum + audioBuffer[i]) % 65536;
+        }
+        
+        // Verify checksum matches client
+        const checksumMatch = clientChecksum !== undefined ? (clientChecksum === base64Checksum) : 'N/A';
+        console.log(`[Polish-Base64] ---- CHECKSUM VERIFICATION ----`);
+        console.log(`[Polish-Base64] Client checksum: ${clientChecksum || 'not provided'}`);
+        console.log(`[Polish-Base64] Server base64 checksum: ${base64Checksum}`);
+        console.log(`[Polish-Base64] Server buffer checksum: ${bufferChecksum}`);
+        console.log(`[Polish-Base64] Checksum match: ${checksumMatch}`);
+        
+        // Generate audio fingerprint for verification
+        const audioFirst100 = audio.substring(0, 100);
+        const audioLast50 = audio.substring(audio.length - 50);
+        
+        console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
+        console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
+        console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
+        console.log(`[Polish-Base64] MIME type: ${effectiveMimeType}`);
+        console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
+        console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
+        
+        // Verify audio buffer integrity with hex dump
+        const bufferFirst32 = audioBuffer.slice(0, 32).toString('hex');
+        const bufferLast32 = audioBuffer.slice(-32).toString('hex');
+        console.log(`[Polish-Base64] HEX first 32 bytes: ${bufferFirst32}`);
+        console.log(`[Polish-Base64] HEX last 32 bytes: ${bufferLast32}`);
+        
+        // Check for M4A/MP4 signature (ftyp)
+        const hasFtyp = bufferFirst32.includes('66747970');
+        console.log(`[Polish-Base64] Has M4A/MP4 ftyp header: ${hasFtyp}`);
+        
+        console.log(`[Polish-Base64] ---- SETTINGS ----`);
+        console.log(`[Polish-Base64] Language: ${language}`);
+        console.log(`[Polish-Base64] Output Format: ${outputFormat}`);
+        console.log(`[Polish-Base64] Output Type: ${outputType}`);
+
+        console.log(`[Polish-Base64] ---- TRANSCRIPTION ----`);
+        console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
+        const transcribeStart = Date.now();
+        originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
+        const transcribeTime = Date.now() - transcribeStart;
+        
+        console.log(`[Polish-Base64] Transcription time: ${transcribeTime}ms`);
+        console.log(`[Polish-Base64] Transcribed length: ${originalText.length} chars`);
+        console.log(`[Polish-Base64] TRANSCRIBED TEXT: "${originalText}"`);
+
+        if (!originalText || originalText.trim() === "") {
+          console.log(`[Polish-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+          console.log(`${'='.repeat(60)}`);
+          console.log(`[Polish-Base64] END REQUEST (EMPTY TRANSCRIPTION)`);
+          console.log(`${'='.repeat(60)}\n`);
+          return res.status(400).json({ 
+            error: "Could not transcribe audio. Please try speaking more clearly.",
+            serverRequestId,
+          });
+        }
       } else {
-        console.log(`[Polish-Base64] New unique audio (not seen in last 60s)`);
-      }
-      
-      // Generate checksum for audio verification (from base64, same as client)
-      let base64Checksum = 0;
-      const sample = audio.substring(0, Math.min(1000, audio.length));
-      for (let i = 0; i < sample.length; i++) {
-        base64Checksum = (base64Checksum + sample.charCodeAt(i)) % 65536;
-      }
-      
-      // Also generate checksum from buffer for extra verification
-      let bufferChecksum = 0;
-      for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
-        bufferChecksum = (bufferChecksum + audioBuffer[i]) % 65536;
-      }
-      
-      // Verify checksum matches client
-      const checksumMatch = clientChecksum !== undefined ? (clientChecksum === base64Checksum) : 'N/A';
-      console.log(`[Polish-Base64] ---- CHECKSUM VERIFICATION ----`);
-      console.log(`[Polish-Base64] Client checksum: ${clientChecksum || 'not provided'}`);
-      console.log(`[Polish-Base64] Server base64 checksum: ${base64Checksum}`);
-      console.log(`[Polish-Base64] Server buffer checksum: ${bufferChecksum}`);
-      console.log(`[Polish-Base64] Checksum match: ${checksumMatch}`);
-      
-      // Generate audio fingerprint for verification
-      const audioFirst100 = audio.substring(0, 100);
-      const audioLast50 = audio.substring(audio.length - 50);
-      
-      console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
-      console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
-      console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
-      console.log(`[Polish-Base64] MIME type: ${effectiveMimeType}`);
-      console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
-      console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
-      
-      // Verify audio buffer integrity with hex dump
-      const bufferFirst32 = audioBuffer.slice(0, 32).toString('hex');
-      const bufferLast32 = audioBuffer.slice(-32).toString('hex');
-      console.log(`[Polish-Base64] HEX first 32 bytes: ${bufferFirst32}`);
-      console.log(`[Polish-Base64] HEX last 32 bytes: ${bufferLast32}`);
-      
-      // Check for M4A/MP4 signature (ftyp)
-      const hasFtyp = bufferFirst32.includes('66747970');
-      console.log(`[Polish-Base64] Has M4A/MP4 ftyp header: ${hasFtyp}`);
-      
-      console.log(`[Polish-Base64] ---- SETTINGS ----`);
-      console.log(`[Polish-Base64] Language: ${language}`);
-      console.log(`[Polish-Base64] Output Format: ${outputFormat}`);
-      console.log(`[Polish-Base64] Output Type: ${outputType}`);
-
-      console.log(`[Polish-Base64] ---- TRANSCRIPTION ----`);
-      console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
-      const transcribeStart = Date.now();
-      const originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
-      const transcribeTime = Date.now() - transcribeStart;
-      
-      console.log(`[Polish-Base64] Transcription time: ${transcribeTime}ms`);
-      console.log(`[Polish-Base64] Transcribed length: ${originalText.length} chars`);
-      console.log(`[Polish-Base64] TRANSCRIBED TEXT: "${originalText}"`);
-
-      if (!originalText || originalText.trim() === "") {
-        console.log(`[Polish-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
-        console.log(`${'='.repeat(60)}`);
-        console.log(`[Polish-Base64] END REQUEST (EMPTY TRANSCRIPTION)`);
-        console.log(`${'='.repeat(60)}\n`);
-        return res.status(400).json({ 
-          error: "Could not transcribe audio. Please try speaking more clearly.",
+        return res.status(400).json({
+          error: "Either audio or originalText must be provided",
           serverRequestId,
         });
       }
@@ -484,13 +527,16 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      // Store audio hash for duplicate detection
-      recentAudioHashes.set(audioHash, {
-        timestamp: Date.now(),
-        result: polishedText,
-        userId,
-      });
-      console.log(`[Polish-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
+      // Store audio hash for duplicate detection (only if audio was provided)
+      if (audioHash) {
+        const hashUserId = req.jwtUser?.userId || 'anonymous';
+        recentAudioHashes.set(audioHash, {
+          timestamp: Date.now(),
+          result: polishedText,
+          userId: hashUserId,
+        });
+        console.log(`[Polish-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
+      }
 
       console.log(`[Polish-Base64] ---- RESULT ----`);
       console.log(`[Polish-Base64] Saved to storage with ID: ${translation.id}`);
@@ -537,7 +583,9 @@ export async function registerRoutes(
       }
 
       const base64Schema = z.object({
-        audio: z.string().min(1, "Audio data is required"),
+        audio: z.string().optional(), // Made optional for text-only requests
+        originalText: z.string().optional(), // For text-only re-translate requests
+        isTextOnly: z.boolean().optional(), // Flag to indicate text-only mode
         sourceLanguage: z.string(),
         targetLanguage: z.string(),
         outputFormat: z.string(),
@@ -546,7 +594,16 @@ export async function registerRoutes(
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
         clientChecksum: z.number().optional(), // Checksum from client for verification
-      });
+      }).refine(
+        (data) => {
+          // Either audio OR originalText must be provided
+          return data.audio || data.originalText;
+        },
+        {
+          message: "Either audio or originalText must be provided",
+        }
+      );
+	  
 
       const parseResult = base64Schema.safeParse(req.body);
       if (!parseResult.success) {
@@ -557,68 +614,102 @@ export async function registerRoutes(
         });
       }
 
-      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType: bodyMimeType, clientRequestId } = parseResult.data;
+      const { 
+        audio, 
+        originalText: providedOriginalText,
+        isTextOnly,
+        sourceLanguage, 
+        targetLanguage, 
+        outputFormat, 
+        mimeType: bodyMimeType, 
+        clientRequestId,
+        requestId,
+        clientChecksum 
+      } = parseResult.data;
 
-      // Determine MIME type: URL format param takes priority, then body mimeType, then default
-      const effectiveMimeType = formatParam 
-        ? getMimeTypeFromFormat(formatParam) 
-        : bodyMimeType;
+      console.log(`[Translate-Base64] Request type: ${isTextOnly ? 'TEXT-ONLY' : 'AUDIO'}`);
 
-      // Log client request ID if provided
-      if (clientRequestId) {
-        console.log(`[Translate-Base64] Client Request ID: ${clientRequestId}`);
-      }
+      let originalText: string;
+      let audioHash: string | null = null;
 
-      const audioBuffer = Buffer.from(audio, 'base64');
-      
-      // Generate SHA-256 hash for unique audio identification
-      const audioHash = generateAudioHash(audioBuffer);
-      const userId = req.jwtUser?.userId || 'anonymous';
-      
-      console.log(`[Translate-Base64] ---- AUDIO HASH VERIFICATION ----`);
-      console.log(`[Translate-Base64] Audio SHA-256 hash: ${audioHash}`);
-      console.log(`[Translate-Base64] User ID: ${userId}`);
-      
-      // Check for duplicate audio (same hash sent recently)
-      const existingEntry = recentAudioHashes.get(audioHash);
-      if (existingEntry) {
-        const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
-        console.log(`[Translate-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
-        console.log(`[Translate-Base64] Same audio was sent ${ageSeconds}s ago`);
-        console.log(`[Translate-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
+      if (isTextOnly && providedOriginalText) {
+        // TEXT-ONLY MODE: Skip transcription, use provided text
+        console.log(`[Translate-Base64] ---- TEXT-ONLY MODE ----`);
+        console.log(`[Translate-Base64] Skipping audio transcription`);
+        console.log(`[Translate-Base64] Using provided text: "${providedOriginalText}"`);
+        originalText = providedOriginalText;
+        
+      } else if (audio) {
+        // AUDIO MODE: Original behavior - transcribe audio
+        console.log(`[Translate-Base64] ---- AUDIO MODE ----`);
+        
+        // Determine MIME type: URL format param takes priority, then body mimeType, then default
+        const effectiveMimeType = formatParam 
+          ? getMimeTypeFromFormat(formatParam) 
+          : bodyMimeType;
+
+        // Log client request ID if provided
+        const clientReqId = clientRequestId || requestId;
+        if (clientReqId) {
+          console.log(`[Translate-Base64] Client Request ID: ${clientReqId}`);
+        }
+
+        const audioBuffer = Buffer.from(audio, 'base64');
+        
+        // Generate SHA-256 hash for unique audio identification
+        audioHash = generateAudioHash(audioBuffer);
+        const userId = req.jwtUser?.userId || 'anonymous';
+        
+        console.log(`[Translate-Base64] ---- AUDIO HASH VERIFICATION ----`);
+        console.log(`[Translate-Base64] Audio SHA-256 hash: ${audioHash}`);
+        console.log(`[Translate-Base64] User ID: ${userId}`);
+        
+        // Check for duplicate audio (same hash sent recently)
+        const existingEntry = recentAudioHashes.get(audioHash);
+        if (existingEntry) {
+          const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
+          console.log(`[Translate-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
+          console.log(`[Translate-Base64] Same audio was sent ${ageSeconds}s ago`);
+          console.log(`[Translate-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
+        } else {
+          console.log(`[Translate-Base64] New unique audio (not seen in last 60s)`);
+        }
+        
+        // Generate audio fingerprint for verification
+        const audioFirst100 = audio.substring(0, 100);
+        const audioLast50 = audio.substring(audio.length - 50);
+        
+        console.log(`[Translate-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
+        console.log(`[Translate-Base64] Audio fingerprint start: ${audioFirst100}`);
+        console.log(`[Translate-Base64] Audio fingerprint end: ${audioLast50}`);
+        console.log(`[Translate-Base64] Body mimeType: ${bodyMimeType}`);
+        console.log(`[Translate-Base64] Effective MIME type: ${effectiveMimeType}`);
+        console.log(`[Translate-Base64] Source: ${sourceLanguage}, Target: ${targetLanguage}, Format: ${outputFormat}`);
+        
+        // Verify audio buffer integrity
+        const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
+        const bufferLast20 = audioBuffer.slice(-20).toString('hex');
+        console.log(`[Translate-Base64] Buffer HEX start: ${bufferFirst20}`);
+        console.log(`[Translate-Base64] Buffer HEX end: ${bufferLast20}`);
+
+        console.log(`[Translate-Base64] Calling Gemini transcribeAudio...`);
+        const transcribeStart = Date.now();
+        originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
+        const transcribeTime = Date.now() - transcribeStart;
+        
+        console.log(`[Translate-Base64] Transcription completed in ${transcribeTime}ms`);
+        console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
+
+        if (!originalText || originalText.trim() === "") {
+          console.log(`[Translate-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+          return res.status(400).json({ 
+            error: "Could not transcribe audio. Please try speaking more clearly.",
+            serverRequestId,
+          });
+        }
       } else {
-        console.log(`[Translate-Base64] New unique audio (not seen in last 60s)`);
-      }
-      
-      // Generate audio fingerprint for verification
-      const audioFirst100 = audio.substring(0, 100);
-      const audioLast50 = audio.substring(audio.length - 50);
-      
-      console.log(`[Translate-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
-      console.log(`[Translate-Base64] Audio fingerprint start: ${audioFirst100}`);
-      console.log(`[Translate-Base64] Audio fingerprint end: ${audioLast50}`);
-      console.log(`[Translate-Base64] Body mimeType: ${bodyMimeType}`);
-      console.log(`[Translate-Base64] Effective MIME type: ${effectiveMimeType}`);
-      console.log(`[Translate-Base64] Source: ${sourceLanguage}, Target: ${targetLanguage}, Format: ${outputFormat}`);
-      
-      // Verify audio buffer integrity
-      const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
-      const bufferLast20 = audioBuffer.slice(-20).toString('hex');
-      console.log(`[Translate-Base64] Buffer HEX start: ${bufferFirst20}`);
-      console.log(`[Translate-Base64] Buffer HEX end: ${bufferLast20}`);
-
-      console.log(`[Translate-Base64] Calling Gemini transcribeAudio...`);
-      const transcribeStart = Date.now();
-      const originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
-      const transcribeTime = Date.now() - transcribeStart;
-      
-      console.log(`[Translate-Base64] Transcription completed in ${transcribeTime}ms`);
-      console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
-
-      if (!originalText || originalText.trim() === "") {
-        console.log(`[Translate-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
-        return res.status(400).json({ 
-          error: "Could not transcribe audio. Please try speaking more clearly.",
+        return res.status(400).json({
+          error: "Either audio or originalText must be provided",
           serverRequestId,
         });
       }
@@ -645,13 +736,16 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      // Store audio hash for duplicate detection
-      recentAudioHashes.set(audioHash, {
-        timestamp: Date.now(),
-        result: polishedText,
-        userId,
-      });
-      console.log(`[Translate-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
+      // Store audio hash for duplicate detection (only if audio was provided)
+      if (audioHash) {
+        const hashUserId = req.jwtUser?.userId || 'anonymous';
+        recentAudioHashes.set(audioHash, {
+          timestamp: Date.now(),
+          result: polishedText,
+          userId: hashUserId,
+        });
+        console.log(`[Translate-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
+      }
 
       console.log(`[Translate-Base64] Request ${serverRequestId} completed successfully`);
       console.log(`========== [Translate-Base64] END REQUEST ==========\n`);
