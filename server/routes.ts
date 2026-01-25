@@ -44,6 +44,7 @@ declare global {
       jwtUser?: {
         userId: string;
         username: string;
+        email?: string;
       };
     }
   }
@@ -56,7 +57,7 @@ function jwtAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   if (authHeader && authHeader.startsWith("Bearer ")) {
     const token = authHeader.substring(7);
     try {
-      const decoded = jwt.verify(token, JWT_SECRET) as unknown as { userId: string; username: string };
+      const decoded = jwt.verify(token, JWT_SECRET) as unknown as { userId: string; username: string; email?: string };
       req.jwtUser = decoded;
     } catch (err) {
       // Token invalid or expired - continue without user
@@ -337,9 +338,7 @@ export async function registerRoutes(
       }
 
       const base64Schema = z.object({
-        audio: z.string().optional(), // Made optional for text-only requests
-        originalText: z.string().optional(), // For text-only re-polish requests
-        isTextOnly: z.boolean().optional(), // Flag to indicate text-only mode
+        audio: z.string().min(1, "Audio data is required"),
         language: z.string(),
         outputFormat: z.string(),
         outputType: z.string(),
@@ -348,15 +347,7 @@ export async function registerRoutes(
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
         clientChecksum: z.number().optional(), // Checksum from client for verification
-      }).refine(
-        (data) => {
-          // Either audio OR originalText must be provided
-          return data.audio || data.originalText;
-        },
-        {
-          message: "Either audio or originalText must be provided",
-        }
-      );
+      });
 
       const parseResult = base64Schema.safeParse(req.body);
       if (!parseResult.success) {
@@ -368,142 +359,109 @@ export async function registerRoutes(
         });
       }
 
-      const { 
-        audio, 
-        originalText: providedOriginalText,
-        isTextOnly,
-        language, 
-        outputFormat, 
-        outputType, 
-        mimeType: bodyMimeType, 
-        clientRequestId, 
-        requestId, 
-        clientChecksum 
-      } = parseResult.data;
+      const { audio, language, outputFormat, outputType, mimeType: bodyMimeType, clientRequestId, requestId, clientChecksum } = parseResult.data;
 
-      console.log(`[Polish-Base64] Request type: ${isTextOnly ? 'TEXT-ONLY' : 'AUDIO'}`);
+      // Determine MIME type: URL format param takes priority, then body mimeType, then default
+      const effectiveMimeType = formatParam 
+        ? getMimeTypeFromFormat(formatParam) 
+        : bodyMimeType;
+      
+      console.log(`[Polish-Base64] URL format param: ${formatParam || 'not provided'}`);
+      console.log(`[Polish-Base64] Body mimeType: ${bodyMimeType}`);
+      console.log(`[Polish-Base64] Effective MIME type: ${effectiveMimeType}`);
 
-      let originalText: string;
-      let audioHash: string | null = null;
+      // Log client request ID if provided
+      const clientReqId = clientRequestId || requestId;
+      if (clientReqId) {
+        console.log(`[Polish-Base64] Client Request ID: ${clientReqId}`);
+      }
 
-      if (isTextOnly && providedOriginalText) {
-        // TEXT-ONLY MODE: Skip transcription, use provided text
-        console.log(`[Polish-Base64] ---- TEXT-ONLY MODE ----`);
-        console.log(`[Polish-Base64] Skipping audio transcription`);
-        console.log(`[Polish-Base64] Using provided text: "${providedOriginalText}"`);
-        originalText = providedOriginalText;
-        
-      } else if (audio) {
-        // AUDIO MODE: Original behavior - transcribe audio
-        console.log(`[Polish-Base64] ---- AUDIO MODE ----`);
-        
-        // Determine MIME type: URL format param takes priority, then body mimeType, then default
-        const effectiveMimeType = formatParam 
-          ? getMimeTypeFromFormat(formatParam) 
-          : bodyMimeType;
-        
-        console.log(`[Polish-Base64] URL format param: ${formatParam || 'not provided'}`);
-        console.log(`[Polish-Base64] Body mimeType: ${bodyMimeType}`);
-        console.log(`[Polish-Base64] Effective MIME type: ${effectiveMimeType}`);
-
-        // Log client request ID if provided
-        const clientReqId = clientRequestId || requestId;
-        if (clientReqId) {
-          console.log(`[Polish-Base64] Client Request ID: ${clientReqId}`);
-        }
-
-        const audioBuffer = Buffer.from(audio, 'base64');
-        
-        // Generate SHA-256 hash for unique audio identification
-        audioHash = generateAudioHash(audioBuffer);
-        const userId = req.jwtUser?.userId || 'anonymous';
-        
-        console.log(`[Polish-Base64] ---- AUDIO HASH VERIFICATION ----`);
-        console.log(`[Polish-Base64] Audio SHA-256 hash: ${audioHash}`);
-        console.log(`[Polish-Base64] User ID: ${userId}`);
-        
-        // Check for duplicate audio (same hash sent recently)
-        const existingEntry = recentAudioHashes.get(audioHash);
-        if (existingEntry) {
-          const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
-          console.log(`[Polish-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
-          console.log(`[Polish-Base64] Same audio was sent ${ageSeconds}s ago`);
-          console.log(`[Polish-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
-          // Don't return cached result - process fresh but log the duplicate
-        } else {
-          console.log(`[Polish-Base64] New unique audio (not seen in last 60s)`);
-        }
-        
-        // Generate checksum for audio verification (from base64, same as client)
-        let base64Checksum = 0;
-        const sample = audio.substring(0, Math.min(1000, audio.length));
-        for (let i = 0; i < sample.length; i++) {
-          base64Checksum = (base64Checksum + sample.charCodeAt(i)) % 65536;
-        }
-        
-        // Also generate checksum from buffer for extra verification
-        let bufferChecksum = 0;
-        for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
-          bufferChecksum = (bufferChecksum + audioBuffer[i]) % 65536;
-        }
-        
-        // Verify checksum matches client
-        const checksumMatch = clientChecksum !== undefined ? (clientChecksum === base64Checksum) : 'N/A';
-        console.log(`[Polish-Base64] ---- CHECKSUM VERIFICATION ----`);
-        console.log(`[Polish-Base64] Client checksum: ${clientChecksum || 'not provided'}`);
-        console.log(`[Polish-Base64] Server base64 checksum: ${base64Checksum}`);
-        console.log(`[Polish-Base64] Server buffer checksum: ${bufferChecksum}`);
-        console.log(`[Polish-Base64] Checksum match: ${checksumMatch}`);
-        
-        // Generate audio fingerprint for verification
-        const audioFirst100 = audio.substring(0, 100);
-        const audioLast50 = audio.substring(audio.length - 50);
-        
-        console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
-        console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
-        console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
-        console.log(`[Polish-Base64] MIME type: ${effectiveMimeType}`);
-        console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
-        console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
-        
-        // Verify audio buffer integrity with hex dump
-        const bufferFirst32 = audioBuffer.slice(0, 32).toString('hex');
-        const bufferLast32 = audioBuffer.slice(-32).toString('hex');
-        console.log(`[Polish-Base64] HEX first 32 bytes: ${bufferFirst32}`);
-        console.log(`[Polish-Base64] HEX last 32 bytes: ${bufferLast32}`);
-        
-        // Check for M4A/MP4 signature (ftyp)
-        const hasFtyp = bufferFirst32.includes('66747970');
-        console.log(`[Polish-Base64] Has M4A/MP4 ftyp header: ${hasFtyp}`);
-        
-        console.log(`[Polish-Base64] ---- SETTINGS ----`);
-        console.log(`[Polish-Base64] Language: ${language}`);
-        console.log(`[Polish-Base64] Output Format: ${outputFormat}`);
-        console.log(`[Polish-Base64] Output Type: ${outputType}`);
-
-        console.log(`[Polish-Base64] ---- TRANSCRIPTION ----`);
-        console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
-        const transcribeStart = Date.now();
-        originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
-        const transcribeTime = Date.now() - transcribeStart;
-        
-        console.log(`[Polish-Base64] Transcription time: ${transcribeTime}ms`);
-        console.log(`[Polish-Base64] Transcribed length: ${originalText.length} chars`);
-        console.log(`[Polish-Base64] TRANSCRIBED TEXT: "${originalText}"`);
-
-        if (!originalText || originalText.trim() === "") {
-          console.log(`[Polish-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
-          console.log(`${'='.repeat(60)}`);
-          console.log(`[Polish-Base64] END REQUEST (EMPTY TRANSCRIPTION)`);
-          console.log(`${'='.repeat(60)}\n`);
-          return res.status(400).json({ 
-            error: "Could not transcribe audio. Please try speaking more clearly.",
-            serverRequestId,
-          });
-        }
+      const audioBuffer = Buffer.from(audio, 'base64');
+      
+      // Generate SHA-256 hash for unique audio identification
+      const audioHash = generateAudioHash(audioBuffer);
+      const userId = req.jwtUser?.userId || 'anonymous';
+      
+      console.log(`[Polish-Base64] ---- AUDIO HASH VERIFICATION ----`);
+      console.log(`[Polish-Base64] Audio SHA-256 hash: ${audioHash}`);
+      console.log(`[Polish-Base64] User ID: ${userId}`);
+      
+      // Check for duplicate audio (same hash sent recently)
+      const existingEntry = recentAudioHashes.get(audioHash);
+      if (existingEntry) {
+        const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
+        console.log(`[Polish-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
+        console.log(`[Polish-Base64] Same audio was sent ${ageSeconds}s ago`);
+        console.log(`[Polish-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
+        // Don't return cached result - process fresh but log the duplicate
       } else {
-        return res.status(400).json({
-          error: "Either audio or originalText must be provided",
+        console.log(`[Polish-Base64] New unique audio (not seen in last 60s)`);
+      }
+      
+      // Generate checksum for audio verification (from base64, same as client)
+      let base64Checksum = 0;
+      const sample = audio.substring(0, Math.min(1000, audio.length));
+      for (let i = 0; i < sample.length; i++) {
+        base64Checksum = (base64Checksum + sample.charCodeAt(i)) % 65536;
+      }
+      
+      // Also generate checksum from buffer for extra verification
+      let bufferChecksum = 0;
+      for (let i = 0; i < Math.min(audioBuffer.length, 1000); i++) {
+        bufferChecksum = (bufferChecksum + audioBuffer[i]) % 65536;
+      }
+      
+      // Verify checksum matches client
+      const checksumMatch = clientChecksum !== undefined ? (clientChecksum === base64Checksum) : 'N/A';
+      console.log(`[Polish-Base64] ---- CHECKSUM VERIFICATION ----`);
+      console.log(`[Polish-Base64] Client checksum: ${clientChecksum || 'not provided'}`);
+      console.log(`[Polish-Base64] Server base64 checksum: ${base64Checksum}`);
+      console.log(`[Polish-Base64] Server buffer checksum: ${bufferChecksum}`);
+      console.log(`[Polish-Base64] Checksum match: ${checksumMatch}`);
+      
+      // Generate audio fingerprint for verification
+      const audioFirst100 = audio.substring(0, 100);
+      const audioLast50 = audio.substring(audio.length - 50);
+      
+      console.log(`[Polish-Base64] ---- AUDIO DETAILS ----`);
+      console.log(`[Polish-Base64] Base64 length: ${audio.length} chars`);
+      console.log(`[Polish-Base64] Buffer size: ${audioBuffer.length} bytes`);
+      console.log(`[Polish-Base64] MIME type: ${effectiveMimeType}`);
+      console.log(`[Polish-Base64] Base64 START: ${audioFirst100}`);
+      console.log(`[Polish-Base64] Base64 END: ${audioLast50}`);
+      
+      // Verify audio buffer integrity with hex dump
+      const bufferFirst32 = audioBuffer.slice(0, 32).toString('hex');
+      const bufferLast32 = audioBuffer.slice(-32).toString('hex');
+      console.log(`[Polish-Base64] HEX first 32 bytes: ${bufferFirst32}`);
+      console.log(`[Polish-Base64] HEX last 32 bytes: ${bufferLast32}`);
+      
+      // Check for M4A/MP4 signature (ftyp)
+      const hasFtyp = bufferFirst32.includes('66747970');
+      console.log(`[Polish-Base64] Has M4A/MP4 ftyp header: ${hasFtyp}`);
+      
+      console.log(`[Polish-Base64] ---- SETTINGS ----`);
+      console.log(`[Polish-Base64] Language: ${language}`);
+      console.log(`[Polish-Base64] Output Format: ${outputFormat}`);
+      console.log(`[Polish-Base64] Output Type: ${outputType}`);
+
+      console.log(`[Polish-Base64] ---- TRANSCRIPTION ----`);
+      console.log(`[Polish-Base64] Calling Gemini transcribeAudio...`);
+      const transcribeStart = Date.now();
+      const originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
+      const transcribeTime = Date.now() - transcribeStart;
+      
+      console.log(`[Polish-Base64] Transcription time: ${transcribeTime}ms`);
+      console.log(`[Polish-Base64] Transcribed length: ${originalText.length} chars`);
+      console.log(`[Polish-Base64] TRANSCRIBED TEXT: "${originalText}"`);
+
+      if (!originalText || originalText.trim() === "") {
+        console.log(`[Polish-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+        console.log(`${'='.repeat(60)}`);
+        console.log(`[Polish-Base64] END REQUEST (EMPTY TRANSCRIPTION)`);
+        console.log(`${'='.repeat(60)}\n`);
+        return res.status(400).json({ 
+          error: "Could not transcribe audio. Please try speaking more clearly.",
           serverRequestId,
         });
       }
@@ -527,16 +485,13 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      // Store audio hash for duplicate detection (only if audio was provided)
-      if (audioHash) {
-        const hashUserId = req.jwtUser?.userId || 'anonymous';
-        recentAudioHashes.set(audioHash, {
-          timestamp: Date.now(),
-          result: polishedText,
-          userId: hashUserId,
-        });
-        console.log(`[Polish-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
-      }
+      // Store audio hash for duplicate detection
+      recentAudioHashes.set(audioHash, {
+        timestamp: Date.now(),
+        result: polishedText,
+        userId,
+      });
+      console.log(`[Polish-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
 
       console.log(`[Polish-Base64] ---- RESULT ----`);
       console.log(`[Polish-Base64] Saved to storage with ID: ${translation.id}`);
@@ -583,9 +538,7 @@ export async function registerRoutes(
       }
 
       const base64Schema = z.object({
-        audio: z.string().optional(), // Made optional for text-only requests
-        originalText: z.string().optional(), // For text-only re-translate requests
-        isTextOnly: z.boolean().optional(), // Flag to indicate text-only mode
+        audio: z.string().min(1, "Audio data is required"),
         sourceLanguage: z.string(),
         targetLanguage: z.string(),
         outputFormat: z.string(),
@@ -594,16 +547,7 @@ export async function registerRoutes(
         clientRequestId: z.string().optional(), // Track client request ID if provided
         requestId: z.string().optional(), // Alternative name for client request ID
         clientChecksum: z.number().optional(), // Checksum from client for verification
-      }).refine(
-        (data) => {
-          // Either audio OR originalText must be provided
-          return data.audio || data.originalText;
-        },
-        {
-          message: "Either audio or originalText must be provided",
-        }
-      );
-	  
+      });
 
       const parseResult = base64Schema.safeParse(req.body);
       if (!parseResult.success) {
@@ -614,102 +558,68 @@ export async function registerRoutes(
         });
       }
 
-      const { 
-        audio, 
-        originalText: providedOriginalText,
-        isTextOnly,
-        sourceLanguage, 
-        targetLanguage, 
-        outputFormat, 
-        mimeType: bodyMimeType, 
-        clientRequestId,
-        requestId,
-        clientChecksum 
-      } = parseResult.data;
+      const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType: bodyMimeType, clientRequestId } = parseResult.data;
 
-      console.log(`[Translate-Base64] Request type: ${isTextOnly ? 'TEXT-ONLY' : 'AUDIO'}`);
+      // Determine MIME type: URL format param takes priority, then body mimeType, then default
+      const effectiveMimeType = formatParam 
+        ? getMimeTypeFromFormat(formatParam) 
+        : bodyMimeType;
 
-      let originalText: string;
-      let audioHash: string | null = null;
+      // Log client request ID if provided
+      if (clientRequestId) {
+        console.log(`[Translate-Base64] Client Request ID: ${clientRequestId}`);
+      }
 
-      if (isTextOnly && providedOriginalText) {
-        // TEXT-ONLY MODE: Skip transcription, use provided text
-        console.log(`[Translate-Base64] ---- TEXT-ONLY MODE ----`);
-        console.log(`[Translate-Base64] Skipping audio transcription`);
-        console.log(`[Translate-Base64] Using provided text: "${providedOriginalText}"`);
-        originalText = providedOriginalText;
-        
-      } else if (audio) {
-        // AUDIO MODE: Original behavior - transcribe audio
-        console.log(`[Translate-Base64] ---- AUDIO MODE ----`);
-        
-        // Determine MIME type: URL format param takes priority, then body mimeType, then default
-        const effectiveMimeType = formatParam 
-          ? getMimeTypeFromFormat(formatParam) 
-          : bodyMimeType;
-
-        // Log client request ID if provided
-        const clientReqId = clientRequestId || requestId;
-        if (clientReqId) {
-          console.log(`[Translate-Base64] Client Request ID: ${clientReqId}`);
-        }
-
-        const audioBuffer = Buffer.from(audio, 'base64');
-        
-        // Generate SHA-256 hash for unique audio identification
-        audioHash = generateAudioHash(audioBuffer);
-        const userId = req.jwtUser?.userId || 'anonymous';
-        
-        console.log(`[Translate-Base64] ---- AUDIO HASH VERIFICATION ----`);
-        console.log(`[Translate-Base64] Audio SHA-256 hash: ${audioHash}`);
-        console.log(`[Translate-Base64] User ID: ${userId}`);
-        
-        // Check for duplicate audio (same hash sent recently)
-        const existingEntry = recentAudioHashes.get(audioHash);
-        if (existingEntry) {
-          const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
-          console.log(`[Translate-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
-          console.log(`[Translate-Base64] Same audio was sent ${ageSeconds}s ago`);
-          console.log(`[Translate-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
-        } else {
-          console.log(`[Translate-Base64] New unique audio (not seen in last 60s)`);
-        }
-        
-        // Generate audio fingerprint for verification
-        const audioFirst100 = audio.substring(0, 100);
-        const audioLast50 = audio.substring(audio.length - 50);
-        
-        console.log(`[Translate-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
-        console.log(`[Translate-Base64] Audio fingerprint start: ${audioFirst100}`);
-        console.log(`[Translate-Base64] Audio fingerprint end: ${audioLast50}`);
-        console.log(`[Translate-Base64] Body mimeType: ${bodyMimeType}`);
-        console.log(`[Translate-Base64] Effective MIME type: ${effectiveMimeType}`);
-        console.log(`[Translate-Base64] Source: ${sourceLanguage}, Target: ${targetLanguage}, Format: ${outputFormat}`);
-        
-        // Verify audio buffer integrity
-        const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
-        const bufferLast20 = audioBuffer.slice(-20).toString('hex');
-        console.log(`[Translate-Base64] Buffer HEX start: ${bufferFirst20}`);
-        console.log(`[Translate-Base64] Buffer HEX end: ${bufferLast20}`);
-
-        console.log(`[Translate-Base64] Calling Gemini transcribeAudio...`);
-        const transcribeStart = Date.now();
-        originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
-        const transcribeTime = Date.now() - transcribeStart;
-        
-        console.log(`[Translate-Base64] Transcription completed in ${transcribeTime}ms`);
-        console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
-
-        if (!originalText || originalText.trim() === "") {
-          console.log(`[Translate-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
-          return res.status(400).json({ 
-            error: "Could not transcribe audio. Please try speaking more clearly.",
-            serverRequestId,
-          });
-        }
+      const audioBuffer = Buffer.from(audio, 'base64');
+      
+      // Generate SHA-256 hash for unique audio identification
+      const audioHash = generateAudioHash(audioBuffer);
+      const userId = req.jwtUser?.userId || 'anonymous';
+      
+      console.log(`[Translate-Base64] ---- AUDIO HASH VERIFICATION ----`);
+      console.log(`[Translate-Base64] Audio SHA-256 hash: ${audioHash}`);
+      console.log(`[Translate-Base64] User ID: ${userId}`);
+      
+      // Check for duplicate audio (same hash sent recently)
+      const existingEntry = recentAudioHashes.get(audioHash);
+      if (existingEntry) {
+        const ageSeconds = Math.round((Date.now() - existingEntry.timestamp) / 1000);
+        console.log(`[Translate-Base64] WARNING: DUPLICATE AUDIO DETECTED!`);
+        console.log(`[Translate-Base64] Same audio was sent ${ageSeconds}s ago`);
+        console.log(`[Translate-Base64] Previous result: "${existingEntry.result.substring(0, 100)}..."`);
       } else {
-        return res.status(400).json({
-          error: "Either audio or originalText must be provided",
+        console.log(`[Translate-Base64] New unique audio (not seen in last 60s)`);
+      }
+      
+      // Generate audio fingerprint for verification
+      const audioFirst100 = audio.substring(0, 100);
+      const audioLast50 = audio.substring(audio.length - 50);
+      
+      console.log(`[Translate-Base64] Audio size: ${audio.length} chars (base64), ${audioBuffer.length} bytes (buffer)`);
+      console.log(`[Translate-Base64] Audio fingerprint start: ${audioFirst100}`);
+      console.log(`[Translate-Base64] Audio fingerprint end: ${audioLast50}`);
+      console.log(`[Translate-Base64] Body mimeType: ${bodyMimeType}`);
+      console.log(`[Translate-Base64] Effective MIME type: ${effectiveMimeType}`);
+      console.log(`[Translate-Base64] Source: ${sourceLanguage}, Target: ${targetLanguage}, Format: ${outputFormat}`);
+      
+      // Verify audio buffer integrity
+      const bufferFirst20 = audioBuffer.slice(0, 20).toString('hex');
+      const bufferLast20 = audioBuffer.slice(-20).toString('hex');
+      console.log(`[Translate-Base64] Buffer HEX start: ${bufferFirst20}`);
+      console.log(`[Translate-Base64] Buffer HEX end: ${bufferLast20}`);
+
+      console.log(`[Translate-Base64] Calling Gemini transcribeAudio...`);
+      const transcribeStart = Date.now();
+      const originalText = await transcribeAudio(audioBuffer, effectiveMimeType);
+      const transcribeTime = Date.now() - transcribeStart;
+      
+      console.log(`[Translate-Base64] Transcription completed in ${transcribeTime}ms`);
+      console.log(`[Translate-Base64] Transcribed text (${originalText.length} chars): "${originalText}"`);
+
+      if (!originalText || originalText.trim() === "") {
+        console.log(`[Translate-Base64] ERROR: Empty transcription for request ${serverRequestId}`);
+        return res.status(400).json({ 
+          error: "Could not transcribe audio. Please try speaking more clearly.",
           serverRequestId,
         });
       }
@@ -736,16 +646,13 @@ export async function registerRoutes(
         outputFormat,
       });
 
-      // Store audio hash for duplicate detection (only if audio was provided)
-      if (audioHash) {
-        const hashUserId = req.jwtUser?.userId || 'anonymous';
-        recentAudioHashes.set(audioHash, {
-          timestamp: Date.now(),
-          result: polishedText,
-          userId: hashUserId,
-        });
-        console.log(`[Translate-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
-      }
+      // Store audio hash for duplicate detection
+      recentAudioHashes.set(audioHash, {
+        timestamp: Date.now(),
+        result: polishedText,
+        userId,
+      });
+      console.log(`[Translate-Base64] Stored audio hash: ${audioHash} for duplicate detection`);
 
       console.log(`[Translate-Base64] Request ${serverRequestId} completed successfully`);
       console.log(`========== [Translate-Base64] END REQUEST ==========\n`);
@@ -1162,6 +1069,492 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("Delete saved text error:", error);
       res.status(500).json({ error: "Failed to delete saved text" });
+    }
+  });
+
+  // ============================================================
+  // MOBILE API ENDPOINTS - /api/v1/m/
+  // All mobile endpoints require JWT authentication
+  // ============================================================
+
+  // Mobile Auth: Login
+  app.post("/api/v1/m/auth/login", async (req, res) => {
+    try {
+      const loginSchema = z.object({
+        email: z.string().email("Valid email is required"),
+        password: z.string().min(1, "Password is required"),
+      });
+
+      const parseResult = loginSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { email, password } = parseResult.data;
+
+      // Find user by email
+      const user = await storage.getUserByEmail?.(email);
+      if (!user) {
+        return res.status(401).json({
+          success: false,
+          error: "Invalid email or password",
+        });
+      }
+
+      // Validate password
+      const isValidPassword = await storage.validatePassword?.(user, password);
+      if (!isValidPassword) {
+        return res.status(401).json({
+          success: false,
+          error: "Invalid email or password",
+        });
+      }
+
+      // Generate JWT token
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, username: user.username },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      res.json({
+        success: true,
+        token,
+        user: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Mobile] Login error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Login failed",
+      });
+    }
+  });
+
+  // Mobile Auth: Logout (client-side token removal, server just acknowledges)
+  app.post("/api/v1/m/auth/logout", (req, res) => {
+    res.json({
+      success: true,
+      message: "Logged out successfully",
+    });
+  });
+
+  // Mobile Auth: Verify token and get user info
+  app.get("/api/v1/m/auth/me", (req, res) => {
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        error: "Not authenticated",
+      });
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: req.jwtUser?.userId,
+        email: req.jwtUser?.email,
+        username: req.jwtUser?.username,
+      },
+    });
+  });
+
+  // Mobile: Transcribe audio to text (get original text)
+  app.post("/api/v1/m/transcribe", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      const schema = z.object({
+        audio: z.string().min(1, "Audio data is required"),
+        mimeType: z.string().optional().default("audio/mp4"),
+        language: z.string().optional().default("en"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { audio, mimeType, language } = parseResult.data;
+      const audioBuffer = Buffer.from(audio, 'base64');
+
+      console.log(`[Mobile Transcribe] User: ${userId}, Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}`);
+
+      const originalText = await transcribeAudio(audioBuffer, mimeType);
+
+      if (!originalText || originalText.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "Could not transcribe audio. Please try speaking more clearly.",
+        });
+      }
+
+      console.log(`[Mobile Transcribe] Success: "${originalText.substring(0, 100)}..."`);
+
+      res.json({
+        success: true,
+        originalText,
+        language,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Transcribe] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to transcribe audio",
+      });
+    }
+  });
+
+  // Mobile: Polish text
+  app.post("/api/v1/m/polish", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      const schema = z.object({
+        originalText: z.string().min(1, "Original text is required"),
+        language: z.string().optional().default("en"),
+        outputFormat: z.string().optional().default("paragraph"),
+        outputType: z.string().optional().default("general"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { originalText, language, outputFormat, outputType } = parseResult.data;
+
+      console.log(`[Mobile Polish] User: ${userId}, Text length: ${originalText.length}, Lang: ${language}`);
+
+      const polishedText = await polishText(originalText, language, outputFormat, outputType);
+
+      console.log(`[Mobile Polish] Success: "${polishedText.substring(0, 100)}..."`);
+
+      res.json({
+        success: true,
+        originalText,
+        polishedText,
+        language,
+        outputFormat,
+        outputType,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Polish] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to polish text",
+      });
+    }
+  });
+
+  // Mobile: Translate text
+  app.post("/api/v1/m/translate", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      const schema = z.object({
+        originalText: z.string().min(1, "Original text is required"),
+        sourceLanguage: z.string().optional().default("en"),
+        targetLanguage: z.string().min(1, "Target language is required"),
+        outputFormat: z.string().optional().default("paragraph"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { originalText, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+
+      console.log(`[Mobile Translate] User: ${userId}, ${sourceLanguage} -> ${targetLanguage}`);
+
+      const { translatedText, polishedText } = await translateAndPolish(
+        originalText,
+        sourceLanguage,
+        targetLanguage,
+        outputFormat
+      );
+
+      console.log(`[Mobile Translate] Success: "${translatedText.substring(0, 100)}..."`);
+
+      res.json({
+        success: true,
+        originalText,
+        translatedText,
+        polishedText,
+        sourceLanguage,
+        targetLanguage,
+        outputFormat,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Translate] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to translate text",
+      });
+    }
+  });
+
+  // Mobile: Save text to database
+  app.post("/api/v1/m/saved-texts", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      const schema = z.object({
+        type: z.enum(["polish", "translate"]),
+        originalText: z.string().min(1, "Original text is required"),
+        polishedText: z.string().min(1, "Polished text is required"),
+        translatedText: z.string().nullable().optional(),
+        sourceLanguage: z.string().min(1, "Source language is required"),
+        targetLanguage: z.string().nullable().optional(),
+        outputFormat: z.string().min(1, "Output format is required"),
+        outputType: z.string().nullable().optional(),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const savedText = await storage.createSavedText({
+        userId,
+        ...parseResult.data,
+      });
+
+      console.log(`[Mobile Save] User: ${userId}, Type: ${parseResult.data.type}, ID: ${savedText.id}`);
+
+      res.json({
+        success: true,
+        savedText,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Save] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to save text",
+      });
+    }
+  });
+
+  // Mobile: Get saved texts for logged user
+  app.get("/api/v1/m/saved-texts", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      const type = req.query.type as string | undefined;
+      const savedTexts = await storage.getSavedTextsByUser(userId, type);
+
+      res.json({
+        success: true,
+        savedTexts,
+        count: savedTexts.length,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Get Saved] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to get saved texts",
+      });
+    }
+  });
+
+  // Mobile: Get single saved text by ID
+  app.get("/api/v1/m/saved-texts/:id", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      const savedText = await storage.getSavedText(req.params.id);
+      
+      if (!savedText || savedText.userId !== userId) {
+        return res.status(404).json({
+          success: false,
+          error: "Saved text not found",
+        });
+      }
+
+      res.json({
+        success: true,
+        savedText,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Get Single] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to get saved text",
+      });
+    }
+  });
+
+  // Mobile: Update saved text by ID
+  app.put("/api/v1/m/saved-texts/:id", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      const { id } = req.params;
+
+      const schema = z.object({
+        type: z.enum(["polish", "translate"]).optional(),
+        originalText: z.string().optional(),
+        polishedText: z.string().optional(),
+        translatedText: z.string().nullable().optional(),
+        sourceLanguage: z.string().optional(),
+        targetLanguage: z.string().nullable().optional(),
+        outputFormat: z.string().optional(),
+        outputType: z.string().nullable().optional(),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const updatedText = await storage.updateSavedText(id, userId, parseResult.data);
+
+      if (!updatedText) {
+        return res.status(404).json({
+          success: false,
+          error: "Saved text not found or you do not have permission to edit it",
+        });
+      }
+
+      console.log(`[Mobile Update] User: ${userId}, ID: ${id}`);
+
+      res.json({
+        success: true,
+        savedText: updatedText,
+      });
+    } catch (error: any) {
+      console.error("[Mobile Update] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to update saved text",
+      });
+    }
+  });
+
+  // Mobile: Delete saved text by ID
+  app.delete("/api/v1/m/saved-texts/:id", async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      if (!userId) {
+        return res.status(401).json({
+          success: false,
+          error: "Not authenticated",
+        });
+      }
+
+      const deleted = await storage.deleteSavedText(req.params.id, userId);
+
+      if (!deleted) {
+        return res.status(404).json({
+          success: false,
+          error: "Saved text not found",
+        });
+      }
+
+      console.log(`[Mobile Delete] User: ${userId}, ID: ${req.params.id}`);
+
+      res.json({
+        success: true,
+        message: "Saved text deleted",
+      });
+    } catch (error: any) {
+      console.error("[Mobile Delete] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to delete saved text",
+      });
     }
   });
 
