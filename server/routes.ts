@@ -1077,11 +1077,50 @@ export async function registerRoutes(
   // All mobile endpoints require JWT authentication
   // ============================================================
 
-  // Mobile Auth: Login
+  // Mobile JWT middleware - validates token and checks expiry (used for all mobile endpoints except login)
+  function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+      return res.status(401).json({
+        success: false,
+        error: "Authentication required. Please provide a valid token.",
+      });
+    }
+
+    const token = authHeader.substring(7);
+    try {
+      const decoded = jwt.verify(token, JWT_SECRET) as unknown as { userId: string; username: string; email?: string; exp?: number };
+      req.jwtUser = decoded;
+      
+      // Check if token is expired (jwt.verify already does this, but we log it)
+      if (decoded.exp && decoded.exp * 1000 < Date.now()) {
+        return res.status(401).json({
+          success: false,
+          error: "Token has expired. Please login again.",
+        });
+      }
+      
+      next();
+    } catch (err: any) {
+      if (err.name === 'TokenExpiredError') {
+        return res.status(401).json({
+          success: false,
+          error: "Token has expired. Please login again.",
+        });
+      }
+      return res.status(401).json({
+        success: false,
+        error: "Invalid token. Please login again.",
+      });
+    }
+  }
+
+  // Mobile Auth: Login (accepts username OR email)
   app.post("/api/v1/m/auth/login", async (req, res) => {
     try {
       const loginSchema = z.object({
-        email: z.string().email("Valid email is required"),
+        identifier: z.string().min(1, "Username or email is required"),
         password: z.string().min(1, "Password is required"),
       });
 
@@ -1094,14 +1133,22 @@ export async function registerRoutes(
         });
       }
 
-      const { email, password } = parseResult.data;
+      const { identifier, password } = parseResult.data;
 
-      // Find user by email
-      const user = await storage.getUserByEmail?.(email);
+      // Check if identifier is email or username
+      const isEmail = identifier.includes('@');
+      let user;
+      
+      if (isEmail) {
+        user = await storage.getUserByEmail?.(identifier);
+      } else {
+        user = await storage.getUserByUsername(identifier);
+      }
+      
       if (!user) {
         return res.status(401).json({
           success: false,
-          error: "Invalid email or password",
+          error: "Invalid credentials",
         });
       }
 
@@ -1110,20 +1157,23 @@ export async function registerRoutes(
       if (!isValidPassword) {
         return res.status(401).json({
           success: false,
-          error: "Invalid email or password",
+          error: "Invalid credentials",
         });
       }
 
-      // Generate JWT token
+      // Generate JWT token (valid for 7 days)
       const token = jwt.sign(
         { userId: user.id, email: user.email, username: user.username },
         JWT_SECRET,
         { expiresIn: "7d" }
       );
 
+      console.log(`[Mobile Login] User ${user.username} logged in successfully`);
+
       res.json({
         success: true,
         token,
+        expiresIn: 7 * 24 * 60 * 60, // 7 days in seconds
         user: {
           id: user.id,
           email: user.email,
@@ -1140,7 +1190,7 @@ export async function registerRoutes(
   });
 
   // Mobile Auth: Logout (client-side token removal, server just acknowledges)
-  app.post("/api/v1/m/auth/logout", (req, res) => {
+  app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
     res.json({
       success: true,
       message: "Logged out successfully",
@@ -1148,15 +1198,7 @@ export async function registerRoutes(
   });
 
   // Mobile Auth: Verify token and get user info
-  app.get("/api/v1/m/auth/me", (req, res) => {
-    const userId = getUserId(req);
-    if (!userId) {
-      return res.status(401).json({
-        success: false,
-        error: "Not authenticated",
-      });
-    }
-
+  app.get("/api/v1/m/auth/me", mobileAuthMiddleware, (req, res) => {
     res.json({
       success: true,
       user: {
@@ -1168,15 +1210,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Transcribe audio to text (get original text)
-  app.post("/api/v1/m/transcribe", async (req, res) => {
+  app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId;
 
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
@@ -1231,15 +1267,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Polish text
-  app.post("/api/v1/m/polish", async (req, res) => {
+  app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId;
 
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
@@ -1290,15 +1320,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Translate text
-  app.post("/api/v1/m/translate", async (req, res) => {
+  app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId;
 
       if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY || !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
         return res.status(500).json({
@@ -1355,15 +1379,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Save text to database
-  app.post("/api/v1/m/saved-texts", async (req, res) => {
+  app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId!;
 
       const schema = z.object({
         type: z.enum(["polish", "translate"]),
@@ -1406,15 +1424,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Get saved texts for logged user
-  app.get("/api/v1/m/saved-texts", async (req, res) => {
+  app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId!;
 
       const type = req.query.type as string | undefined;
       const savedTexts = await storage.getSavedTextsByUser(userId, type);
@@ -1434,15 +1446,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Get single saved text by ID
-  app.get("/api/v1/m/saved-texts/:id", async (req, res) => {
+  app.get("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId!;
 
       const savedText = await storage.getSavedText(req.params.id);
       
@@ -1467,15 +1473,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Update saved text by ID
-  app.put("/api/v1/m/saved-texts/:id", async (req, res) => {
+  app.put("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId!;
 
       const { id } = req.params;
 
@@ -1524,15 +1524,9 @@ export async function registerRoutes(
   });
 
   // Mobile: Delete saved text by ID
-  app.delete("/api/v1/m/saved-texts/:id", async (req, res) => {
+  app.delete("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
     try {
-      const userId = getUserId(req);
-      if (!userId) {
-        return res.status(401).json({
-          success: false,
-          error: "Not authenticated",
-        });
-      }
+      const userId = req.jwtUser?.userId!;
 
       const deleted = await storage.deleteSavedText(req.params.id, userId);
 
