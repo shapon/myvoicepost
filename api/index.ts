@@ -701,6 +701,492 @@ app.delete("/api/saved-texts/:id", async (req, res) => {
   }
 });
 
+// ============================================================
+// MOBILE API ENDPOINTS - /api/v1/m/
+// ============================================================
+
+// Mobile JWT middleware
+function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    return res.status(401).json({
+      success: false,
+      error: "Authentication required. Please provide a valid token.",
+    });
+  }
+
+  const token = authHeader.substring(7);
+  try {
+    const decoded = jwt.verify(token, JWT_SECRET) as any;
+    (req as any).jwtUser = decoded;
+    
+    if (decoded.exp && decoded.exp * 1000 < Date.now()) {
+      return res.status(401).json({
+        success: false,
+        error: "Token has expired. Please login again.",
+      });
+    }
+    
+    next();
+  } catch (err: any) {
+    if (err.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        error: "Token has expired. Please login again.",
+      });
+    }
+    return res.status(401).json({
+      success: false,
+      error: "Invalid token. Please login again.",
+    });
+  }
+}
+
+// Mobile Auth: Login (accepts username OR email)
+app.post("/api/v1/m/auth/login", async (req, res) => {
+  try {
+    const loginSchema = z.object({
+      identifier: z.string().min(1, "Username or email is required"),
+      password: z.string().min(1, "Password is required"),
+    });
+
+    const parseResult = loginSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { identifier, password } = parseResult.data;
+    const isEmail = identifier.includes('@');
+    
+    let result;
+    if (isEmail) {
+      result = await db.select().from(users).where(eq(users.email, identifier)).limit(1);
+    } else {
+      result = await db.select().from(users).where(eq(users.username, identifier)).limit(1);
+    }
+    
+    const user = result[0];
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid credentials",
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!isValidPassword) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid credentials",
+      });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, username: user.username },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    console.log(`[Mobile Login] User ${user.username} logged in successfully`);
+
+    res.json({
+      success: true,
+      token,
+      expiresIn: 7 * 24 * 60 * 60,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Mobile] Login error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Login failed",
+    });
+  }
+});
+
+// Mobile Auth: Logout
+app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
+  res.json({
+    success: true,
+    message: "Logged out successfully",
+  });
+});
+
+// Mobile Auth: Get current user
+app.get("/api/v1/m/auth/me", mobileAuthMiddleware, (req, res) => {
+  const jwtUser = (req as any).jwtUser;
+  res.json({
+    success: true,
+    user: {
+      id: jwtUser?.userId,
+      email: jwtUser?.email,
+      username: jwtUser?.username,
+    },
+  });
+});
+
+// Mobile: Transcribe audio
+app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      audio: z.string().min(1, "Audio data is required"),
+      mimeType: z.string().optional().default("audio/mp4"),
+      language: z.string().optional().default("en"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { audio, mimeType, language } = parseResult.data;
+    const audioBuffer = Buffer.from(audio, 'base64');
+
+    const originalText = await transcribeAudio(audioBuffer, mimeType);
+
+    if (!originalText || originalText.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        error: "Could not transcribe audio. Please try speaking more clearly.",
+      });
+    }
+
+    res.json({
+      success: true,
+      originalText,
+      language,
+    });
+  } catch (error: any) {
+    console.error("[Mobile Transcribe] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to transcribe audio",
+    });
+  }
+});
+
+// Mobile: Polish text
+app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      text: z.string().min(1, "Text is required"),
+      language: z.string().optional().default("en"),
+      outputFormat: z.string().optional().default("professional"),
+      outputType: z.string().optional().default("message"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { text, language, outputFormat, outputType } = parseResult.data;
+    const polishedText = await polishText(text, language, outputFormat, outputType);
+
+    res.json({
+      success: true,
+      originalText: text,
+      polishedText,
+      language,
+      outputFormat,
+      outputType,
+    });
+  } catch (error: any) {
+    console.error("[Mobile Polish] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to polish text",
+    });
+  }
+});
+
+// Mobile: Translate text
+app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      text: z.string().min(1, "Text is required"),
+      sourceLanguage: z.string().min(1, "Source language is required"),
+      targetLanguage: z.string().min(1, "Target language is required"),
+      outputFormat: z.string().optional().default("professional"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { text, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+    const result = await translateAndPolish(text, sourceLanguage, targetLanguage, outputFormat);
+
+    res.json({
+      success: true,
+      originalText: text,
+      translatedText: result.translatedText,
+      polishedText: result.polishedText,
+      sourceLanguage,
+      targetLanguage,
+      outputFormat,
+    });
+  } catch (error: any) {
+    console.error("[Mobile Translate] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to translate text",
+    });
+  }
+});
+
+// Mobile: Save text
+app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId;
+
+    const schema = z.object({
+      type: z.enum(["polish", "translate"]),
+      originalText: z.string().min(1),
+      polishedText: z.string().min(1),
+      translatedText: z.string().nullable().optional(),
+      sourceLanguage: z.string().min(1),
+      targetLanguage: z.string().nullable().optional(),
+      outputFormat: z.string().min(1),
+      outputType: z.string().nullable().optional(),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const data = parseResult.data;
+    const result = await db.insert(savedTexts).values({
+      userId,
+      type: data.type,
+      originalText: data.originalText,
+      polishedText: data.polishedText,
+      translatedText: data.translatedText || null,
+      sourceLanguage: data.sourceLanguage,
+      targetLanguage: data.targetLanguage || null,
+      outputFormat: data.outputFormat,
+      outputType: data.outputType || null,
+    }).returning();
+
+    res.json({
+      success: true,
+      savedText: result[0],
+    });
+  } catch (error: any) {
+    console.error("[Mobile Save] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to save text",
+    });
+  }
+});
+
+// Mobile: Get saved texts
+app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId;
+    const type = req.query.type as string | undefined;
+
+    let result;
+    if (type) {
+      result = await db.select().from(savedTexts)
+        .where(and(eq(savedTexts.userId, userId), eq(savedTexts.type, type)))
+        .orderBy(desc(savedTexts.createdAt));
+    } else {
+      result = await db.select().from(savedTexts)
+        .where(eq(savedTexts.userId, userId))
+        .orderBy(desc(savedTexts.createdAt));
+    }
+
+    res.json({
+      success: true,
+      savedTexts: result,
+      count: result.length,
+    });
+  } catch (error: any) {
+    console.error("[Mobile Get Saved] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch saved texts",
+    });
+  }
+});
+
+// Mobile: Get single saved text
+app.get("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId;
+
+    const result = await db.select().from(savedTexts)
+      .where(and(eq(savedTexts.id, req.params.id), eq(savedTexts.userId, userId)));
+
+    if (result.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Saved text not found",
+      });
+    }
+
+    res.json({
+      success: true,
+      savedText: result[0],
+    });
+  } catch (error: any) {
+    console.error("[Mobile Get Single] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to fetch saved text",
+    });
+  }
+});
+
+// Mobile: Update saved text
+app.put("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId;
+    const { id } = req.params;
+
+    const existing = await db.select().from(savedTexts)
+      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)));
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Saved text not found",
+      });
+    }
+
+    const schema = z.object({
+      type: z.enum(["polish", "translate"]).optional(),
+      originalText: z.string().optional(),
+      polishedText: z.string().optional(),
+      translatedText: z.string().nullable().optional(),
+      sourceLanguage: z.string().optional(),
+      targetLanguage: z.string().nullable().optional(),
+      outputFormat: z.string().optional(),
+      outputType: z.string().nullable().optional(),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+      });
+    }
+
+    const updates: any = {};
+    const data = parseResult.data;
+    if (data.type) updates.type = data.type;
+    if (data.originalText) updates.originalText = data.originalText;
+    if (data.polishedText) updates.polishedText = data.polishedText;
+    if (data.translatedText !== undefined) updates.translatedText = data.translatedText;
+    if (data.sourceLanguage) updates.sourceLanguage = data.sourceLanguage;
+    if (data.targetLanguage !== undefined) updates.targetLanguage = data.targetLanguage;
+    if (data.outputFormat) updates.outputFormat = data.outputFormat;
+    if (data.outputType !== undefined) updates.outputType = data.outputType;
+
+    const result = await db.update(savedTexts)
+      .set(updates)
+      .where(eq(savedTexts.id, id))
+      .returning();
+
+    res.json({
+      success: true,
+      savedText: result[0],
+    });
+  } catch (error: any) {
+    console.error("[Mobile Update] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to update saved text",
+    });
+  }
+});
+
+// Mobile: Delete saved text
+app.delete("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId;
+
+    const existing = await db.select().from(savedTexts)
+      .where(and(eq(savedTexts.id, req.params.id), eq(savedTexts.userId, userId)));
+
+    if (existing.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: "Saved text not found",
+      });
+    }
+
+    await db.delete(savedTexts).where(eq(savedTexts.id, req.params.id));
+
+    res.json({
+      success: true,
+      message: "Saved text deleted successfully",
+    });
+  } catch (error: any) {
+    console.error("[Mobile Delete] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to delete saved text",
+    });
+  }
+});
+
 // Error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error("Error:", err);
