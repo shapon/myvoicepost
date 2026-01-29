@@ -702,6 +702,155 @@ app.delete("/api/saved-texts/:id", async (req, res) => {
 });
 
 // ============================================================
+// PUBLIC API ENDPOINTS - /api/v1/p/
+// No authentication required
+// ============================================================
+
+// Public: Transcribe audio to text
+app.post("/api/v1/p/transcribe", async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      audio: z.string().min(1, "Audio data is required"),
+      mimeType: z.string().optional().default("audio/mp4"),
+      language: z.string().optional().default("en"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { audio, mimeType, language } = parseResult.data;
+    const audioBuffer = Buffer.from(audio, 'base64');
+
+    const originalText = await transcribeAudio(audioBuffer, mimeType);
+
+    if (!originalText || originalText.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        error: "Could not transcribe audio. Please try speaking more clearly.",
+      });
+    }
+
+    res.json({
+      success: true,
+      originalText,
+      language,
+    });
+  } catch (error: any) {
+    console.error("[Public Transcribe] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to transcribe audio",
+    });
+  }
+});
+
+// Public: Polish text
+app.post("/api/v1/p/polish", async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      text: z.string().min(1, "Text is required"),
+      language: z.string().optional().default("en"),
+      outputFormat: z.string().optional().default("professional"),
+      outputType: z.string().optional().default("message"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { text, language, outputFormat, outputType } = parseResult.data;
+    const polishedText = await polishText(text, language, outputFormat, outputType);
+
+    res.json({
+      success: true,
+      originalText: text,
+      polishedText,
+      language,
+      outputFormat,
+      outputType,
+    });
+  } catch (error: any) {
+    console.error("[Public Polish] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to polish text",
+    });
+  }
+});
+
+// Public: Translate text
+app.post("/api/v1/p/translate", async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      text: z.string().min(1, "Text is required"),
+      sourceLanguage: z.string().min(1, "Source language is required"),
+      targetLanguage: z.string().min(1, "Target language is required"),
+      outputFormat: z.string().optional().default("professional"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { text, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+    const result = await translateAndPolish(text, sourceLanguage, targetLanguage, outputFormat);
+
+    res.json({
+      success: true,
+      originalText: text,
+      translatedText: result.translatedText,
+      polishedText: result.polishedText,
+      sourceLanguage,
+      targetLanguage,
+      outputFormat,
+    });
+  } catch (error: any) {
+    console.error("[Public Translate] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to translate text",
+    });
+  }
+});
+
+// ============================================================
 // MOBILE API ENDPOINTS - /api/v1/m/
 // ============================================================
 
