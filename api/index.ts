@@ -813,6 +813,87 @@ app.post("/api/v1/m/auth/login", async (req, res) => {
   }
 });
 
+// Mobile Auth: Signup
+app.post("/api/v1/m/auth/signup", async (req, res) => {
+  try {
+    const mobileSignupSchema = z.object({
+      username: z.string().min(3, "Username must be at least 3 characters"),
+      email: z.string().email("Valid email is required"),
+      password: z.string().min(6, "Password must be at least 6 characters"),
+      confirmPassword: z.string(),
+    }).refine((data) => data.password === data.confirmPassword, {
+      message: "Passwords don't match",
+      path: ["confirmPassword"],
+    });
+
+    const parseResult = mobileSignupSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { username, email, password } = parseResult.data;
+
+    // Check if username exists
+    const existingUser = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    if (existingUser.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "Username already exists",
+      });
+    }
+
+    // Check if email exists
+    const existingEmail = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    if (existingEmail.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "Email already exists",
+      });
+    }
+
+    // Create user
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await db.insert(users).values({
+      username,
+      email,
+      passwordHash: hashedPassword,
+    }).returning();
+
+    const user = result[0];
+
+    // Generate JWT token (valid for 7 days)
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, username: user.username },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    console.log(`[Mobile Signup] User ${user.username} created successfully`);
+
+    res.status(201).json({
+      success: true,
+      message: "Account created successfully",
+      token,
+      expiresIn: 7 * 24 * 60 * 60,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Mobile] Signup error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to create account",
+    });
+  }
+});
+
 // Mobile Auth: Logout
 app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
   res.json({

@@ -1189,6 +1189,80 @@ export async function registerRoutes(
     }
   });
 
+  // Mobile Auth: Signup
+  app.post("/api/v1/m/auth/signup", async (req, res) => {
+    try {
+      const signupSchema = z.object({
+        username: z.string().min(3, "Username must be at least 3 characters"),
+        email: z.string().email("Valid email is required"),
+        password: z.string().min(6, "Password must be at least 6 characters"),
+        confirmPassword: z.string(),
+      }).refine((data) => data.password === data.confirmPassword, {
+        message: "Passwords don't match",
+        path: ["confirmPassword"],
+      });
+
+      const parseResult = signupSchema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { username, email, password } = parseResult.data;
+
+      // Check if username exists
+      const existingUser = await storage.getUserByUsername(username);
+      if (existingUser) {
+        return res.status(409).json({
+          success: false,
+          error: "Username already exists",
+        });
+      }
+
+      // Check if email exists
+      const existingEmail = await storage.getUserByEmail?.(email);
+      if (existingEmail) {
+        return res.status(409).json({
+          success: false,
+          error: "Email already exists",
+        });
+      }
+
+      // Create user
+      const user = await storage.createUser({ username, email, password });
+
+      // Generate JWT token (valid for 3 days)
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, username: user.username },
+        JWT_SECRET,
+        { expiresIn: "3d" }
+      );
+
+      console.log(`[Mobile Signup] User ${user.username} created successfully`);
+
+      res.status(201).json({
+        success: true,
+        message: "Account created successfully",
+        token,
+        expiresIn: 3 * 24 * 60 * 60,
+        user: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Mobile] Signup error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to create account",
+      });
+    }
+  });
+
   // Mobile Auth: Logout (client-side token removal, server just acknowledges)
   app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
     res.json({
