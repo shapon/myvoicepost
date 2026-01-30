@@ -851,6 +851,156 @@ app.post("/api/v1/p/translate", async (req, res) => {
 });
 
 // ============================================================
+// PUBLIC AUTH ENDPOINTS - /api/v1/p/auth/
+// (No authentication required - for mobile app login/signup)
+// ============================================================
+
+// Public Auth: Login (accepts username OR email)
+app.post("/api/v1/p/auth/login", async (req, res) => {
+  try {
+    const loginSchema = z.object({
+      identifier: z.string().min(1, "Username or email is required"),
+      password: z.string().min(1, "Password is required"),
+    });
+
+    const parseResult = loginSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { identifier, password } = parseResult.data;
+    const isEmail = identifier.includes('@');
+    
+    let result;
+    if (isEmail) {
+      result = await db.select().from(users).where(eq(users.email, identifier)).limit(1);
+    } else {
+      result = await db.select().from(users).where(eq(users.username, identifier)).limit(1);
+    }
+    
+    const user = result[0];
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid credentials",
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!isValidPassword) {
+      return res.status(401).json({
+        success: false,
+        error: "Invalid credentials",
+      });
+    }
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, username: user.username },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    console.log(`[Public Login] User ${user.username} logged in successfully`);
+
+    res.json({
+      success: true,
+      token,
+      expiresIn: 7 * 24 * 60 * 60,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Public] Login error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Login failed",
+    });
+  }
+});
+
+// Public Auth: Signup
+app.post("/api/v1/p/auth/signup", async (req, res) => {
+  try {
+    const signupSchema = z.object({
+      username: z.string().min(3, "Username must be at least 3 characters"),
+      email: z.string().email("Valid email is required"),
+      password: z.string().min(6, "Password must be at least 6 characters"),
+      confirmPassword: z.string(),
+    }).refine((data) => data.password === data.confirmPassword, {
+      message: "Passwords don't match",
+      path: ["confirmPassword"],
+    });
+
+    const parseResult = signupSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { username, email, password } = parseResult.data;
+
+    const existingUser = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    if (existingUser.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "Username already exists",
+      });
+    }
+
+    const existingEmail = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    if (existingEmail.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: "Email already exists",
+      });
+    }
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const result = await db.insert(users).values({
+      username,
+      email,
+      passwordHash: hashedPassword,
+    }).returning();
+
+    const user = result[0];
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, username: user.username },
+      JWT_SECRET,
+      { expiresIn: "3d" }
+    );
+
+    console.log(`[Public Signup] User ${user.username} created successfully`);
+
+    res.status(201).json({
+      success: true,
+      token,
+      expiresIn: 3 * 24 * 60 * 60,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Public] Signup error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to create account",
+    });
+  }
+});
+
+// ============================================================
 // MOBILE API ENDPOINTS - /api/v1/m/
 // ============================================================
 
