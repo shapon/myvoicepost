@@ -10,10 +10,10 @@ const footerLinks = {
     { label: "Support", href: "#" },
   ],
   legal: [
-    { label: "Privacy Policy", href: "/privacy-policy", isRoute: true },
-    { label: "Terms of Service", href: "#" },
+    { label: "Privacy Policy", href: "/privacy", isRoute: true },
+    { label: "Terms of Service", href: "/terms", isRoute: true },
     { label: "Cookie Preferences", href: "#" },
-    { label: "Affiliate Program", href: "#" },
+    { label: "Affiliate Program", href: "/affiliate", isRoute: true },
   ],
   download: [
     { label: "iOS", href: "#" },
