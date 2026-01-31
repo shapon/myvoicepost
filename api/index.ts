@@ -132,6 +132,12 @@ function safeJsonParse(text: string, fallback: any = {}): any {
 }
 
 async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
+  // Validate audio buffer - must have reasonable size for actual audio
+  if (!audioBuffer || audioBuffer.length < 1000) {
+    console.error('[Transcribe] Invalid audio: buffer too small', audioBuffer?.length);
+    throw new Error('Invalid audio data - file too small');
+  }
+
   return pRetry(async () => {
     try {
       const response = await ai.models.generateContent({
@@ -139,12 +145,34 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<s
         contents: [{
           role: "user",
           parts: [
-            { text: "Please transcribe this audio accurately. Return only the transcribed text." },
+            { 
+              text: `You are a speech-to-text transcription system. Transcribe ONLY the actual spoken words from this audio recording.
+
+CRITICAL RULES:
+- ONLY transcribe words that are actually spoken in the audio
+- If the audio is silent, unclear, or contains no speech, respond with exactly: [NO_SPEECH_DETECTED]
+- Do NOT generate, invent, or make up any text
+- Do NOT describe the audio or add commentary
+- Return ONLY the exact words spoken, nothing else
+
+Transcribe the audio now:` 
+            },
             { inlineData: { mimeType, data: audioBuffer.toString("base64") } }
           ]
         }]
       });
-      return response.text || "";
+      
+      const transcribedText = response.text?.trim() || "";
+      
+      // Check for no speech detected
+      if (transcribedText === "[NO_SPEECH_DETECTED]" || 
+          transcribedText.includes("[NO_SPEECH_DETECTED]") ||
+          transcribedText === "") {
+        console.log('[Transcribe] No speech detected in audio');
+        throw new Error('No speech detected in the audio. Please try speaking more clearly.');
+      }
+      
+      return transcribedText;
     } catch (error: any) {
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
