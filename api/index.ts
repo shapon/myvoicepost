@@ -142,20 +142,26 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<s
     try {
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
+        config: {
+          temperature: 0,  // Make output deterministic - reduces hallucination
+          topK: 1,         // Only consider most likely token
+          topP: 1,         // No nucleus sampling
+        },
         contents: [{
           role: "user",
           parts: [
             { 
-              text: `You are a speech-to-text transcription system. Transcribe ONLY the actual spoken words from this audio recording.
+              text: `You are a precise speech-to-text transcription system. Your ONLY job is to transcribe the exact words spoken in this audio.
 
-CRITICAL RULES:
-- ONLY transcribe words that are actually spoken in the audio
-- If the audio is silent, unclear, or contains no speech, respond with exactly: [NO_SPEECH_DETECTED]
-- Do NOT generate, invent, or make up any text
-- Do NOT describe the audio or add commentary
-- Return ONLY the exact words spoken, nothing else
+STRICT RULES - FAILURE TO FOLLOW WILL RESULT IN ERROR:
+1. Listen carefully to the audio and transcribe ONLY the exact words spoken
+2. If you cannot clearly hear speech, respond with exactly: [NO_SPEECH_DETECTED]
+3. NEVER generate, invent, create, or imagine any text
+4. NEVER add words that were not spoken
+5. NEVER describe or summarize - just transcribe word-for-word
+6. If audio quality is poor, transcribe what you CAN hear, even if incomplete
 
-Transcribe the audio now:` 
+This is a transcription task, NOT a creative writing task. Output ONLY the spoken words:` 
             },
             { inlineData: { mimeType, data: audioBuffer.toString("base64") } }
           ]
