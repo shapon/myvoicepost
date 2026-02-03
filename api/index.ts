@@ -12,6 +12,10 @@ import { eq, and, desc } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
+import pLimit from "p-limit";
+
+// Concurrency limiter for AI requests - prevents rate limiting under high load
+const aiRequestLimiter = pLimit(5);
 
 // ============ DATABASE SCHEMA ============
 const users = pgTable("mvp_users", {
@@ -42,7 +46,13 @@ type SavedText = typeof savedTexts.$inferSelect;
 
 // ============ DATABASE CONNECTION ============
 const connectionString = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL!;
-const client = postgres(connectionString, { prepare: false });
+const client = postgres(connectionString, {
+  prepare: false,
+  max: 20,                    // Maximum pool size for high concurrency
+  idle_timeout: 20,           // Close idle connections after 20s
+  connect_timeout: 10,        // Connection timeout in seconds
+  max_lifetime: 60 * 30,      // Max connection lifetime (30 min)
+});
 const db = drizzle(client);
 
 // ============ JWT CONFIG ============
@@ -138,7 +148,8 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<s
     throw new Error('Invalid audio data - file too small');
   }
 
-  return pRetry(async () => {
+  // Use concurrency limiter to prevent overwhelming the AI API under high load
+  return aiRequestLimiter(() => pRetry(async () => {
     try {
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
@@ -183,7 +194,7 @@ This is a transcription task, NOT a creative writing task. Output ONLY the spoke
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
     }
-  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 });
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
 }
 
 async function polishText(text: string, language: string, outputFormat: string, outputType: string): Promise<string> {
@@ -191,7 +202,8 @@ async function polishText(text: string, language: string, outputFormat: string, 
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
   const typeGuide = outputTypeInstructions[outputType] || outputTypeInstructions.message;
 
-  return pRetry(async () => {
+  // Use concurrency limiter to prevent overwhelming the AI API under high load
+  return aiRequestLimiter(() => pRetry(async () => {
     try {
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
@@ -214,7 +226,7 @@ Text: ${text}`,
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
     }
-  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 });
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
 }
 
 async function translateAndPolish(text: string, sourceLanguage: string, targetLanguage: string, outputFormat: string) {
@@ -222,7 +234,8 @@ async function translateAndPolish(text: string, sourceLanguage: string, targetLa
   const targetLang = languageNames[targetLanguage] || targetLanguage;
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
 
-  return pRetry(async () => {
+  // Use concurrency limiter to prevent overwhelming the AI API under high load
+  return aiRequestLimiter(() => pRetry(async () => {
     try {
       if (sourceLanguage === targetLanguage) {
         const response = await ai.models.generateContent({
@@ -263,7 +276,7 @@ Text: ${text}`,
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
     }
-  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 });
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
 }
 
 // ============ VALIDATION SCHEMAS ============
@@ -295,7 +308,12 @@ const translateRequestSchema = z.object({
 });
 
 // ============ EXPRESS APP ============
+import compression from "compression";
+
 const app = express();
+
+// Performance: Enable gzip compression for responses
+app.use(compression());
 
 app.use(cors({
   origin: (origin, callback) => {

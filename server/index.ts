@@ -1,8 +1,14 @@
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
+import compression from "compression";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import {
+  aiRequestTimeout,
+  connectionManagement,
+  createRateLimiter
+} from "./middleware/performance";
 
 const app = express();
 const httpServer = createServer(app);
@@ -12,6 +18,18 @@ declare module "http" {
     rawBody: unknown;
   }
 }
+
+// Performance: Enable gzip compression for responses
+app.use(compression());
+
+// Performance: Connection management for keep-alive
+app.use(connectionManagement);
+
+// Performance: Rate limiting (100 requests per minute per IP)
+app.use('/api', createRateLimiter(60000, 100));
+
+// Performance: Request timeouts (longer for AI endpoints)
+app.use(aiRequestTimeout(120000));
 
 app.use(
   express.json({

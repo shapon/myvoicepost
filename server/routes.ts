@@ -29,17 +29,35 @@ function generateAudioHash(audioBuffer: Buffer): string {
     .substring(0, 16);
 }
 
-// Clean old hashes periodically
-setInterval(() => {
+// Clean old hashes periodically using non-blocking chunked iteration
+function cleanupOldHashes() {
   const now = Date.now();
   const entries = Array.from(recentAudioHashes.entries());
-  for (let i = 0; i < entries.length; i++) {
-    const [hash, data] = entries[i];
-    if (now - data.timestamp > HASH_CACHE_TTL) {
-      recentAudioHashes.delete(hash);
+  let index = 0;
+
+  const processChunk = () => {
+    const chunkSize = 50; // Process 50 entries at a time
+    const end = Math.min(index + chunkSize, entries.length);
+
+    for (let i = index; i < end; i++) {
+      const [hash, data] = entries[i];
+      if (now - data.timestamp > HASH_CACHE_TTL) {
+        recentAudioHashes.delete(hash);
+      }
     }
-  }
-}, 30000); // Clean every 30 seconds
+
+    index = end;
+    if (index < entries.length) {
+      // Defer next chunk to prevent blocking event loop
+      setImmediate(processChunk);
+    }
+  };
+
+  processChunk();
+}
+
+// Run cleanup every 30 seconds
+setInterval(cleanupOldHashes, 30000);
 
 // JWT configuration - JWT_SECRET is required for security
 const JWT_SECRET: string =
