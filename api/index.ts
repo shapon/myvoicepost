@@ -41,8 +41,19 @@ const savedTexts = pgTable("mvp_saved_texts", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+// Password reset tokens table
+const passwordResetTokens = pgTable("mvp_password_reset_tokens", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  token: varchar("token", { length: 255 }).notNull().unique(),
+  expiresAt: timestamp("expires_at").notNull(),
+  usedAt: timestamp("used_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
 type User = typeof users.$inferSelect;
 type SavedText = typeof savedTexts.$inferSelect;
+type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
 
 // ============ DATABASE CONNECTION ============
 const connectionString = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL!;
@@ -97,6 +108,44 @@ function getUserFromRequest(req: Request): JwtPayload | null {
   const payload = verifyToken(token);
   console.log("[Auth] Token verification result:", payload ? "valid" : "invalid");
   return payload;
+}
+
+// ============ PASSWORD RESET HELPERS ============
+const RESET_TOKEN_EXPIRY_HOURS = 1;
+const WEB_APP_URL = process.env.WEB_APP_URL || "https://myvoicepost.com";
+
+/**
+ * Generate a secure random reset token
+ */
+function generateResetToken(): string {
+  return randomUUID() + "-" + randomUUID();
+}
+
+/**
+ * Mock function to send password reset email
+ * In production, replace with actual email service (SendGrid, AWS SES, etc.)
+ */
+async function sendPasswordResetEmail(
+  email: string,
+  resetLink: string,
+  isDeepLink: boolean = false
+): Promise<void> {
+  console.log("============================================");
+  console.log("[EMAIL SERVICE] Password Reset Email");
+  console.log("============================================");
+  console.log(`To: ${email}`);
+  console.log(`Subject: Reset Your MyVoicePost Password`);
+  console.log(`Type: ${isDeepLink ? "Mobile Deep Link" : "Web Link"}`);
+  console.log(`Reset Link: ${resetLink}`);
+  console.log(`Expires in: ${RESET_TOKEN_EXPIRY_HOURS} hour(s)`);
+  console.log("============================================");
+  console.log("[EMAIL SERVICE] Email would be sent here in production");
+  console.log("============================================");
+
+  // In production, implement actual email sending:
+  // await sendgrid.send({ to: email, subject: ..., html: ... });
+  // or
+  // await ses.sendEmail({ Destination: { ToAddresses: [email] }, ... });
 }
 
 // ============ GEMINI AI SETUP ============
@@ -658,6 +707,133 @@ app.get("/api/auth/me", (req, res) => {
   }
 });
 
+// ============ WEB FORGOT PASSWORD ENDPOINTS ============
+
+// Forgot Password - Request password reset link (Web)
+app.post("/api/forgot-password", async (req, res) => {
+  try {
+    const schema = z.object({
+      email: z.string().email("Valid email is required"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        error: "Invalid request",
+        details: parseResult.error.errors
+      });
+    }
+
+    const { email } = parseResult.data;
+
+    // Find user by email
+    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    const user = result[0];
+
+    if (!user) {
+      // Return success even if user not found (security best practice - prevents email enumeration)
+      console.log(`[Forgot Password] Email not found: ${email}`);
+      return res.json({
+        message: "If an account with that email exists, a password reset link has been sent."
+      });
+    }
+
+    // Generate secure reset token
+    const resetToken = generateResetToken();
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
+
+    // Store reset token in database
+    await db.insert(passwordResetTokens).values({
+      userId: user.id,
+      token: resetToken,
+      expiresAt,
+    });
+
+    // Generate web reset link
+    const resetLink = `${WEB_APP_URL}/reset-password?token=${resetToken}`;
+
+    // Send email (mocked)
+    await sendPasswordResetEmail(user.email!, resetLink, false);
+
+    console.log(`[Forgot Password] Reset token generated for user: ${user.username}`);
+
+    res.json({
+      message: "If an account with that email exists, a password reset link has been sent."
+    });
+  } catch (error: any) {
+    console.error("[Forgot Password] Error:", error);
+    res.status(500).json({ error: "Failed to process password reset request" });
+  }
+});
+
+// Reset Password - Set new password using token (Web)
+app.post("/api/reset-password", async (req, res) => {
+  try {
+    const schema = z.object({
+      token: z.string().min(1, "Reset token is required"),
+      newPassword: z.string().min(6, "Password must be at least 6 characters"),
+      confirmPassword: z.string(),
+    }).refine((data) => data.newPassword === data.confirmPassword, {
+      message: "Passwords don't match",
+      path: ["confirmPassword"],
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        error: "Invalid request",
+        details: parseResult.error.errors
+      });
+    }
+
+    const { token, newPassword } = parseResult.data;
+
+    // Find valid reset token
+    const tokenResult = await db.select().from(passwordResetTokens)
+      .where(eq(passwordResetTokens.token, token))
+      .limit(1);
+
+    const resetTokenRecord = tokenResult[0];
+
+    if (!resetTokenRecord) {
+      return res.status(400).json({ error: "Invalid or expired reset token" });
+    }
+
+    // Check if token is expired
+    if (new Date() > resetTokenRecord.expiresAt) {
+      return res.status(400).json({ error: "Reset token has expired. Please request a new one." });
+    }
+
+    // Check if token was already used
+    if (resetTokenRecord.usedAt) {
+      return res.status(400).json({ error: "This reset token has already been used." });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update user's password
+    await db.update(users)
+      .set({
+        passwordHash: hashedPassword,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, resetTokenRecord.userId));
+
+    // Mark token as used (invalidate it)
+    await db.update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(passwordResetTokens.id, resetTokenRecord.id));
+
+    console.log(`[Reset Password] Password successfully reset for userId: ${resetTokenRecord.userId}`);
+
+    res.json({ message: "Password has been reset successfully. You can now login with your new password." });
+  } catch (error: any) {
+    console.error("[Reset Password] Error:", error);
+    res.status(500).json({ error: "Failed to reset password" });
+  }
+});
+
 // ============ SAVED TEXTS ENDPOINTS ============
 app.post("/api/saved-texts", async (req, res) => {
   try {
@@ -1048,6 +1224,163 @@ app.post("/api/v1/p/register", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Failed to create account",
+    });
+  }
+});
+
+// ============================================================
+// MOBILE FORGOT PASSWORD ENDPOINTS - /api/v1/p/
+// (No authentication required - for mobile app password reset)
+// ============================================================
+
+// Mobile: Forgot Password - Request password reset with deep link
+app.post("/api/v1/p/forgot-password", async (req, res) => {
+  try {
+    const schema = z.object({
+      email: z.string().email("Valid email is required"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { email } = parseResult.data;
+
+    // Find user by email
+    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    const user = result[0];
+
+    if (!user) {
+      // Return success even if user not found (security best practice - prevents email enumeration)
+      console.log(`[Mobile Forgot Password] Email not found: ${email}`);
+      return res.json({
+        success: true,
+        message: "If an account with that email exists, a password reset link has been sent.",
+      });
+    }
+
+    // Generate secure reset token
+    const resetToken = generateResetToken();
+    const expiresAt = new Date(Date.now() + RESET_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
+
+    // Store reset token in database
+    await db.insert(passwordResetTokens).values({
+      userId: user.id,
+      token: resetToken,
+      expiresAt,
+    });
+
+    // Generate mobile deep link (format: /reset-password/[TOKEN])
+    const deepLink = `/reset-password/${resetToken}`;
+    const fullDeepLink = `myvoicepost://reset-password/${resetToken}`;
+
+    // Send email with deep link (mocked)
+    await sendPasswordResetEmail(user.email!, fullDeepLink, true);
+
+    console.log(`[Mobile Forgot Password] Reset token generated for user: ${user.username}`);
+    console.log(`[Mobile Forgot Password] Deep Link: ${deepLink}`);
+
+    res.json({
+      success: true,
+      message: "If an account with that email exists, a password reset link has been sent.",
+      // In production, don't return the deep link - it's sent via email
+      // Returning here for testing/development purposes
+      ...(process.env.NODE_ENV !== 'production' && { deepLink }),
+    });
+  } catch (error: any) {
+    console.error("[Mobile Forgot Password] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to process password reset request",
+    });
+  }
+});
+
+// Mobile: Reset Password - Set new password using token (from deep link)
+app.post("/api/v1/p/reset-password", async (req, res) => {
+  try {
+    const schema = z.object({
+      token: z.string().min(1, "Reset token is required"),
+      newPassword: z.string().min(6, "Password must be at least 6 characters"),
+      confirmPassword: z.string(),
+    }).refine((data) => data.newPassword === data.confirmPassword, {
+      message: "Passwords don't match",
+      path: ["confirmPassword"],
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { token, newPassword } = parseResult.data;
+
+    // Find valid reset token
+    const tokenResult = await db.select().from(passwordResetTokens)
+      .where(eq(passwordResetTokens.token, token))
+      .limit(1);
+
+    const resetTokenRecord = tokenResult[0];
+
+    if (!resetTokenRecord) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or expired reset token",
+      });
+    }
+
+    // Check if token is expired
+    if (new Date() > resetTokenRecord.expiresAt) {
+      return res.status(400).json({
+        success: false,
+        error: "Reset token has expired. Please request a new one.",
+      });
+    }
+
+    // Check if token was already used
+    if (resetTokenRecord.usedAt) {
+      return res.status(400).json({
+        success: false,
+        error: "This reset token has already been used.",
+      });
+    }
+
+    // Hash new password
+    const hashedPassword = await bcrypt.hash(newPassword, 10);
+
+    // Update user's password
+    await db.update(users)
+      .set({
+        passwordHash: hashedPassword,
+        updatedAt: new Date(),
+      })
+      .where(eq(users.id, resetTokenRecord.userId));
+
+    // Mark token as used (invalidate it)
+    await db.update(passwordResetTokens)
+      .set({ usedAt: new Date() })
+      .where(eq(passwordResetTokens.id, resetTokenRecord.id));
+
+    console.log(`[Mobile Reset Password] Password successfully reset for userId: ${resetTokenRecord.userId}`);
+
+    res.json({
+      success: true,
+      message: "Password has been reset successfully. You can now login with your new password.",
+    });
+  } catch (error: any) {
+    console.error("[Mobile Reset Password] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to reset password",
     });
   }
 });
