@@ -114,6 +114,8 @@ function getUserFromRequest(req: Request): JwtPayload | null {
 // ============ PASSWORD RESET HELPERS ============
 const RESET_TOKEN_EXPIRY_HOURS = 1;
 const WEB_APP_URL = process.env.WEB_APP_URL || "https://myvoicepost.com";
+const DEEP_LINK_BASE_URL = process.env.DEEP_LINK_BASE_URL || "https://www.myvoicepost.com";
+const APP_SCHEME = process.env.APP_SCHEME || "myvoicepost";
 
 /**
  * Generate a secure random reset token
@@ -1374,22 +1376,30 @@ app.post("/api/v1/p/forgot-password", async (req, res) => {
       expiresAt,
     });
 
-    // Generate mobile deep link (format: /reset-password/[TOKEN])
-    const deepLink = `/reset-password/${resetToken}`;
-    const fullDeepLink = `myvoicepost://reset-password/${resetToken}`;
+    // Generate deep link URL that works with Universal Links (iOS) and App Links (Android)
+    // Format: https://www.myvoicepost.com/api/v1/auth/reset-password?token=XYZ
+    // This URL will be intercepted by the mobile app if installed, or redirect to web/app store
+    const universalLink = `${DEEP_LINK_BASE_URL}/api/v1/auth/reset-password?token=${resetToken}`;
 
-    // Send email with deep link (mocked)
-    await sendPasswordResetEmail(user.email!, fullDeepLink, true);
+    // Also provide custom scheme for direct app opening (fallback)
+    const customSchemeLink = `${APP_SCHEME}://reset-password?token=${resetToken}`;
+
+    // Send email with universal link (works on both web and mobile)
+    await sendPasswordResetEmail(user.email!, universalLink, true);
 
     console.log(`[Mobile Forgot Password] Reset token generated for user: ${user.username}`);
-    console.log(`[Mobile Forgot Password] Deep Link: ${deepLink}`);
+    console.log(`[Mobile Forgot Password] Universal Link: ${universalLink}`);
+    console.log(`[Mobile Forgot Password] Custom Scheme Link: ${customSchemeLink}`);
 
     res.json({
       success: true,
       message: "If an account with that email exists, a password reset link has been sent.",
-      // In production, don't return the deep link - it's sent via email
+      // In production, don't return the links - they're sent via email
       // Returning here for testing/development purposes
-      ...(process.env.NODE_ENV !== 'production' && { deepLink }),
+      ...(process.env.NODE_ENV !== 'production' && {
+        universalLink,
+        customSchemeLink,
+      }),
     });
   } catch (error: any) {
     console.error("[Mobile Forgot Password] Error:", error);
@@ -1483,6 +1493,204 @@ app.post("/api/v1/p/reset-password", async (req, res) => {
     });
   }
 });
+
+// ============================================================
+// DEEP LINK REDIRECT ENDPOINT - /api/v1/auth/reset-password
+// This endpoint handles Universal Links (iOS) and App Links (Android)
+// When clicked from email, it redirects to the mobile app or web fallback
+// ============================================================
+
+// GET /api/v1/auth/reset-password?token=XYZ
+// This endpoint is called when user clicks the reset password link from email
+// It attempts to open the mobile app, falls back to web if app not installed
+app.get("/api/v1/auth/reset-password", async (req, res) => {
+  const { token } = req.query;
+
+  if (!token || typeof token !== 'string') {
+    return res.status(400).send(`
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Invalid Link - MyVoicePost</title>
+        <style>
+          body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                 display: flex; justify-content: center; align-items: center; min-height: 100vh;
+                 margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+          .container { background: white; padding: 40px; border-radius: 12px; text-align: center; max-width: 400px; }
+          h1 { color: #e74c3c; }
+          p { color: #666; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <h1>Invalid Link</h1>
+          <p>This password reset link is invalid or missing the token. Please request a new password reset.</p>
+        </div>
+      </body>
+      </html>
+    `);
+  }
+
+  console.log(`[Deep Link] Password reset link accessed with token: ${token.substring(0, 8)}...`);
+
+  // Validate token exists and is not expired (optional - provides better UX)
+  try {
+    const tokenResult = await db.select().from(passwordResetTokens)
+      .where(eq(passwordResetTokens.token, token))
+      .limit(1);
+
+    const resetTokenRecord = tokenResult[0];
+
+    if (!resetTokenRecord) {
+      return res.status(400).send(generateErrorPage("Invalid Link", "This password reset link is invalid. Please request a new password reset."));
+    }
+
+    if (new Date() > resetTokenRecord.expiresAt) {
+      return res.status(400).send(generateErrorPage("Link Expired", "This password reset link has expired. Please request a new password reset."));
+    }
+
+    if (resetTokenRecord.usedAt) {
+      return res.status(400).send(generateErrorPage("Link Already Used", "This password reset link has already been used. Please request a new password reset if needed."));
+    }
+  } catch (error) {
+    console.error("[Deep Link] Error validating token:", error);
+    // Continue anyway - let the mobile app handle validation
+  }
+
+  // Generate app deep link URLs
+  const customSchemeUrl = `${APP_SCHEME}://reset-password?token=${token}`;
+  const webFallbackUrl = `${WEB_APP_URL}/reset-password?token=${token}`;
+
+  // Android App Link intent URL
+  const androidIntentUrl = `intent://reset-password?token=${token}#Intent;scheme=${APP_SCHEME};package=com.myvoicepost.app;S.browser_fallback_url=${encodeURIComponent(webFallbackUrl)};end`;
+
+  // Serve a smart redirect page that:
+  // 1. Tries to open the mobile app via custom scheme
+  // 2. Falls back to web if app is not installed
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Reset Password - MyVoicePost</title>
+      <style>
+        body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          display: flex; justify-content: center; align-items: center; min-height: 100vh;
+          margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        }
+        .container {
+          background: white; padding: 40px; border-radius: 12px; text-align: center;
+          max-width: 400px; box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+        }
+        h1 { color: #333; margin-bottom: 10px; }
+        p { color: #666; margin-bottom: 20px; }
+        .spinner {
+          width: 40px; height: 40px; border: 4px solid #f3f3f3;
+          border-top: 4px solid #667eea; border-radius: 50%;
+          animation: spin 1s linear infinite; margin: 20px auto;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        .btn {
+          display: inline-block; padding: 14px 30px; margin: 10px 5px;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white; text-decoration: none; border-radius: 8px; font-weight: bold;
+        }
+        .btn-secondary { background: #f5f5f5; color: #333; }
+        .hidden { display: none; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>Reset Password</h1>
+        <div id="loading">
+          <p>Opening MyVoicePost app...</p>
+          <div class="spinner"></div>
+        </div>
+        <div id="fallback" class="hidden">
+          <p>If the app didn't open automatically, use one of the options below:</p>
+          <a href="${customSchemeUrl}" class="btn">Open in App</a>
+          <a href="${webFallbackUrl}" class="btn btn-secondary">Continue on Web</a>
+        </div>
+      </div>
+      <script>
+        (function() {
+          var isAndroid = /android/i.test(navigator.userAgent);
+          var isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+          var appOpened = false;
+
+          // Try to open the app
+          function tryOpenApp() {
+            if (isAndroid) {
+              // Use Android Intent URL for better app detection
+              window.location.href = "${androidIntentUrl}";
+            } else {
+              // Use custom scheme for iOS and other platforms
+              window.location.href = "${customSchemeUrl}";
+            }
+          }
+
+          // Show fallback after timeout
+          function showFallback() {
+            if (!appOpened) {
+              document.getElementById('loading').classList.add('hidden');
+              document.getElementById('fallback').classList.remove('hidden');
+            }
+          }
+
+          // Detect if app was opened (page becomes hidden)
+          document.addEventListener('visibilitychange', function() {
+            if (document.hidden) {
+              appOpened = true;
+            }
+          });
+
+          // Try to open app immediately
+          tryOpenApp();
+
+          // Show fallback after 2.5 seconds if app didn't open
+          setTimeout(showFallback, 2500);
+        })();
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+// Helper function to generate error pages
+function generateErrorPage(title: string, message: string): string {
+  return \`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>\${title} - MyVoicePost</title>
+      <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+               display: flex; justify-content: center; align-items: center; min-height: 100vh;
+               margin: 0; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); }
+        .container { background: white; padding: 40px; border-radius: 12px; text-align: center; max-width: 400px; }
+        h1 { color: #e74c3c; }
+        p { color: #666; }
+        .btn { display: inline-block; padding: 14px 30px; margin-top: 20px;
+               background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+               color: white; text-decoration: none; border-radius: 8px; font-weight: bold; }
+      </style>
+    </head>
+    <body>
+      <div class="container">
+        <h1>\${title}</h1>
+        <p>\${message}</p>
+        <a href="\${WEB_APP_URL}" class="btn">Go to MyVoicePost</a>
+      </div>
+    </body>
+    </html>
+  \`;
+}
 
 // ============================================================
 // MOBILE API ENDPOINTS - /api/v1/m/
