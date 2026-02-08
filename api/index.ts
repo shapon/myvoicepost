@@ -13,6 +13,7 @@ import { pgTable, text, varchar, timestamp, uuid } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
 import pLimit from "p-limit";
+import nodemailer from "nodemailer";
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
 const aiRequestLimiter = pLimit(5);
@@ -122,30 +123,128 @@ function generateResetToken(): string {
 }
 
 /**
- * Mock function to send password reset email
- * In production, replace with actual email service (SendGrid, AWS SES, etc.)
+ * Send password reset email using nodemailer
+ * Uses SMTP configuration from environment variables
  */
 async function sendPasswordResetEmail(
   email: string,
   resetLink: string,
   isDeepLink: boolean = false
 ): Promise<void> {
-  console.log("============================================");
-  console.log("[EMAIL SERVICE] Password Reset Email");
-  console.log("============================================");
-  console.log(`To: ${email}`);
-  console.log(`Subject: Reset Your MyVoicePost Password`);
-  console.log(`Type: ${isDeepLink ? "Mobile Deep Link" : "Web Link"}`);
-  console.log(`Reset Link: ${resetLink}`);
-  console.log(`Expires in: ${RESET_TOKEN_EXPIRY_HOURS} hour(s)`);
-  console.log("============================================");
-  console.log("[EMAIL SERVICE] Email would be sent here in production");
-  console.log("============================================");
+  // Validate SMTP configuration
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
 
-  // In production, implement actual email sending:
-  // await sendgrid.send({ to: email, subject: ..., html: ... });
-  // or
-  // await ses.sendEmail({ Destination: { ToAddresses: [email] }, ... });
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.error("[EMAIL SERVICE] SMTP configuration missing. Required: SMTP_HOST, SMTP_USER, SMTP_PASS");
+    throw new Error("Email service not configured properly");
+  }
+
+  console.log("[EMAIL SERVICE] Sending password reset email...");
+  console.log(`[EMAIL SERVICE] To: ${email}, Type: ${isDeepLink ? "Mobile Deep Link" : "Web Link"}`);
+
+  // Create nodemailer transporter with TLS/STARTTLS support for port 587
+  const transporter = nodemailer.createTransport({
+    host: smtpHost,
+    port: smtpPort,
+    secure: smtpSecure, // false for port 587 (STARTTLS), true for port 465 (TLS)
+    auth: {
+      user: smtpUser,
+      pass: smtpPass,
+    },
+    // Enable STARTTLS for port 587
+    ...(smtpPort === 587 && !smtpSecure && {
+      requireTLS: true,
+      tls: {
+        ciphers: "SSLv3",
+        rejectUnauthorized: false, // Set to true in production with valid certificates
+      },
+    }),
+  });
+
+  // Verify SMTP connection
+  try {
+    await transporter.verify();
+    console.log("[EMAIL SERVICE] SMTP connection verified successfully");
+  } catch (verifyError: any) {
+    console.error("[EMAIL SERVICE] SMTP connection verification failed:", verifyError.message);
+    throw new Error(`SMTP connection failed: ${verifyError.message}`);
+  }
+
+  // Email content
+  const linkType = isDeepLink ? "mobile app" : "web browser";
+  const htmlContent = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+      <title>Reset Your Password</title>
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+      <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+        <h1 style="color: white; margin: 0; font-size: 28px;">MyVoicePost</h1>
+      </div>
+      <div style="background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
+        <h2 style="color: #333; margin-top: 0;">Reset Your Password</h2>
+        <p>Hello,</p>
+        <p>We received a request to reset your password for your MyVoicePost account. Click the button below to set a new password:</p>
+        <div style="text-align: center; margin: 30px 0;">
+          <a href="${resetLink}" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; padding: 14px 30px; text-decoration: none; border-radius: 8px; font-weight: bold; display: inline-block;">Reset Password</a>
+        </div>
+        <p style="color: #666; font-size: 14px;">Or copy and paste this link into your ${linkType}:</p>
+        <p style="background: #f5f5f5; padding: 12px; border-radius: 6px; word-break: break-all; font-size: 13px; color: #555;">${resetLink}</p>
+        <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
+        <p style="color: #888; font-size: 13px;">
+          <strong>This link will expire in ${RESET_TOKEN_EXPIRY_HOURS} hour(s).</strong>
+        </p>
+        <p style="color: #888; font-size: 13px;">If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.</p>
+        <p style="color: #888; font-size: 13px; margin-bottom: 0;">— The MyVoicePost Team</p>
+      </div>
+      <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+        <p>© ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
+      </div>
+    </body>
+    </html>
+  `;
+
+  const textContent = `
+Reset Your MyVoicePost Password
+
+Hello,
+
+We received a request to reset your password for your MyVoicePost account.
+
+Click the link below to set a new password:
+${resetLink}
+
+This link will expire in ${RESET_TOKEN_EXPIRY_HOURS} hour(s).
+
+If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.
+
+— The MyVoicePost Team
+  `.trim();
+
+  // Send email
+  try {
+    const info = await transporter.sendMail({
+      from: emailFrom,
+      to: email,
+      subject: "Reset Your MyVoicePost Password",
+      text: textContent,
+      html: htmlContent,
+    });
+
+    console.log("[EMAIL SERVICE] Password reset email sent successfully");
+    console.log(`[EMAIL SERVICE] Message ID: ${info.messageId}`);
+  } catch (sendError: any) {
+    console.error("[EMAIL SERVICE] Failed to send email:", sendError.message);
+    throw new Error(`Failed to send password reset email: ${sendError.message}`);
+  }
 }
 
 // ============ GEMINI AI SETUP ============
