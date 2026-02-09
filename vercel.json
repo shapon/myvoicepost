@@ -2,6 +2,20 @@
   "version": 2,
   "buildCommand": "npm run build",
   "outputDirectory": "dist/public",
+  "headers": [
+    {
+      "source": "/.well-known/apple-app-site-association",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" }
+      ]
+    },
+    {
+      "source": "/.well-known/assetlinks.json",
+      "headers": [
+        { "key": "Content-Type", "value": "application/json" }
+      ]
+    }
+  ],
   "routes": [
     {
       "src": "/api/(.*)",
