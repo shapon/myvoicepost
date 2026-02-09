@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, timestamp, boolean } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -108,22 +108,13 @@ export const insertSavedTextSchema = createInsertSchema(savedTexts).omit({
 export type InsertSavedText = z.infer<typeof insertSavedTextSchema>;
 export type SavedText = typeof savedTexts.$inferSelect;
 
-// Password reset tokens table for forgot password functionality
 export const passwordResetTokens = pgTable("mvp_password_reset_tokens", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id").notNull().references(() => users.id),
-  token: varchar("token", { length: 255 }).notNull().unique(),
+  token: varchar("token", { length: 255 }).notNull(),
   expiresAt: timestamp("expires_at").notNull(),
-  usedAt: timestamp("used_at"),
+  used: boolean("used").default(false),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
-export const insertPasswordResetTokenSchema = createInsertSchema(passwordResetTokens).omit({
-  id: true,
-  createdAt: true,
-  usedAt: true,
-});
-
-export type InsertPasswordResetToken = z.infer<typeof insertPasswordResetTokenSchema>;
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
-

@@ -2,11 +2,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import pLimit from "p-limit";
 import pRetry, { AbortError } from "p-retry";
 
-// Concurrency limiter to prevent overwhelming the Gemini API
-// Limits concurrent AI requests to prevent rate limiting and improve stability
-const aiRequestLimiter = pLimit(5); // Max 5 concurrent AI requests
-
-// This is using Replit's AI Integrations service, which provides Gemini-compatible API access
+// This is using Replit's AI Integrations service, which provides Gemini-compatible API access 
 // without requiring your own Gemini API key. Charges are billed to your Replit credits.
 const ai = new GoogleGenAI({
   apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
@@ -225,39 +221,38 @@ function validateAudioHeader(buffer: Buffer, mimeType: string): { valid: boolean
   };
 }
 
-// Transcribe audio using Gemini with retry logic and concurrency limiting
+// Transcribe audio using Gemini with retry logic
 export async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
-  return aiRequestLimiter(async () => {
-    // Generate unique transcription request ID
-    const transcriptionId = `trans_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
-    const timestamp = new Date().toISOString();
-
-    // Generate audio fingerprint for debugging
-    const bufferHash = audioBuffer.slice(0, 20).toString('hex') + '...' + audioBuffer.slice(-20).toString('hex');
-    const base64Preview = audioBuffer.toString('base64').substring(0, 50);
-
-    console.log(`[Gemini] ========== TRANSCRIPTION ${transcriptionId} ==========`);
-    console.log(`[Gemini] Timestamp: ${timestamp}`);
-    console.log(`[Gemini] Audio size: ${audioBuffer.length} bytes`);
-    console.log(`[Gemini] MIME type: ${mimeType}`);
-    console.log(`[Gemini] Buffer fingerprint: ${bufferHash}`);
-    console.log(`[Gemini] Base64 preview: ${base64Preview}...`);
-
-    // Validate audio file header
-    const headerCheck = validateAudioHeader(audioBuffer, mimeType);
-    console.log(`[Gemini] ${transcriptionId} - Header validation: ${headerCheck.details}`);
-
-    if (!headerCheck.valid) {
-      console.log(`[Gemini] ${transcriptionId} - WARNING: Audio header validation failed!`);
-      // Continue anyway but log the warning
-    }
-
-    // Check for very small audio files (likely empty/corrupt)
-    if (audioBuffer.length < 5000) {
-      console.log(`[Gemini] ${transcriptionId} - Audio too small (${audioBuffer.length} bytes), likely empty`);
-      return "";
-    }
-
+  // Generate unique transcription request ID
+  const transcriptionId = `trans_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+  const timestamp = new Date().toISOString();
+  
+  // Generate audio fingerprint for debugging
+  const bufferHash = audioBuffer.slice(0, 20).toString('hex') + '...' + audioBuffer.slice(-20).toString('hex');
+  const base64Preview = audioBuffer.toString('base64').substring(0, 50);
+  
+  console.log(`[Gemini] ========== TRANSCRIPTION ${transcriptionId} ==========`);
+  console.log(`[Gemini] Timestamp: ${timestamp}`);
+  console.log(`[Gemini] Audio size: ${audioBuffer.length} bytes`);
+  console.log(`[Gemini] MIME type: ${mimeType}`);
+  console.log(`[Gemini] Buffer fingerprint: ${bufferHash}`);
+  console.log(`[Gemini] Base64 preview: ${base64Preview}...`);
+  
+  // Validate audio file header
+  const headerCheck = validateAudioHeader(audioBuffer, mimeType);
+  console.log(`[Gemini] ${transcriptionId} - Header validation: ${headerCheck.details}`);
+  
+  if (!headerCheck.valid) {
+    console.log(`[Gemini] ${transcriptionId} - WARNING: Audio header validation failed!`);
+    // Continue anyway but log the warning
+  }
+  
+  // Check for very small audio files (likely empty/corrupt)
+  if (audioBuffer.length < 5000) {
+    console.log(`[Gemini] ${transcriptionId} - Audio too small (${audioBuffer.length} bytes), likely empty`);
+    return "";
+  }
+  
   return pRetry(
     async () => {
       try {
@@ -339,46 +334,44 @@ Transcription:`;
       factor: 2,
     }
   );
-  }); // Close aiRequestLimiter
 }
 
-// Translate and polish text using Gemini with concurrency limiting
+// Translate and polish text using Gemini
 export async function translateAndPolish(
   text: string,
   sourceLanguage: string,
   targetLanguage: string,
   outputFormat: string
 ): Promise<{ translatedText: string; polishedText: string }> {
-  return aiRequestLimiter(async () => {
-    const sourceLang = languageNames[sourceLanguage] || sourceLanguage;
-    const targetLang = languageNames[targetLanguage] || targetLanguage;
-    const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
+  const sourceLang = languageNames[sourceLanguage] || sourceLanguage;
+  const targetLang = languageNames[targetLanguage] || targetLanguage;
+  const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
 
-    return pRetry(
-      async () => {
-        try {
-          // If source and target are the same, just polish the text
-          if (sourceLanguage === targetLanguage) {
-            const response = await ai.models.generateContent({
-              model: "gemini-2.5-flash",
-              contents: `You are an expert writer and editor. Polish the following text to make it clear, well-structured, and grammatically correct. ${toneGuide}
+  return pRetry(
+    async () => {
+      try {
+        // If source and target are the same, just polish the text
+        if (sourceLanguage === targetLanguage) {
+          const response = await ai.models.generateContent({
+            model: "gemini-2.5-flash",
+            contents: `You are an expert writer and editor. Polish the following text to make it clear, well-structured, and grammatically correct. ${toneGuide}
 
 Return your response as JSON with this exact format:
 {"polishedText": "the polished text here"}
 
 Text to polish:
 ${text}`,
-              config: {
-                responseMimeType: "application/json",
-                responseSchema: {
-                  type: Type.OBJECT,
-                  properties: {
-                    polishedText: { type: Type.STRING }
-                  },
-                  required: ["polishedText"]
-                }
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  polishedText: { type: Type.STRING }
+                },
+                required: ["polishedText"]
               }
-            });
+            }
+          });
 
           const result = safeJsonParse(response.text || "{}", { polishedText: text });
           return {
@@ -435,10 +428,9 @@ ${text}`,
       factor: 2,
     }
   );
-  }); // Close aiRequestLimiter
 }
 
-// Polish text using Gemini (same language, with output type formatting) with concurrency limiting
+// Polish text using Gemini (same language, with output type formatting)
 export async function polishText(
   text: string,
   language: string,
@@ -446,20 +438,19 @@ export async function polishText(
   outputType: string,
   template?: string
 ): Promise<string> {
-  return aiRequestLimiter(async () => {
-    const langName = languageNames[language] || language;
-    const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
-    const typeGuide = outputTypeInstructions[outputType] || outputTypeInstructions.message;
-    const templateGuide = template && template !== "none" ? templateInstructions[template] || "" : "";
+  const langName = languageNames[language] || language;
+  const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
+  const typeGuide = outputTypeInstructions[outputType] || outputTypeInstructions.message;
+  const templateGuide = template && template !== "none" ? templateInstructions[template] || "" : "";
 
-    return pRetry(
-      async () => {
-        try {
-          const templateSection = templateGuide ? `\n\nTemplate Format:\n${templateGuide}` : "";
-
-          const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: `You are an expert writer and editor. Transform the following speech transcription into well-written ${outputType}.
+  return pRetry(
+    async () => {
+      try {
+        const templateSection = templateGuide ? `\n\nTemplate Format:\n${templateGuide}` : "";
+        
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: `You are an expert writer and editor. Transform the following speech transcription into well-written ${outputType}.
 
 Language: ${langName}
 Tone: ${toneGuide}
@@ -472,9 +463,9 @@ Return your response as JSON with this exact format:
 
 Text to polish:
 ${text}`,
-            config: {
-              responseMimeType: "application/json",
-              responseSchema: {
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
               type: Type.OBJECT,
               properties: {
                 polishedText: { type: Type.STRING }
@@ -500,6 +491,5 @@ ${text}`,
       factor: 2,
     }
   );
-  }); // Close aiRequestLimiter
 }
 
