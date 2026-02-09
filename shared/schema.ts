@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, timestamp, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, timestamp, boolean, integer } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -118,3 +118,31 @@ export const passwordResetTokens = pgTable("mvp_password_reset_tokens", {
 });
 
 export type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
+
+export const subscriptionPlans = pgTable("mvp_subscription_plans", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  name: varchar("name", { length: 50 }).notNull().unique(),
+  validTotalMinutes: integer("valid_total_minutes"),
+  validDays: integer("valid_days").notNull(),
+  recordingsAvailableDays: integer("recordings_available_days").notNull(),
+  chunksCount: integer("chunks_count").notNull(),
+  offlineRecording: boolean("offline_recording").notNull().default(false),
+  priceMonthly: integer("price_monthly").notNull().default(0),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
+
+export const userSubscriptions = pgTable("mvp_user_subscriptions", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").notNull(),
+  planId: uuid("plan_id").notNull(),
+  validDateUpto: timestamp("valid_date_upto").notNull(),
+  minutesUsed: integer("minutes_used").notNull().default(0),
+  chunksUsed: integer("chunks_used").notNull().default(0),
+  paymentToken: varchar("payment_token", { length: 255 }),
+  status: varchar("status", { length: 20 }).notNull().default("active"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type UserSubscription = typeof userSubscriptions.$inferSelect;

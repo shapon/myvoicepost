@@ -6,8 +6,12 @@ import {
   polishRequestSchema,
   insertUserSchema,
   insertSavedTextSchema,
+  subscriptionPlans,
+  userSubscriptions,
 } from "@shared/schema";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
+import { db } from "./supabase-db";
+import { eq, and, gte } from "drizzle-orm";
 import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
 import jwt from "jsonwebtoken";
@@ -2052,6 +2056,237 @@ export async function registerRoutes(
       }
     },
   );
+
+  // ============================================================
+  // SUBSCRIPTION ENDPOINTS (shared by web & mobile)
+  // ============================================================
+
+  // GET /api/v1/p/plans - List all available plans (public)
+  app.get("/api/v1/p/plans", async (req, res) => {
+    try {
+      const plans = await db.select().from(subscriptionPlans);
+
+      const formattedPlans = plans.map((plan) => ({
+        id: plan.id,
+        name: plan.name,
+        valid_total_minutes: plan.validTotalMinutes,
+        valid_date_upto_days: plan.validDays,
+        recordings_available_days: plan.recordingsAvailableDays,
+        chunks_count: plan.chunksCount,
+        offline_recording: plan.offlineRecording,
+        price_monthly: plan.priceMonthly,
+      }));
+
+      res.json({
+        success: true,
+        plans: formattedPlans,
+      });
+    } catch (error: any) {
+      console.error("[Plans] Error fetching plans:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch plans",
+      });
+    }
+  });
+
+  // POST /api/v1/m/subscribe - Handle subscription purchase (requires auth)
+  app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const schema = z.object({
+        plan_id: z.string().uuid("Invalid plan ID"),
+        payment_token: z.string().min(1, "Payment token is required"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { plan_id, payment_token } = parseResult.data;
+      const userId = req.jwtUser?.userId!;
+
+      const planResult = await db
+        .select()
+        .from(subscriptionPlans)
+        .where(eq(subscriptionPlans.id, plan_id))
+        .limit(1);
+      const plan = planResult[0];
+
+      if (!plan) {
+        return res.status(404).json({
+          success: false,
+          error: "Plan not found",
+        });
+      }
+
+      if (plan.name === "Free") {
+        return res.status(400).json({
+          success: false,
+          error: "Free plan does not require payment. It is assigned automatically.",
+        });
+      }
+
+      const paymentSuccess =
+        payment_token.startsWith("tok_") && payment_token.length >= 8;
+      if (!paymentSuccess) {
+        return res.status(402).json({
+          success: false,
+          error: "Payment failed. Invalid payment token.",
+        });
+      }
+
+      const validDateUpto = new Date();
+      validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
+
+      const existingActive = await db
+        .select()
+        .from(userSubscriptions)
+        .where(
+          and(
+            eq(userSubscriptions.userId, userId),
+            eq(userSubscriptions.status, "active"),
+            gte(userSubscriptions.validDateUpto, new Date()),
+          ),
+        )
+        .limit(1);
+
+      if (existingActive.length > 0) {
+        await db
+          .update(userSubscriptions)
+          .set({ status: "superseded" })
+          .where(eq(userSubscriptions.id, existingActive[0].id));
+      }
+
+      const [subscription] = await db
+        .insert(userSubscriptions)
+        .values({
+          userId,
+          planId: plan_id,
+          validDateUpto,
+          minutesUsed: 0,
+          chunksUsed: 0,
+          paymentToken: payment_token,
+          status: "active",
+        })
+        .returning();
+
+      console.log(
+        `[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()}`,
+      );
+
+      res.json({
+        success: true,
+        message: `Successfully subscribed to ${plan.name} plan`,
+        subscription: {
+          id: subscription.id,
+          plan_name: plan.name,
+          valid_date_upto: validDateUpto.toISOString(),
+          valid_total_minutes: plan.validTotalMinutes,
+          recordings_available_days: plan.recordingsAvailableDays,
+          chunks_count: plan.chunksCount,
+          offline_recording: plan.offlineRecording,
+          status: "active",
+        },
+      });
+    } catch (error: any) {
+      console.error("[Subscribe] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to process subscription",
+      });
+    }
+  });
+
+  // GET /api/v1/m/subscription - Get active subscription for logged-in user
+  app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const userId = req.jwtUser?.userId!;
+
+      const activeSubResult = await db
+        .select()
+        .from(userSubscriptions)
+        .where(
+          and(
+            eq(userSubscriptions.userId, userId),
+            eq(userSubscriptions.status, "active"),
+            gte(userSubscriptions.validDateUpto, new Date()),
+          ),
+        )
+        .limit(1);
+
+      if (activeSubResult.length > 0) {
+        const sub = activeSubResult[0];
+        const planResult = await db
+          .select()
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.id, sub.planId))
+          .limit(1);
+        const plan = planResult[0];
+
+        if (plan) {
+          return res.json({
+            success: true,
+            subscription: {
+              id: sub.id,
+              plan_name: plan.name,
+              valid_total_minutes: plan.validTotalMinutes,
+              minutes_used: sub.minutesUsed,
+              valid_date_upto: sub.validDateUpto.toISOString(),
+              recordings_available_days: plan.recordingsAvailableDays,
+              chunks_count: plan.chunksCount,
+              chunks_used: sub.chunksUsed,
+              offline_recording: plan.offlineRecording,
+              status: sub.status,
+            },
+          });
+        }
+      }
+
+      const freePlanResult = await db
+        .select()
+        .from(subscriptionPlans)
+        .where(eq(subscriptionPlans.name, "Free"))
+        .limit(1);
+      const freePlan = freePlanResult[0];
+
+      if (!freePlan) {
+        return res.status(500).json({
+          success: false,
+          error: "Default plan not configured",
+        });
+      }
+
+      const freeValidUpto = new Date();
+      freeValidUpto.setDate(freeValidUpto.getDate() + freePlan.validDays);
+
+      res.json({
+        success: true,
+        subscription: {
+          id: null,
+          plan_name: "Free",
+          valid_total_minutes: freePlan.validTotalMinutes,
+          minutes_used: 0,
+          valid_date_upto: freeValidUpto.toISOString(),
+          recordings_available_days: freePlan.recordingsAvailableDays,
+          chunks_count: freePlan.chunksCount,
+          chunks_used: 0,
+          offline_recording: freePlan.offlineRecording,
+          status: "active",
+        },
+      });
+    } catch (error: any) {
+      console.error("[Subscription] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch subscription",
+      });
+    }
+  });
 
   return httpServer;
 }
