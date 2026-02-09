@@ -6,6 +6,7 @@ import { z } from "zod";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 import { randomUUID } from "crypto";
+import crypto from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, and, desc } from "drizzle-orm";
@@ -1334,7 +1335,7 @@ app.post("/api/v1/p/register", async (req, res) => {
 // (No authentication required - for mobile app password reset)
 // ============================================================
 
-// Mobile: Forgot Password - Request password reset with deep link
+// Mobile: Forgot Password - Request password reset with 6-character code
 app.post("/api/v1/p/forgot-password", async (req, res) => {
   try {
     const schema = z.object({
@@ -1352,55 +1353,50 @@ app.post("/api/v1/p/forgot-password", async (req, res) => {
 
     const { email } = parseResult.data;
 
-    // Find user by email
     const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
     const user = result[0];
 
     if (!user) {
-      // Return success even if user not found (security best practice - prevents email enumeration)
       console.log(`[Mobile Forgot Password] Email not found: ${email}`);
       return res.json({
         success: true,
-        message: "If an account with that email exists, a password reset link has been sent.",
+        message: "If an account with that email exists, a password reset code has been sent.",
       });
     }
 
-    // Generate secure reset token
-    const resetToken = generateResetToken();
-    const expiresAt = new Date(Date.now() + RESET_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
+    const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+    let code = "";
+    const randomBytes = crypto.randomBytes(6);
+    for (let i = 0; i < 6; i++) {
+      code += chars[randomBytes[i] % chars.length];
+    }
 
-    // Store reset token in database
+    const hashedCode = crypto.createHash("sha256").update(code).digest("hex");
+    const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+
     await db.insert(passwordResetTokens).values({
       userId: user.id,
-      token: resetToken,
+      token: hashedCode,
       expiresAt,
     });
 
-    // Generate deep link URL that works with Universal Links (iOS) and App Links (Android)
-    // Format: https://www.myvoicepost.com/api/v1/auth/reset-password?token=XYZ
-    // This URL will be intercepted by the mobile app if installed, or redirect to web/app store
-    const universalLink = `${DEEP_LINK_BASE_URL}/api/v1/auth/reset-password?token=${resetToken}`;
+    await sendPasswordResetEmail(
+      user.email!,
+      `Your password reset code is: ${code}\n\nThis code will expire in 15 minutes.`,
+      true
+    );
 
-    // Also provide custom scheme for direct app opening (fallback)
-    const customSchemeLink = `${APP_SCHEME}://reset-password?token=${resetToken}`;
+    console.log(`[Mobile Forgot Password] Reset code generated for user: ${user.username}`);
 
-    // Send email with universal link (works on both web and mobile)
-    await sendPasswordResetEmail(user.email!, universalLink, true);
-
-    console.log(`[Mobile Forgot Password] Reset token generated for user: ${user.username}`);
-    console.log(`[Mobile Forgot Password] Universal Link: ${universalLink}`);
-    console.log(`[Mobile Forgot Password] Custom Scheme Link: ${customSchemeLink}`);
-
-    res.json({
+    const response: any = {
       success: true,
-      message: "If an account with that email exists, a password reset link has been sent.",
-      // In production, don't return the links - they're sent via email
-      // Returning here for testing/development purposes
-      ...(process.env.NODE_ENV !== 'production' && {
-        universalLink,
-        customSchemeLink,
-      }),
-    });
+      message: "If an account with that email exists, a password reset code has been sent.",
+    };
+    if (process.env.NODE_ENV !== "production") {
+      response.code = code;
+    }
+
+    res.json(response);
   } catch (error: any) {
     console.error("[Mobile Forgot Password] Error:", error);
     res.status(500).json({
@@ -1410,11 +1406,12 @@ app.post("/api/v1/p/forgot-password", async (req, res) => {
   }
 });
 
-// Mobile: Reset Password - Set new password using token (from deep link)
+// Mobile: Reset Password - Set new password using email + 6-character code
 app.post("/api/v1/p/reset-password", async (req, res) => {
   try {
     const schema = z.object({
-      token: z.string().min(1, "Reset token is required"),
+      email: z.string().email("Must be a valid email format"),
+      code: z.string().length(6, "Code must be exactly 6 characters"),
       newPassword: z.string().min(6, "Password must be at least 6 characters"),
       confirmPassword: z.string(),
     }).refine((data) => data.newPassword === data.confirmPassword, {
@@ -1426,60 +1423,68 @@ app.post("/api/v1/p/reset-password", async (req, res) => {
     if (!parseResult.success) {
       return res.status(400).json({
         success: false,
-        error: "Invalid request",
+        error: "Validation failed",
         details: parseResult.error.errors,
       });
     }
 
-    const { token, newPassword } = parseResult.data;
+    const { email, code, newPassword } = parseResult.data;
 
-    // Find valid reset token
+    const userResult = await db.select().from(users).where(eq(users.email, email)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid or expired reset code",
+      });
+    }
+
+    const hashedCode = crypto.createHash("sha256").update(code.toUpperCase()).digest("hex");
+
     const tokenResult = await db.select().from(passwordResetTokens)
-      .where(eq(passwordResetTokens.token, token))
+      .where(and(
+        eq(passwordResetTokens.userId, user.id),
+        eq(passwordResetTokens.token, hashedCode),
+      ))
       .limit(1);
 
-    const resetTokenRecord = tokenResult[0];
+    const resetRecord = tokenResult[0];
 
-    if (!resetTokenRecord) {
+    if (!resetRecord) {
       return res.status(400).json({
         success: false,
-        error: "Invalid or expired reset token",
+        error: "Invalid or expired reset code",
       });
     }
 
-    // Check if token is expired
-    if (new Date() > resetTokenRecord.expiresAt) {
+    if (new Date() > resetRecord.expiresAt) {
       return res.status(400).json({
         success: false,
-        error: "Reset token has expired. Please request a new one.",
+        error: "Invalid or expired reset code",
       });
     }
 
-    // Check if token was already used
-    if (resetTokenRecord.usedAt) {
+    if (resetRecord.usedAt) {
       return res.status(400).json({
         success: false,
-        error: "This reset token has already been used.",
+        error: "Invalid or expired reset code",
       });
     }
 
-    // Hash new password
     const hashedPassword = await bcrypt.hash(newPassword, 10);
 
-    // Update user's password
     await db.update(users)
       .set({
         passwordHash: hashedPassword,
         updatedAt: new Date(),
       })
-      .where(eq(users.id, resetTokenRecord.userId));
+      .where(eq(users.id, user.id));
 
-    // Mark token as used (invalidate it)
     await db.update(passwordResetTokens)
       .set({ usedAt: new Date() })
-      .where(eq(passwordResetTokens.id, resetTokenRecord.id));
+      .where(eq(passwordResetTokens.id, resetRecord.id));
 
-    console.log(`[Mobile Reset Password] Password successfully reset for userId: ${resetTokenRecord.userId}`);
+    console.log(`[Mobile Reset Password] Password successfully reset for userId: ${user.id}`);
 
     res.json({
       success: true,
