@@ -1667,13 +1667,13 @@ app.get("/api/v1/auth/reset-password", async (req, res) => {
 
 // Helper function to generate error pages
 function generateErrorPage(title: string, message: string): string {
-  return \`
+  return `
     <!DOCTYPE html>
     <html>
     <head>
       <meta charset="utf-8">
       <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>\${title} - MyVoicePost</title>
+      <title>${title} - MyVoicePost</title>
       <style>
         body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
                display: flex; justify-content: center; align-items: center; min-height: 100vh;
@@ -1688,13 +1688,13 @@ function generateErrorPage(title: string, message: string): string {
     </head>
     <body>
       <div class="container">
-        <h1>\${title}</h1>
-        <p>\${message}</p>
-        <a href="\${WEB_APP_URL}" class="btn">Go to MyVoicePost</a>
+        <h1>${title}</h1>
+        <p>${message}</p>
+        <a href="${WEB_APP_URL}" class="btn">Go to MyVoicePost</a>
       </div>
     </body>
     </html>
-  \`;
+  `;
 }
 
 // ============================================================
