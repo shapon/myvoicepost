@@ -10,7 +10,8 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   login: (username: string, password: string) => Promise<void>;
-  signup: (username: string, email: string, password: string, confirmPassword: string) => Promise<void>;
+  signup: (username: string, email: string, password: string, confirmPassword: string, otp: string) => Promise<void>;
+  sendOtp: (email: string) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -65,12 +66,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
   };
 
-  const signup = async (username: string, email: string, password: string, confirmPassword: string) => {
+  const sendOtp = async (email: string) => {
+    const response = await apiRequest("POST", "/api/v1/p/mail_otp", { email });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Failed to send verification code");
+    }
+  };
+
+  const signup = async (username: string, email: string, password: string, confirmPassword: string, otp: string) => {
     const response = await apiRequest("POST", "/api/auth/signup", { 
       username, 
       email,
       password, 
-      confirmPassword 
+      confirmPassword,
+      otp,
     });
     const data = await response.json();
     if (!response.ok) {
@@ -89,7 +99,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, signup, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, login, signup, sendOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );

@@ -200,6 +200,26 @@ Preferred communication style: Simple, everyday language.
 
 **Access Logic**: Access granted if (trial active AND minutes > 0) OR (active subscription AND minutes_remaining > 0)
 
+### Email OTP Verification (implemented Feb 2026)
+
+**Flow**: During registration, users must verify their email with a 6-digit OTP before account creation.
+
+1. User enters email ? calls `POST /api/v1/p/mail_otp` with `{ email }` ? 6-digit OTP sent via SMTP
+2. User enters OTP + other details ? calls signup endpoint with `otp` field
+3. Server verifies OTP (checks match + expiry), then creates account
+4. OTP records are deleted after successful registration
+
+**Database Table**: `mvp_email_otps` (id, email, otp, expires_at, verified, created_at)
+**OTP Expiry**: 10 minutes
+
+**Affected Endpoints**:
+- `POST /api/v1/p/mail_otp` - Send OTP to email (public, no auth)
+- `POST /api/auth/signup` - Web signup (now requires `otp` field)
+- `POST /api/v1/p/register` - Mobile register (now requires `otp` field)
+- `POST /api/v1/p/auth/signup` - Alt mobile signup (now requires `otp` field)
+
+**SMTP Config**: Uses same SMTP env vars as password reset: `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `EMAIL_FROM`
+
 **IMPORTANT**: Both `server/routes.ts` (dev) and `api/index.ts` (Vercel production) must be kept in sync for all API changes. The dev server uses `SUPABASE_DATABASE_URL` (external Supabase DB).
 
 ### Environment Variables

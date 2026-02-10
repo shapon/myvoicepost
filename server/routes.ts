@@ -10,7 +10,9 @@ import {
   userSubscriptions,
   users,
   userSettings,
+  emailOtps,
 } from "@shared/schema";
+import nodemailer from "nodemailer";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
 import { db } from "./supabase-db";
 import { eq, and, gte } from "drizzle-orm";
@@ -129,6 +131,7 @@ const signupSchema = z
     email: z.string().email("Please enter a valid email address"),
     password: z.string().min(6, "Password must be at least 6 characters"),
     confirmPassword: z.string(),
+    otp: z.string().length(6, "6-digit verification code is required"),
   })
   .refine((data) => data.password === data.confirmPassword, {
     message: "Passwords don't match",
@@ -985,6 +988,127 @@ export async function registerRoutes(
     }
   });
 
+  // ============ EMAIL OTP ENDPOINTS ============
+
+  async function sendOtpEmail(email: string, otp: string): Promise<void> {
+    const smtpHost = process.env.SMTP_HOST;
+    const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+    const smtpSecure = process.env.SMTP_SECURE === "true";
+    const smtpUser = process.env.SMTP_USER;
+    const smtpPass = process.env.SMTP_PASS;
+    const emailFrom = process.env.EMAIL_FROM || smtpUser;
+
+    if (!smtpHost || !smtpUser || !smtpPass) {
+      console.error("[OTP EMAIL] SMTP configuration missing");
+      throw new Error("Email service not configured properly");
+    }
+
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && {
+        requireTLS: true,
+        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+      }),
+    });
+
+    await transporter.verify();
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Verify Your Email</title></head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">MyVoicePost</h1>
+        </div>
+        <div style="background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
+          <h2 style="color: #333; margin-top: 0;">Verify Your Email</h2>
+          <p>Hello,</p>
+          <p>Your verification code for MyVoicePost registration is:</p>
+          <div style="text-align: center; margin: 30px 0;">
+            <div style="background: #f5f5f5; display: inline-block; padding: 20px 40px; border-radius: 10px; letter-spacing: 8px; font-size: 32px; font-weight: bold; color: #333;">${otp}</div>
+          </div>
+          <p style="color: #666; font-size: 14px;">This code expires in <strong>10 minutes</strong>.</p>
+          <p style="color: #666; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
+          <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
+          <p style="color: #888; font-size: 13px; margin-bottom: 0;">— The MyVoicePost Team</p>
+        </div>
+        <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+          <p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: emailFrom,
+      to: email,
+      subject: "MyVoicePost - Email Verification Code",
+      text: `Your MyVoicePost verification code is: ${otp}. This code expires in 10 minutes.`,
+      html: htmlContent,
+    });
+
+    console.log(`[OTP EMAIL] Verification code sent to ${email}`);
+  }
+
+  app.post("/api/v1/p/mail_otp", async (req, res) => {
+    try {
+      const schema = z.object({
+        email: z.string().email("Valid email is required"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Valid email is required",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { email } = parseResult.data;
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const existingEmail = await storage.getUserByEmail?.(normalizedEmail);
+      if (existingEmail) {
+        return res.status(409).json({
+          success: false,
+          error: "Email already registered",
+        });
+      }
+
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+
+      await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
+
+      await db.insert(emailOtps).values({
+        email: normalizedEmail,
+        otp,
+        expiresAt,
+        verified: false,
+      });
+
+      await sendOtpEmail(normalizedEmail, otp);
+
+      console.log(`[OTP] Code generated for ${normalizedEmail}, expires at ${expiresAt.toISOString()}`);
+
+      res.json({
+        success: true,
+        message: "Verification code sent to your email",
+      });
+    } catch (error: any) {
+      console.error("[OTP] Error sending OTP:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to send verification code",
+      });
+    }
+  });
+
   // ============ AUTHENTICATION ROUTES ============
 
   // Signup endpoint
@@ -998,7 +1122,21 @@ export async function registerRoutes(
         });
       }
 
-      const { username, email, password } = parseResult.data;
+      const { username, email, password, otp } = parseResult.data;
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const otpRecords = await db.select().from(emailOtps)
+        .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
+        .limit(1);
+
+      if (otpRecords.length === 0) {
+        return res.status(400).json({ error: "Invalid verification code" });
+      }
+
+      const otpRecord = otpRecords[0];
+      if (new Date() > otpRecord.expiresAt) {
+        return res.status(400).json({ error: "Verification code has expired. Please request a new one." });
+      }
 
       // Check if user already exists
       const existingUser = await storage.getUserByUsername(username);
@@ -1007,13 +1145,15 @@ export async function registerRoutes(
       }
 
       // Check if email already exists
-      const existingEmail = await storage.getUserByEmail?.(email);
-      if (existingEmail) {
+      const existingEmailUser = await storage.getUserByEmail?.(normalizedEmail);
+      if (existingEmailUser) {
         return res.status(409).json({ error: "Email already exists" });
       }
 
+      await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
+
       // Create new user
-      const user = await storage.createUser({ username, email, password });
+      const user = await storage.createUser({ username, email: normalizedEmail, password });
 
       // Initialize trial: 7 days, 90 minutes
       const trialStartsAt = new Date();
@@ -1591,19 +1731,20 @@ export async function registerRoutes(
   // Public: Signup (no auth required - user creates account then gets token)
   app.post("/api/v1/p/auth/signup", async (req, res) => {
     try {
-      const signupSchema = z
+      const signupSchemaPublic = z
         .object({
           username: z.string().min(3, "Username must be at least 3 characters"),
           email: z.string().email("Valid email is required"),
           password: z.string().min(6, "Password must be at least 6 characters"),
           confirmPassword: z.string(),
+          otp: z.string().length(6, "6-digit verification code is required"),
         })
         .refine((data) => data.password === data.confirmPassword, {
           message: "Passwords don't match",
           path: ["confirmPassword"],
         });
 
-      const parseResult = signupSchema.safeParse(req.body);
+      const parseResult = signupSchemaPublic.safeParse(req.body);
       if (!parseResult.success) {
         return res.status(400).json({
           success: false,
@@ -1612,7 +1753,27 @@ export async function registerRoutes(
         });
       }
 
-      const { username, email, password } = parseResult.data;
+      const { username, email, password, otp } = parseResult.data;
+      const normalizedEmail = email.toLowerCase().trim();
+
+      const otpRecords = await db.select().from(emailOtps)
+        .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
+        .limit(1);
+
+      if (otpRecords.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid verification code",
+        });
+      }
+
+      const otpRecord = otpRecords[0];
+      if (new Date() > otpRecord.expiresAt) {
+        return res.status(400).json({
+          success: false,
+          error: "Verification code has expired. Please request a new one.",
+        });
+      }
 
       // Check if username exists
       const existingUser = await storage.getUserByUsername(username);
@@ -1624,16 +1785,18 @@ export async function registerRoutes(
       }
 
       // Check if email exists
-      const existingEmail = await storage.getUserByEmail?.(email);
-      if (existingEmail) {
+      const existingEmailUser = await storage.getUserByEmail?.(normalizedEmail);
+      if (existingEmailUser) {
         return res.status(409).json({
           success: false,
           error: "Email already exists",
         });
       }
 
+      await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
+
       // Create user
-      const user = await storage.createUser({ username, email, password });
+      const user = await storage.createUser({ username, email: normalizedEmail, password });
 
       // Initialize trial: 7 days, 90 minutes
       const trialStartsAt = new Date();

@@ -172,3 +172,14 @@ export const insertUserSettingSchema = createInsertSchema(userSettings).omit({
 
 export type InsertUserSetting = z.infer<typeof insertUserSettingSchema>;
 export type UserSetting = typeof userSettings.$inferSelect;
+
+export const emailOtps = pgTable("mvp_email_otps", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  email: varchar("email", { length: 255 }).notNull(),
+  otp: varchar("otp", { length: 6 }).notNull(),
+  expiresAt: timestamp("expires_at").notNull(),
+  verified: boolean("verified").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type EmailOtp = typeof emailOtps.$inferSelect;

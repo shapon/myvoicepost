@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Mic, Loader2, ArrowLeft } from "lucide-react";
+import { Mic, Loader2, ArrowLeft, Mail, CheckCircle } from "lucide-react";
 import { Link } from "wouter";
 
 export default function Signup() {
@@ -14,10 +14,60 @@ export default function Signup() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [otp, setOtp] = useState("");
+  const [otpSent, setOtpSent] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
-  const { signup } = useAuth();
+  const [isSendingOtp, setIsSendingOtp] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const cooldownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const { signup, sendOtp } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+
+  const startCooldown = () => {
+    setCooldown(60);
+    if (cooldownRef.current) clearInterval(cooldownRef.current);
+    cooldownRef.current = setInterval(() => {
+      setCooldown((prev) => {
+        if (prev <= 1) {
+          if (cooldownRef.current) clearInterval(cooldownRef.current);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  };
+
+  const handleSendOtp = async () => {
+    if (!email || !email.includes("@")) {
+      toast({
+        title: "Invalid email",
+        description: "Please enter a valid email address.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSendingOtp(true);
+
+    try {
+      await sendOtp(email.toLowerCase().trim());
+      setOtpSent(true);
+      startCooldown();
+      toast({
+        title: "Verification code sent",
+        description: "Check your email for the 6-digit code.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Failed to send code",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,13 +90,22 @@ export default function Signup() {
       return;
     }
 
+    if (!otp || otp.length !== 6) {
+      toast({
+        title: "Verification code required",
+        description: "Please enter the 6-digit code sent to your email.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setIsLoading(true);
 
     try {
-      await signup(username.toLowerCase().trim(), email.toLowerCase().trim(), password, confirmPassword);
+      await signup(username.toLowerCase().trim(), email.toLowerCase().trim(), password, confirmPassword, otp);
       toast({
         title: "Account created!",
-        description: "Welcome to MyVoicePost.",
+        description: "Welcome to MyVoicePost. Your email has been verified.",
       });
       setLocation("/");
     } catch (error: any) {
@@ -96,16 +155,67 @@ export default function Signup() {
             </div>
             <div className="space-y-2">
               <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                data-testid="input-email"
-              />
+              <div className="flex gap-2">
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="Enter your email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value);
+                    if (otpSent) setOtpSent(false);
+                  }}
+                  required
+                  className="flex-1"
+                  data-testid="input-email"
+                />
+                <Button
+                  type="button"
+                  variant={otpSent ? "outline" : "default"}
+                  onClick={handleSendOtp}
+                  disabled={isSendingOtp || cooldown > 0 || !email}
+                  data-testid="button-send-otp"
+                >
+                  {isSendingOtp ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : otpSent ? (
+                    <>
+                      <CheckCircle className="h-4 w-4 mr-1" />
+                      {cooldown > 0 ? `${cooldown}s` : "Resend"}
+                    </>
+                  ) : (
+                    <>
+                      <Mail className="h-4 w-4 mr-1" />
+                      Verify
+                    </>
+                  )}
+                </Button>
+              </div>
+              {otpSent && (
+                <p className="text-xs text-muted-foreground" data-testid="text-otp-sent">
+                  A 6-digit code has been sent to your email
+                </p>
+              )}
             </div>
+            {otpSent && (
+              <div className="space-y-2">
+                <Label htmlFor="otp">Verification Code</Label>
+                <Input
+                  id="otp"
+                  type="text"
+                  inputMode="numeric"
+                  placeholder="Enter 6-digit code"
+                  value={otp}
+                  onChange={(e) => {
+                    const val = e.target.value.replace(/\D/g, "").slice(0, 6);
+                    setOtp(val);
+                  }}
+                  maxLength={6}
+                  required
+                  data-testid="input-otp"
+                />
+              </div>
+            )}
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
               <Input
@@ -136,7 +246,7 @@ export default function Signup() {
             <Button 
               type="submit" 
               className="w-full" 
-              disabled={isLoading}
+              disabled={isLoading || !otpSent || otp.length !== 6}
               data-testid="button-signup"
             >
               {isLoading ? (
