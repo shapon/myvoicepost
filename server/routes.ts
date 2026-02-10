@@ -8,6 +8,7 @@ import {
   insertSavedTextSchema,
   subscriptionPlans,
   userSubscriptions,
+  users,
 } from "@shared/schema";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
 import { db } from "./supabase-db";
@@ -1013,6 +1014,22 @@ export async function registerRoutes(
       // Create new user
       const user = await storage.createUser({ username, email, password });
 
+      // Initialize trial: 7 days, 90 minutes
+      const trialStartsAt = new Date();
+      const trialEndsAt = new Date();
+      trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
+      await db
+        .update(users)
+        .set({
+          trialStartsAt,
+          trialEndsAt,
+          trialUsed: false,
+          trialMinutesTotal: 90,
+          trialMinutesUsed: "0",
+        })
+        .where(eq(users.id, user.id));
+
       // Generate JWT token
       const token = generateToken(user.id, user.username);
 
@@ -1496,17 +1513,70 @@ export async function registerRoutes(
         { expiresIn: "7d" },
       );
 
+      // Check trial expiry on login and auto-assign pending_payment if needed
+      const userRecord = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, user.id))
+        .limit(1);
+      const fullUser = userRecord[0];
+
+      let trialExpired = false;
+      if (fullUser && fullUser.trialEndsAt && !fullUser.trialUsed) {
+        const now = new Date();
+        const trialMinutesUsed = parseFloat(fullUser.trialMinutesUsed || "0");
+        const trialMinutesTotal = fullUser.trialMinutesTotal || 90;
+        const trialMinutesRemaining = trialMinutesTotal - trialMinutesUsed;
+
+        if (now > fullUser.trialEndsAt || trialMinutesRemaining <= 0) {
+          trialExpired = true;
+
+          // Check if user already has any subscription
+          const existingSub = await db
+            .select()
+            .from(userSubscriptions)
+            .where(eq(userSubscriptions.userId, user.id))
+            .limit(1);
+
+          if (existingSub.length === 0) {
+            // Auto-assign default plan with pending_payment status
+            const defaultPlanResult = await db
+              .select()
+              .from(subscriptionPlans)
+              .where(eq(subscriptionPlans.isDefault, true))
+              .limit(1);
+
+            if (defaultPlanResult.length > 0) {
+              const defaultPlan = defaultPlanResult[0];
+              await db.insert(userSubscriptions).values({
+                userId: user.id,
+                planId: defaultPlan.id,
+                validDateUpto: new Date(),
+                minutesUsed: 0,
+                chunksUsed: 0,
+                minutesRemaining: "0",
+                status: "pending_payment",
+              });
+              console.log(
+                `[Login] Trial expired for ${user.username}, auto-assigned ${defaultPlan.name} with pending_payment`,
+              );
+            }
+          }
+        }
+      }
+
       console.log(`[Public Login] User ${user.username} logged in successfully`);
 
       res.json({
         success: true,
         token,
-        expiresIn: 7 * 24 * 60 * 60, // 7 days in seconds
+        expiresIn: 7 * 24 * 60 * 60,
         user: {
           id: user.id,
           email: user.email,
           username: user.username,
         },
+        trial_expired: trialExpired,
       });
     } catch (error: any) {
       console.error("[Public Login] Error:", error);
@@ -1564,6 +1634,22 @@ export async function registerRoutes(
       // Create user
       const user = await storage.createUser({ username, email, password });
 
+      // Initialize trial: 7 days, 90 minutes
+      const trialStartsAt = new Date();
+      const trialEndsAt = new Date();
+      trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
+      await db
+        .update(users)
+        .set({
+          trialStartsAt,
+          trialEndsAt,
+          trialUsed: false,
+          trialMinutesTotal: 90,
+          trialMinutesUsed: "0",
+        })
+        .where(eq(users.id, user.id));
+
       // Generate JWT token (valid for 3 days)
       const token = jwt.sign(
         { userId: user.id, email: user.email, username: user.username },
@@ -1571,7 +1657,7 @@ export async function registerRoutes(
         { expiresIn: "3d" },
       );
 
-      console.log(`[Public Signup] User ${user.username} created successfully`);
+      console.log(`[Public Signup] User ${user.username} created successfully with 7-day trial`);
 
       res.status(201).json({
         success: true,
@@ -1582,6 +1668,13 @@ export async function registerRoutes(
           id: user.id,
           email: user.email,
           username: user.username,
+        },
+        trial: {
+          starts_at: trialStartsAt.toISOString(),
+          ends_at: trialEndsAt.toISOString(),
+          minutes_total: 90,
+          minutes_used: 0,
+          minutes_remaining: 90,
         },
       });
     } catch (error: any) {
@@ -2061,10 +2154,19 @@ export async function registerRoutes(
   // SUBSCRIPTION ENDPOINTS (shared by web & mobile)
   // ============================================================
 
-  // GET /api/v1/p/plans - List all available plans (public)
+  // GET /api/v1/p/plans - List all available plans (public, filtered by is_visible)
   app.get("/api/v1/p/plans", async (req, res) => {
     try {
-      const plans = await db.select().from(subscriptionPlans);
+      const showAll = req.query.all === "true";
+      let plans;
+      if (showAll) {
+        plans = await db.select().from(subscriptionPlans);
+      } else {
+        plans = await db
+          .select()
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.isVisible, true));
+      }
 
       const formattedPlans = plans.map((plan) => ({
         id: plan.id,
@@ -2075,6 +2177,8 @@ export async function registerRoutes(
         chunks_count: plan.chunksCount,
         offline_recording: plan.offlineRecording,
         price_monthly: plan.priceMonthly,
+        is_default: plan.isDefault,
+        is_visible: plan.isVisible,
       }));
 
       res.json({
@@ -2143,6 +2247,20 @@ export async function registerRoutes(
       const validDateUpto = new Date();
       validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
 
+      // Check for trial minutes to carry forward
+      let carryoverMinutes = 0;
+      const trial = await getTrialInfo(userId);
+      if (trial && trial.is_active && trial.minutes_remaining > 0) {
+        carryoverMinutes = trial.minutes_remaining;
+      }
+
+      // Mark trial as used (converted)
+      await db
+        .update(users)
+        .set({ trialUsed: true, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+
+      // Supersede any existing active subscriptions
       const existingActive = await db
         .select()
         .from(userSubscriptions)
@@ -2162,6 +2280,19 @@ export async function registerRoutes(
           .where(eq(userSubscriptions.id, existingActive[0].id));
       }
 
+      // Also supersede any pending_payment subscriptions
+      await db
+        .update(userSubscriptions)
+        .set({ status: "superseded" })
+        .where(
+          and(
+            eq(userSubscriptions.userId, userId),
+            eq(userSubscriptions.status, "pending_payment"),
+          ),
+        );
+
+      const totalMinutesAvailable = (plan.validTotalMinutes || 0) + carryoverMinutes;
+
       const [subscription] = await db
         .insert(userSubscriptions)
         .values({
@@ -2170,13 +2301,14 @@ export async function registerRoutes(
           validDateUpto,
           minutesUsed: 0,
           chunksUsed: 0,
+          minutesRemaining: String(totalMinutesAvailable),
           paymentToken: payment_token,
           status: "active",
         })
         .returning();
 
       console.log(
-        `[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()}`,
+        `[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()} (carryover: ${carryoverMinutes} mins)`,
       );
 
       res.json({
@@ -2187,6 +2319,8 @@ export async function registerRoutes(
           plan_name: plan.name,
           valid_date_upto: validDateUpto.toISOString(),
           valid_total_minutes: plan.validTotalMinutes,
+          minutes_remaining: totalMinutesAvailable,
+          carryover_minutes: carryoverMinutes,
           recordings_available_days: plan.recordingsAvailableDays,
           chunks_count: plan.chunksCount,
           offline_recording: plan.offlineRecording,
@@ -2202,10 +2336,137 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/subscription - Get active subscription for logged-in user
+  // Helper: Get trial info for a user
+  async function getTrialInfo(userId: string) {
+    const userResult = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
+    const user = userResult[0];
+    if (!user || !user.trialStartsAt || !user.trialEndsAt) {
+      return null;
+    }
+
+    const now = new Date();
+    const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+    const trialMinutesTotal = user.trialMinutesTotal || 90;
+    const trialMinutesRemaining = Math.max(0, trialMinutesTotal - trialMinutesUsed);
+    const timeExpired = now > user.trialEndsAt;
+    const minutesExpired = trialMinutesRemaining <= 0;
+    const isActive = !user.trialUsed && !timeExpired && !minutesExpired;
+
+    let status: string;
+    if (user.trialUsed) {
+      status = "converted";
+    } else if (timeExpired || minutesExpired) {
+      status = "expired";
+    } else {
+      status = "active";
+    }
+
+    const timeRemainingMs = Math.max(0, user.trialEndsAt.getTime() - now.getTime());
+    const daysRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60 * 24));
+    const hoursRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60));
+
+    return {
+      status,
+      is_active: isActive,
+      starts_at: user.trialStartsAt.toISOString(),
+      ends_at: user.trialEndsAt.toISOString(),
+      minutes_total: trialMinutesTotal,
+      minutes_used: trialMinutesUsed,
+      minutes_remaining: trialMinutesRemaining,
+      days_remaining: isActive ? daysRemaining : 0,
+      hours_remaining: isActive ? hoursRemaining : 0,
+    };
+  }
+
+  // Helper: Check if user has access (trial OR active subscription with minutes)
+  async function checkUserAccess(userId: string) {
+    const trial = await getTrialInfo(userId);
+
+    const activeSubResult = await db
+      .select()
+      .from(userSubscriptions)
+      .where(
+        and(
+          eq(userSubscriptions.userId, userId),
+          eq(userSubscriptions.status, "active"),
+          gte(userSubscriptions.validDateUpto, new Date()),
+        ),
+      )
+      .limit(1);
+
+    let subscription = null;
+    if (activeSubResult.length > 0) {
+      const sub = activeSubResult[0];
+      const planResult = await db
+        .select()
+        .from(subscriptionPlans)
+        .where(eq(subscriptionPlans.id, sub.planId))
+        .limit(1);
+      const plan = planResult[0];
+      if (plan) {
+        const totalMinutes = plan.validTotalMinutes || 0;
+        const subMinutesRemaining = parseFloat(sub.minutesRemaining || "0");
+        subscription = {
+          id: sub.id,
+          plan_name: plan.name,
+          valid_total_minutes: totalMinutes,
+          minutes_used: sub.minutesUsed,
+          minutes_remaining: subMinutesRemaining,
+          valid_date_upto: sub.validDateUpto.toISOString(),
+          status: sub.status,
+        };
+      }
+    }
+
+    const trialGrantsAccess = trial !== null && trial.is_active && trial.minutes_remaining > 0;
+    const subGrantsAccess = subscription !== null && subscription.status === "active" && subscription.minutes_remaining > 0;
+    const accessGranted = trialGrantsAccess || subGrantsAccess;
+
+    let accessSource: string;
+    if (trialGrantsAccess) {
+      accessSource = "trial";
+    } else if (subGrantsAccess) {
+      accessSource = "subscription";
+    } else {
+      accessSource = "none";
+    }
+
+    return {
+      access_granted: accessGranted,
+      access_source: accessSource,
+      trial,
+      subscription,
+    };
+  }
+
+  // POST /api/v1/m/check-access - Check if user has recording access
+  app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const userId = req.jwtUser?.userId!;
+      const accessInfo = await checkUserAccess(userId);
+
+      res.json({
+        success: true,
+        ...accessInfo,
+      });
+    } catch (error: any) {
+      console.error("[Check Access] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to check access",
+      });
+    }
+  });
+
+  // GET /api/v1/m/subscription - Get active subscription for logged-in user (with trial info)
   app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId!;
+      const trial = await getTrialInfo(userId);
 
       const activeSubResult = await db
         .select()
@@ -2236,6 +2497,7 @@ export async function registerRoutes(
               plan_name: plan.name,
               valid_total_minutes: plan.validTotalMinutes,
               minutes_used: sub.minutesUsed,
+              minutes_remaining: parseFloat(sub.minutesRemaining || "0"),
               valid_date_upto: sub.validDateUpto.toISOString(),
               recordings_available_days: plan.recordingsAvailableDays,
               chunks_count: plan.chunksCount,
@@ -2243,41 +2505,58 @@ export async function registerRoutes(
               offline_recording: plan.offlineRecording,
               status: sub.status,
             },
+            trial,
           });
         }
       }
 
-      const freePlanResult = await db
+      // No active subscription - check for pending_payment subscription
+      const pendingSubResult = await db
         .select()
-        .from(subscriptionPlans)
-        .where(eq(subscriptionPlans.name, "Free"))
+        .from(userSubscriptions)
+        .where(
+          and(
+            eq(userSubscriptions.userId, userId),
+            eq(userSubscriptions.status, "pending_payment"),
+          ),
+        )
         .limit(1);
-      const freePlan = freePlanResult[0];
 
-      if (!freePlan) {
-        return res.status(500).json({
-          success: false,
-          error: "Default plan not configured",
-        });
+      if (pendingSubResult.length > 0) {
+        const sub = pendingSubResult[0];
+        const planResult = await db
+          .select()
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.id, sub.planId))
+          .limit(1);
+        const plan = planResult[0];
+
+        if (plan) {
+          return res.json({
+            success: true,
+            subscription: {
+              id: sub.id,
+              plan_name: plan.name,
+              valid_total_minutes: plan.validTotalMinutes,
+              minutes_used: 0,
+              minutes_remaining: 0,
+              valid_date_upto: null,
+              recordings_available_days: plan.recordingsAvailableDays,
+              chunks_count: plan.chunksCount,
+              chunks_used: 0,
+              offline_recording: plan.offlineRecording,
+              status: "pending_payment",
+            },
+            trial,
+          });
+        }
       }
 
-      const freeValidUpto = new Date();
-      freeValidUpto.setDate(freeValidUpto.getDate() + freePlan.validDays);
-
+      // No subscription at all
       res.json({
         success: true,
-        subscription: {
-          id: null,
-          plan_name: "Free",
-          valid_total_minutes: freePlan.validTotalMinutes,
-          minutes_used: 0,
-          valid_date_upto: freeValidUpto.toISOString(),
-          recordings_available_days: freePlan.recordingsAvailableDays,
-          chunks_count: freePlan.chunksCount,
-          chunks_used: 0,
-          offline_recording: freePlan.offlineRecording,
-          status: "active",
-        },
+        subscription: null,
+        trial,
       });
     } catch (error: any) {
       console.error("[Subscription] Error:", error);

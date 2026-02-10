@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, timestamp, boolean, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, timestamp, boolean, integer, numeric } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -8,6 +8,11 @@ export const users = pgTable("mvp_users", {
   username: varchar("username", { length: 255 }).notNull().unique(),
   email: varchar("email", { length: 255 }),
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  trialStartsAt: timestamp("trial_starts_at"),
+  trialEndsAt: timestamp("trial_ends_at"),
+  trialUsed: boolean("trial_used").default(false),
+  trialMinutesTotal: integer("trial_minutes_total").default(90),
+  trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -128,6 +133,8 @@ export const subscriptionPlans = pgTable("mvp_subscription_plans", {
   chunksCount: integer("chunks_count").notNull(),
   offlineRecording: boolean("offline_recording").notNull().default(false),
   priceMonthly: integer("price_monthly").notNull().default(0),
+  isDefault: boolean("is_default").default(false),
+  isVisible: boolean("is_visible").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -140,6 +147,7 @@ export const userSubscriptions = pgTable("mvp_user_subscriptions", {
   validDateUpto: timestamp("valid_date_upto").notNull(),
   minutesUsed: integer("minutes_used").notNull().default(0),
   chunksUsed: integer("chunks_used").notNull().default(0),
+  minutesRemaining: numeric("minutes_remaining", { precision: 10, scale: 2 }).default("0"),
   paymentToken: varchar("payment_token", { length: 255 }),
   status: varchar("status", { length: 20 }).notNull().default("active"),
   createdAt: timestamp("created_at").defaultNow(),

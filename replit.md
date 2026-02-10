@@ -177,6 +177,31 @@ Preferred communication style: Simple, everyday language.
 - `p-limit`: Concurrency control
 - `p-retry`: Retry logic with exponential backoff
 
+### Trial & Subscription System
+
+**Trial System** (implemented Feb 2026):
+- New users get a 7-day trial with 90 minutes of recording
+- Trial expires when either 7 days pass OR 90 minutes consumed
+- Trial fields on `mvp_users`: `trial_starts_at`, `trial_ends_at`, `trial_used`, `trial_minutes_total`, `trial_minutes_used`
+- On trial expiry, user is auto-assigned the default plan (Starter) with `pending_payment` status
+- If user subscribes during trial, remaining trial minutes carry forward to subscription
+
+**Subscription Plans** (`mvp_subscription_plans`):
+- Free (hidden, is_visible=false)
+- Starter (default, is_visible=true, is_default=true) - $9.99/mo
+- Pro (hidden, is_visible=false) - $24.99/mo
+- Plans have `is_default` and `is_visible` flags
+
+**Key Endpoints**:
+- `GET /api/v1/p/plans` - Lists visible plans (add `?all=true` for all)
+- `POST /api/v1/m/check-access` - Checks if user has access (trial OR subscription)
+- `GET /api/v1/m/subscription` - Gets active subscription + trial info
+- `POST /api/v1/m/subscribe` - Subscribe with trial-to-paid transition + minutes carryover
+
+**Access Logic**: Access granted if (trial active AND minutes > 0) OR (active subscription AND minutes_remaining > 0)
+
+**IMPORTANT**: Both `server/routes.ts` (dev) and `api/index.ts` (Vercel production) must be kept in sync for all API changes. The dev server uses `SUPABASE_DATABASE_URL` (external Supabase DB).
+
 ### Environment Variables
 
 Required:

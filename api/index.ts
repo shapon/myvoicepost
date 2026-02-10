@@ -10,7 +10,7 @@ import crypto from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { eq, and, desc, gte } from "drizzle-orm";
-import { pgTable, text, varchar, timestamp, uuid, integer, boolean } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, timestamp, uuid, integer, boolean, numeric } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
 import pLimit from "p-limit";
@@ -25,6 +25,11 @@ const users = pgTable("mvp_users", {
   username: varchar("username", { length: 255 }).notNull().unique(),
   email: varchar("email", { length: 255 }),
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  trialStartsAt: timestamp("trial_starts_at"),
+  trialEndsAt: timestamp("trial_ends_at"),
+  trialUsed: boolean("trial_used").default(false),
+  trialMinutesTotal: integer("trial_minutes_total").default(90),
+  trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -62,6 +67,8 @@ const subscriptionPlans = pgTable("mvp_subscription_plans", {
   chunksCount: integer("chunks_count").notNull(),
   offlineRecording: boolean("offline_recording").notNull().default(false),
   priceMonthly: integer("price_monthly").notNull().default(0),
+  isDefault: boolean("is_default").default(false),
+  isVisible: boolean("is_visible").default(true),
   createdAt: timestamp("created_at").defaultNow(),
 });
 
@@ -72,6 +79,7 @@ const userSubscriptions = pgTable("mvp_user_subscriptions", {
   validDateUpto: timestamp("valid_date_upto").notNull(),
   minutesUsed: integer("minutes_used").notNull().default(0),
   chunksUsed: integer("chunks_used").notNull().default(0),
+  minutesRemaining: numeric("minutes_remaining", { precision: 10, scale: 2 }).default("0"),
   paymentToken: varchar("payment_token", { length: 255 }),
   status: varchar("status", { length: 20 }).notNull().default("active"),
   createdAt: timestamp("created_at").defaultNow(),
@@ -821,10 +829,20 @@ app.post("/api/auth/signup", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    const trialStartsAt = new Date();
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
     const result = await db.insert(users).values({
       username,
       email,
       passwordHash: hashedPassword,
+      trialStartsAt,
+      trialEndsAt,
+      trialUsed: false,
+      trialMinutesTotal: 90,
+      trialMinutesUsed: "0",
     }).returning();
 
     const user = result[0];
@@ -1319,6 +1337,34 @@ app.post("/api/v1/p/login", async (req, res) => {
       { expiresIn: "7d" }
     );
 
+    let trialExpired = false;
+    if (user && user.trialEndsAt && !user.trialUsed) {
+      const now = new Date();
+      const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+      const trialMinutesTotal = user.trialMinutesTotal || 90;
+      const trialMinutesRemaining = trialMinutesTotal - trialMinutesUsed;
+
+      if (now > user.trialEndsAt || trialMinutesRemaining <= 0) {
+        trialExpired = true;
+        const existingSub = await db.select().from(userSubscriptions).where(eq(userSubscriptions.userId, user.id)).limit(1);
+        if (existingSub.length === 0) {
+          const defaultPlanResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.isDefault, true)).limit(1);
+          if (defaultPlanResult.length > 0) {
+            const defaultPlan = defaultPlanResult[0];
+            await db.insert(userSubscriptions).values({
+              userId: user.id,
+              planId: defaultPlan.id,
+              validDateUpto: new Date(),
+              minutesUsed: 0,
+              chunksUsed: 0,
+              minutesRemaining: "0",
+              status: "pending_payment",
+            });
+          }
+        }
+      }
+    }
+
     console.log(`[Public Login] User ${user.username} logged in via /api/v1/p/login`);
 
     res.json({
@@ -1330,6 +1376,7 @@ app.post("/api/v1/p/login", async (req, res) => {
         email: user.email,
         username: user.username,
       },
+      trial_expired: trialExpired,
     });
   } catch (error: any) {
     console.error("[Public] Login error:", error);
@@ -1381,10 +1428,20 @@ app.post("/api/v1/p/register", async (req, res) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
+
+    const trialStartsAt = new Date();
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
     const result = await db.insert(users).values({
       username,
       email,
       passwordHash: hashedPassword,
+      trialStartsAt,
+      trialEndsAt,
+      trialUsed: false,
+      trialMinutesTotal: 90,
+      trialMinutesUsed: "0",
     }).returning();
 
     const user = result[0];
@@ -1394,7 +1451,7 @@ app.post("/api/v1/p/register", async (req, res) => {
       { expiresIn: "3d" }
     );
 
-    console.log(`[Public Register] User ${user.username} created via /api/v1/p/register`);
+    console.log(`[Public Register] User ${user.username} created via /api/v1/p/register with 7-day trial`);
 
     res.status(201).json({
       success: true,
@@ -1404,6 +1461,13 @@ app.post("/api/v1/p/register", async (req, res) => {
         id: user.id,
         email: user.email,
         username: user.username,
+      },
+      trial: {
+        starts_at: trialStartsAt.toISOString(),
+        ends_at: trialEndsAt.toISOString(),
+        minutes_total: 90,
+        minutes_used: 0,
+        minutes_remaining: 90,
       },
     });
   } catch (error: any) {
@@ -2202,10 +2266,89 @@ app.delete("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) =
 // SUBSCRIPTION ENDPOINTS
 // ============================================================
 
-// GET /api/v1/p/plans - List all available plans (public)
+async function getTrialInfo(userId: string) {
+  const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const user = userResult[0];
+  if (!user || !user.trialStartsAt || !user.trialEndsAt) return null;
+
+  const now = new Date();
+  const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+  const trialMinutesTotal = user.trialMinutesTotal || 90;
+  const trialMinutesRemaining = Math.max(0, trialMinutesTotal - trialMinutesUsed);
+  const timeExpired = now > user.trialEndsAt;
+  const minutesExpired = trialMinutesRemaining <= 0;
+  const isActive = !user.trialUsed && !timeExpired && !minutesExpired;
+
+  let status: string;
+  if (user.trialUsed) status = "converted";
+  else if (timeExpired || minutesExpired) status = "expired";
+  else status = "active";
+
+  const timeRemainingMs = Math.max(0, user.trialEndsAt.getTime() - now.getTime());
+  const daysRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60 * 24));
+  const hoursRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60));
+
+  return {
+    status,
+    is_active: isActive,
+    starts_at: user.trialStartsAt.toISOString(),
+    ends_at: user.trialEndsAt.toISOString(),
+    minutes_total: trialMinutesTotal,
+    minutes_used: trialMinutesUsed,
+    minutes_remaining: trialMinutesRemaining,
+    days_remaining: isActive ? daysRemaining : 0,
+    hours_remaining: isActive ? hoursRemaining : 0,
+  };
+}
+
+async function checkUserAccess(userId: string) {
+  const trial = await getTrialInfo(userId);
+  const activeSubResult = await db.select().from(userSubscriptions)
+    .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, new Date())))
+    .limit(1);
+
+  let subscription = null;
+  if (activeSubResult.length > 0) {
+    const sub = activeSubResult[0];
+    const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, sub.planId)).limit(1);
+    const plan = planResult[0];
+    if (plan) {
+      subscription = {
+        id: sub.id,
+        plan_name: plan.name,
+        valid_total_minutes: plan.validTotalMinutes || 0,
+        minutes_used: sub.minutesUsed,
+        minutes_remaining: parseFloat(sub.minutesRemaining || "0"),
+        valid_date_upto: sub.validDateUpto.toISOString(),
+        status: sub.status,
+      };
+    }
+  }
+
+  const trialGrantsAccess = trial !== null && trial.is_active && trial.minutes_remaining > 0;
+  const subGrantsAccess = subscription !== null && subscription.status === "active" && subscription.minutes_remaining > 0;
+
+  return {
+    access_granted: trialGrantsAccess || subGrantsAccess,
+    access_source: trialGrantsAccess ? "trial" : subGrantsAccess ? "subscription" : "none",
+    trial,
+    subscription,
+  };
+}
+
+// GET /api/v1/p/plans - List all available plans (public, filtered by is_visible)
 app.get("/api/v1/p/plans", async (req, res) => {
   try {
-    const plans = await db.select().from(subscriptionPlans);
+    const showAll = req.query.all === "true";
+    let plans;
+    if (showAll) {
+      plans = await db.select().from(subscriptionPlans);
+    } else {
+      plans = await db
+        .select()
+        .from(subscriptionPlans)
+        .where(eq(subscriptionPlans.isVisible, true));
+    }
 
     const formattedPlans = plans.map((plan) => ({
       id: plan.id,
@@ -2216,6 +2359,8 @@ app.get("/api/v1/p/plans", async (req, res) => {
       chunks_count: plan.chunksCount,
       offline_recording: plan.offlineRecording,
       price_monthly: plan.priceMonthly,
+      is_default: plan.isDefault,
+      is_visible: plan.isVisible,
     }));
 
     res.json({
@@ -2279,6 +2424,16 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
     const validDateUpto = new Date();
     validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
 
+    let carryoverMinutes = 0;
+    const trialInfo = await getTrialInfo(userId);
+    if (trialInfo && trialInfo.is_active && trialInfo.minutes_remaining > 0) {
+      carryoverMinutes = trialInfo.minutes_remaining;
+    }
+
+    await db.update(users)
+      .set({ trialUsed: true, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+
     const existingActive = await db.select().from(userSubscriptions)
       .where(and(
         eq(userSubscriptions.userId, userId),
@@ -2293,17 +2448,32 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
         .where(eq(userSubscriptions.id, existingActive[0].id));
     }
 
+    const existingPending = await db.select().from(userSubscriptions)
+      .where(and(
+        eq(userSubscriptions.userId, userId),
+        eq(userSubscriptions.status, "pending_payment"),
+      ));
+
+    for (const pending of existingPending) {
+      await db.update(userSubscriptions)
+        .set({ status: "superseded" })
+        .where(eq(userSubscriptions.id, pending.id));
+    }
+
+    const totalMinutesAvailable = (plan.validTotalMinutes || 0) + carryoverMinutes;
+
     const [subscription] = await db.insert(userSubscriptions).values({
       userId,
       planId: plan_id,
       validDateUpto,
       minutesUsed: 0,
       chunksUsed: 0,
+      minutesRemaining: String(totalMinutesAvailable),
       paymentToken: payment_token,
       status: "active",
     }).returning();
 
-    console.log(`[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()}`);
+    console.log(`[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()} (carryover: ${carryoverMinutes} min)`);
 
     res.json({
       success: true,
@@ -2313,6 +2483,8 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
         plan_name: plan.name,
         valid_date_upto: validDateUpto.toISOString(),
         valid_total_minutes: plan.validTotalMinutes,
+        minutes_remaining: totalMinutesAvailable,
+        carryover_minutes: carryoverMinutes,
         recordings_available_days: plan.recordingsAvailableDays,
         chunks_count: plan.chunksCount,
         offline_recording: plan.offlineRecording,
@@ -2328,10 +2500,33 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
+// POST /api/v1/m/check-access - Check user access (trial + subscription)
+app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const userId = (req as any).jwtUser.userId;
+    const accessInfo = await checkUserAccess(userId);
+
+    res.json({
+      success: true,
+      access_granted: accessInfo.access_granted,
+      access_source: accessInfo.access_source,
+      trial: accessInfo.trial,
+      subscription: accessInfo.subscription,
+    });
+  } catch (error: any) {
+    console.error("[Check Access] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Failed to check access",
+    });
+  }
+});
+
 // GET /api/v1/m/subscription - Get active subscription for logged-in user
 app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
   try {
     const userId = (req as any).jwtUser.userId;
+    const trial = await getTrialInfo(userId);
 
     const activeSubResult = await db.select().from(userSubscriptions)
       .where(and(
@@ -2354,6 +2549,7 @@ app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
             plan_name: plan.name,
             valid_total_minutes: plan.validTotalMinutes,
             minutes_used: sub.minutesUsed,
+            minutes_remaining: parseFloat(sub.minutesRemaining || "0"),
             valid_date_upto: sub.validDateUpto.toISOString(),
             recordings_available_days: plan.recordingsAvailableDays,
             chunks_count: plan.chunksCount,
@@ -2361,37 +2557,48 @@ app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
             offline_recording: plan.offlineRecording,
             status: sub.status,
           },
+          trial,
         });
       }
     }
 
-    const freePlanResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.name, "Free")).limit(1);
-    const freePlan = freePlanResult[0];
+    const pendingSubResult = await db.select().from(userSubscriptions)
+      .where(and(
+        eq(userSubscriptions.userId, userId),
+        eq(userSubscriptions.status, "pending_payment"),
+      ))
+      .limit(1);
 
-    if (!freePlan) {
-      return res.status(500).json({
-        success: false,
-        error: "Default plan not configured",
-      });
+    if (pendingSubResult.length > 0) {
+      const sub = pendingSubResult[0];
+      const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, sub.planId)).limit(1);
+      const plan = planResult[0];
+
+      if (plan) {
+        return res.json({
+          success: true,
+          subscription: {
+            id: sub.id,
+            plan_name: plan.name,
+            valid_total_minutes: plan.validTotalMinutes,
+            minutes_used: sub.minutesUsed,
+            minutes_remaining: parseFloat(sub.minutesRemaining || "0"),
+            valid_date_upto: sub.validDateUpto.toISOString(),
+            recordings_available_days: plan.recordingsAvailableDays,
+            chunks_count: plan.chunksCount,
+            chunks_used: sub.chunksUsed,
+            offline_recording: plan.offlineRecording,
+            status: sub.status,
+          },
+          trial,
+        });
+      }
     }
-
-    const freeValidUpto = new Date();
-    freeValidUpto.setDate(freeValidUpto.getDate() + freePlan.validDays);
 
     res.json({
       success: true,
-      subscription: {
-        id: null,
-        plan_name: "Free",
-        valid_total_minutes: freePlan.validTotalMinutes,
-        minutes_used: 0,
-        valid_date_upto: freeValidUpto.toISOString(),
-        recordings_available_days: freePlan.recordingsAvailableDays,
-        chunks_count: freePlan.chunksCount,
-        chunks_used: 0,
-        offline_recording: freePlan.offlineRecording,
-        status: "active",
-      },
+      subscription: null,
+      trial,
     });
   } catch (error: any) {
     console.error("[Subscription] Error:", error);
