@@ -85,11 +85,21 @@ const userSubscriptions = pgTable("mvp_user_subscriptions", {
   createdAt: timestamp("created_at").defaultNow(),
 });
 
+const userSettings = pgTable("mvp_user_settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  settingKey: varchar("setting_key", { length: 100 }).notNull(),
+  settingValue: text("setting_value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 type User = typeof users.$inferSelect;
 type SavedText = typeof savedTexts.$inferSelect;
 type PasswordResetToken = typeof passwordResetTokens.$inferSelect;
 type SubscriptionPlan = typeof subscriptionPlans.$inferSelect;
 type UserSubscription = typeof userSubscriptions.$inferSelect;
+type UserSetting = typeof userSettings.$inferSelect;
 
 // ============ DATABASE CONNECTION ============
 const connectionString = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL!;
@@ -2606,6 +2616,143 @@ app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
       success: false,
       error: "Failed to fetch subscription",
     });
+  }
+});
+
+// GET /api/v1/m/settings - Get all settings for logged-in user
+app.get("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const userId = (req as any).jwtUser?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+
+    const settings = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.userId, userId));
+
+    const result = settings.map((s) => ({
+      id: s.id,
+      setting_key: s.settingKey,
+      setting_value: s.settingValue,
+      updated_at: s.updatedAt,
+    }));
+
+    res.json({ success: true, settings: result });
+  } catch (error: any) {
+    console.error("[Settings GET] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch settings" });
+  }
+});
+
+// PUT /api/v1/m/settings - Upsert settings for logged-in user (accepts array of settings)
+app.put("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const userId = (req as any).jwtUser?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+
+    const settingsSchema = z.array(
+      z.object({
+        setting_key: z.string().min(1).max(100),
+        setting_value: z.string(),
+      })
+    );
+
+    const parseResult = settingsSchema.safeParse(req.body.settings);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid settings format",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const settingsToSave = parseResult.data;
+    const saved: any[] = [];
+
+    for (const setting of settingsToSave) {
+      const existing = await db
+        .select()
+        .from(userSettings)
+        .where(
+          and(
+            eq(userSettings.userId, userId),
+            eq(userSettings.settingKey, setting.setting_key)
+          )
+        )
+        .limit(1);
+
+      if (existing.length > 0) {
+        const updated = await db
+          .update(userSettings)
+          .set({
+            settingValue: setting.setting_value,
+            updatedAt: new Date(),
+          })
+          .where(eq(userSettings.id, existing[0].id))
+          .returning();
+        saved.push({
+          id: updated[0].id,
+          setting_key: updated[0].settingKey,
+          setting_value: updated[0].settingValue,
+          updated_at: updated[0].updatedAt,
+        });
+      } else {
+        const inserted = await db
+          .insert(userSettings)
+          .values({
+            userId,
+            settingKey: setting.setting_key,
+            settingValue: setting.setting_value,
+          })
+          .returning();
+        saved.push({
+          id: inserted[0].id,
+          setting_key: inserted[0].settingKey,
+          setting_value: inserted[0].settingValue,
+          updated_at: inserted[0].updatedAt,
+        });
+      }
+    }
+
+    res.json({ success: true, settings: saved });
+  } catch (error: any) {
+    console.error("[Settings PUT] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to save settings" });
+  }
+});
+
+// DELETE /api/v1/m/settings/:key - Delete a specific setting
+app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const userId = (req as any).jwtUser?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+
+    const { key } = req.params;
+
+    const deleted = await db
+      .delete(userSettings)
+      .where(
+        and(
+          eq(userSettings.userId, userId),
+          eq(userSettings.settingKey, key)
+        )
+      )
+      .returning();
+
+    if (deleted.length === 0) {
+      return res.status(404).json({ success: false, error: "Setting not found" });
+    }
+
+    res.json({ success: true, message: "Setting deleted" });
+  } catch (error: any) {
+    console.error("[Settings DELETE] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to delete setting" });
   }
 });
 

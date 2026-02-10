@@ -154,3 +154,21 @@ export const userSubscriptions = pgTable("mvp_user_subscriptions", {
 });
 
 export type UserSubscription = typeof userSubscriptions.$inferSelect;
+
+export const userSettings = pgTable("mvp_user_settings", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  settingKey: varchar("setting_key", { length: 100 }).notNull(),
+  settingValue: text("setting_value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertUserSettingSchema = createInsertSchema(userSettings).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertUserSetting = z.infer<typeof insertUserSettingSchema>;
+export type UserSetting = typeof userSettings.$inferSelect;
