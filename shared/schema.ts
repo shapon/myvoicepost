@@ -13,6 +13,8 @@ export const users = pgTable("mvp_users", {
   trialUsed: boolean("trial_used").default(false),
   trialMinutesTotal: integer("trial_minutes_total").default(90),
   trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
+  stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+  stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -133,6 +135,7 @@ export const subscriptionPlans = pgTable("mvp_subscription_plans", {
   chunksCount: integer("chunks_count").notNull(),
   offlineRecording: boolean("offline_recording").notNull().default(false),
   priceMonthly: integer("price_monthly").notNull().default(0),
+  stripePriceId: varchar("stripe_price_id", { length: 255 }),
   isDefault: boolean("is_default").default(false),
   isVisible: boolean("is_visible").default(true),
   createdAt: timestamp("created_at").defaultNow(),

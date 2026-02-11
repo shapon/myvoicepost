@@ -222,6 +222,48 @@ Preferred communication style: Simple, everyday language.
 
 **IMPORTANT**: Both `server/routes.ts` (dev) and `api/index.ts` (Vercel production) must be kept in sync for all API changes. The dev server uses `SUPABASE_DATABASE_URL` (external Supabase DB).
 
+### Stripe Subscription Endpoints (implemented Feb 2026)
+
+**Stripe Client**: `server/stripeClient.ts` - Fetches Stripe credentials from Replit connector API (auto-handles dev/prod keys). Never cache the client.
+
+**Database Changes**: Added `stripe_customer_id`, `stripe_subscription_id` columns to `mvp_users` table. Added `stripe_price_id` column to `mvp_subscription_plans`.
+
+**Current Plan**: Only the Starter plan ($9.99/mo, price_id: `price_1SzVvyCu3GlQjfboRLx67yVz`) is active with the 7-day trial (90 minutes).
+
+**Endpoints**:
+
+1. `GET /api/stripe-config` + `GET /api/v1/p/stripe-config` (Public, no auth)
+   - Response: `{ success: true, publishableKey: string }`
+   - Returns Stripe publishable key for client-side payment initialization.
+
+2. `GET /api/subscription-status` (Web, session auth) + `GET /api/v1/m/subscription-status` (Mobile, JWT auth)
+   - Response: `{ success, trial: { is_active, days_remaining, minutes_remaining, minutes_used, trial_ends_at }, subscription: { id, plan_name, status, valid_date_upto, minutes_used, minutes_remaining, stripe_subscription_id, stripe_status, cancel_at_period_end, current_period_end }, has_active_subscription, has_active_trial }`
+   - Returns full subscription and trial status including live Stripe subscription state.
+
+3. `POST /api/create-subscription` (Web, session auth) + `POST /api/v1/m/create-subscription` (Mobile, JWT auth)
+   - Request: `{ email: string, priceId: string }`
+   - Response: `{ success: true, subscriptionId: string, clientSecret: string | null }`
+   - Creates Stripe Customer (if needed), creates Subscription with `payment_behavior: 'default_incomplete'`, returns `clientSecret` for PaymentSheet confirmation.
+
+4. `POST /api/cancel-subscription` (Web) + `POST /api/v1/m/cancel-subscription` (Mobile)
+   - Request: `{ subscriptionId: string }`
+   - Response: `{ success: true, message: string, cancel_at: string | null, current_period_end: string | null }`
+   - Ownership check: only the subscription owner can cancel. Cancels at end of billing period.
+
+5. `POST /api/stripe-webhook` + `POST /api/v1/m/stripe-webhook`
+   - Handles 4 event types:
+     - `invoice.paid`: Activates subscription, carries over remaining trial minutes
+     - `invoice.payment_failed`: Marks subscription as `payment_failed`
+     - `customer.subscription.updated`: Syncs plan changes, handles `past_due`/`unpaid` status
+     - `customer.subscription.deleted`: Cancels subscription in DB, clears stripe IDs
+   - Uses `STRIPE_WEBHOOK_SECRET` env var for signature verification.
+   - Uses `rawBody` from express.json verify callback for signature validation.
+
+6. `GET /api/v1/p/plans` (Public)
+   - Returns plans with `stripe_price_id` included for client-side price selection.
+
+**Stripe Sync**: On dev startup, `stripe-replit-sync` runs migrations to create `stripe` schema, sets up managed webhook, and syncs backfill data.
+
 ### Environment Variables
 
 Required:

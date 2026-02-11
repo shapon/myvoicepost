@@ -15,6 +15,7 @@ import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
 import pLimit from "p-limit";
 import nodemailer from "nodemailer";
+import Stripe from "stripe";
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
 const aiRequestLimiter = pLimit(5);
@@ -30,6 +31,8 @@ const users = pgTable("mvp_users", {
   trialUsed: boolean("trial_used").default(false),
   trialMinutesTotal: integer("trial_minutes_total").default(90),
   trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
+  stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
+  stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -67,6 +70,7 @@ const subscriptionPlans = pgTable("mvp_subscription_plans", {
   chunksCount: integer("chunks_count").notNull(),
   offlineRecording: boolean("offline_recording").notNull().default(false),
   priceMonthly: integer("price_monthly").notNull().default(0),
+  stripePriceId: varchar("stripe_price_id", { length: 255 }),
   isDefault: boolean("is_default").default(false),
   isVisible: boolean("is_visible").default(true),
   createdAt: timestamp("created_at").defaultNow(),
@@ -120,6 +124,85 @@ const client = postgres(connectionString, {
   max_lifetime: 60 * 30,      // Max connection lifetime (30 min)
 });
 const db = drizzle(client);
+
+// ============ STRIPE CLIENT ============
+async function getStripeClient() {
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY
+    ? 'repl ' + process.env.REPL_IDENTITY
+    : process.env.WEB_REPL_RENEWAL
+      ? 'depl ' + process.env.WEB_REPL_RENEWAL
+      : null;
+
+  if (!xReplitToken) {
+    throw new Error('Stripe credentials not available');
+  }
+
+  const connectorName = 'stripe';
+  const isProduction = process.env.REPLIT_DEPLOYMENT === '1';
+  const targetEnvironment = isProduction ? 'production' : 'development';
+
+  const url = new URL(`https://${hostname}/api/v2/connection`);
+  url.searchParams.set('include_secrets', 'true');
+  url.searchParams.set('connector_names', connectorName);
+  url.searchParams.set('environment', targetEnvironment);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      'Accept': 'application/json',
+      'X_REPLIT_TOKEN': xReplitToken,
+    },
+  });
+
+  const data = await response.json();
+  const conn = data.items?.[0];
+
+  if (!conn || !conn.settings.secret) {
+    throw new Error(`Stripe ${targetEnvironment} connection not found`);
+  }
+
+  return new Stripe(conn.settings.secret, {
+    apiVersion: '2025-11-17.clover' as any,
+  });
+}
+
+async function getStripePublishableKey(): Promise<string> {
+  const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
+  const xReplitToken = process.env.REPL_IDENTITY
+    ? 'repl ' + process.env.REPL_IDENTITY
+    : process.env.WEB_REPL_RENEWAL
+      ? 'depl ' + process.env.WEB_REPL_RENEWAL
+      : null;
+
+  if (!xReplitToken) {
+    throw new Error('Stripe credentials not available');
+  }
+
+  const connectorName = 'stripe';
+  const isProduction = process.env.REPLIT_DEPLOYMENT === '1';
+  const targetEnvironment = isProduction ? 'production' : 'development';
+
+  const url = new URL(`https://${hostname}/api/v2/connection`);
+  url.searchParams.set('include_secrets', 'true');
+  url.searchParams.set('connector_names', connectorName);
+  url.searchParams.set('environment', targetEnvironment);
+
+  const response = await fetch(url.toString(), {
+    headers: {
+      'Accept': 'application/json',
+      'X_REPLIT_TOKEN': xReplitToken,
+    },
+  });
+
+  const data = await response.json();
+  const conn = data.items?.[0];
+
+  if (!conn || !conn.settings.publishable) {
+    throw new Error(`Stripe ${targetEnvironment} publishable key not found`);
+  }
+
+  return conn.settings.publishable;
+}
 
 // ============ JWT CONFIG ============
 const JWT_SECRET = process.env.SESSION_SECRET || "myvoicepost-jwt-secret-key";
@@ -599,7 +682,12 @@ app.use(cors({
   exposedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-app.use(express.json({ limit: '50mb' }));
+app.use(express.json({
+  limit: '50mb',
+  verify: (req: any, _res, buf) => {
+    req.rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 
 const upload = multer({
@@ -2541,6 +2629,7 @@ app.get("/api/v1/p/plans", async (req, res) => {
       chunks_count: plan.chunksCount,
       offline_recording: plan.offlineRecording,
       price_monthly: plan.priceMonthly,
+      stripe_price_id: plan.stripePriceId,
       is_default: plan.isDefault,
       is_visible: plan.isVisible,
     }));
@@ -2927,6 +3016,514 @@ app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => 
     res.status(500).json({ success: false, error: "Failed to delete setting" });
   }
 });
+
+// ============================================================
+// STRIPE SUBSCRIPTION ENDPOINTS (Web + Mobile)
+// ============================================================
+
+// GET /api/stripe-config + /api/v1/p/stripe-config - Get Stripe publishable key
+async function handleStripeConfig(_req: Request, res: Response) {
+  try {
+    const publishableKey = await getStripePublishableKey();
+    res.json({ success: true, publishableKey });
+  } catch (error: any) {
+    console.error("[Stripe Config] Error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to get Stripe configuration" });
+  }
+}
+
+app.get("/api/stripe-config", handleStripeConfig);
+app.get("/api/v1/p/stripe-config", handleStripeConfig);
+
+// GET /api/subscription-status + /api/v1/m/subscription-status - Get current subscription status
+async function handleSubscriptionStatus(_req: Request, res: Response, userId: string) {
+  try {
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    const trial = await getTrialInfo(userId);
+
+    const activeSubResult = await db.select().from(userSubscriptions)
+      .where(and(
+        eq(userSubscriptions.userId, userId),
+        eq(userSubscriptions.status, "active"),
+      ))
+      .limit(1);
+
+    const activeSub = activeSubResult[0];
+    let plan: any = null;
+    if (activeSub) {
+      const planResult = await db.select().from(subscriptionPlans)
+        .where(eq(subscriptionPlans.id, activeSub.planId))
+        .limit(1);
+      plan = planResult[0] || null;
+    }
+
+    let stripeStatus: string | null = null;
+    let cancelAtPeriodEnd = false;
+    let currentPeriodEnd: string | null = null;
+
+    if (user.stripeSubscriptionId) {
+      try {
+        const stripe = await getStripeClient();
+        const stripeSub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+        stripeStatus = stripeSub.status;
+        cancelAtPeriodEnd = stripeSub.cancel_at_period_end;
+        const periodEndTs = (stripeSub as any).current_period_end;
+        currentPeriodEnd = periodEndTs
+          ? new Date(periodEndTs * 1000).toISOString()
+          : null;
+      } catch (err: any) {
+        console.warn("[Subscription Status] Stripe retrieval failed:", err.message);
+      }
+    }
+
+    res.json({
+      success: true,
+      trial: trial ? {
+        is_active: trial.is_active,
+        days_remaining: trial.days_remaining,
+        minutes_remaining: trial.minutes_remaining,
+        minutes_used: trial.minutes_used,
+        trial_ends_at: trial.ends_at,
+      } : null,
+      subscription: activeSub ? {
+        id: activeSub.id,
+        plan_name: plan?.name || "Unknown",
+        plan_id: activeSub.planId,
+        status: activeSub.status,
+        valid_date_upto: activeSub.validDateUpto,
+        minutes_used: activeSub.minutesUsed,
+        minutes_remaining: activeSub.minutesRemaining,
+        stripe_subscription_id: user.stripeSubscriptionId,
+        stripe_status: stripeStatus,
+        cancel_at_period_end: cancelAtPeriodEnd,
+        current_period_end: currentPeriodEnd,
+      } : null,
+      has_active_subscription: !!activeSub,
+      has_active_trial: trial?.is_active || false,
+    });
+  } catch (error: any) {
+    console.error("[Subscription Status] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to get subscription status" });
+  }
+}
+
+app.get("/api/subscription-status", async (req, res) => {
+  const userId = (req.session as any)?.userId;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
+  await handleSubscriptionStatus(req, res, userId);
+});
+
+app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) => {
+  const userId = (req as any).jwtUser?.userId!;
+  await handleSubscriptionStatus(req, res, userId);
+});
+
+async function handleCreateSubscription(req: Request, res: Response, userId: string) {
+  try {
+    const schema = z.object({
+      email: z.string().email("Valid email is required"),
+      priceId: z.string().min(1, "Price ID is required"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { email, priceId } = parseResult.data;
+    const stripe = await getStripeClient();
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    let customerId = user.stripeCustomerId;
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email,
+        metadata: { userId },
+      });
+      customerId = customer.id;
+      await db.update(users)
+        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+    }
+
+    const subscription = await stripe.subscriptions.create({
+      customer: customerId,
+      items: [{ price: priceId }],
+      payment_behavior: "default_incomplete",
+      expand: ["latest_invoice.payment_intent"],
+    });
+
+    const invoice = subscription.latest_invoice as any;
+    const paymentIntent = invoice?.payment_intent as any;
+
+    await db.update(users)
+      .set({ stripeSubscriptionId: subscription.id, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+
+    res.json({
+      success: true,
+      subscriptionId: subscription.id,
+      clientSecret: paymentIntent?.client_secret || null,
+    });
+  } catch (error: any) {
+    console.error("[Stripe Create Subscription] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to create subscription",
+    });
+  }
+}
+
+// Web endpoint
+app.post("/api/create-subscription", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
+  await handleCreateSubscription(req, res, userId);
+});
+
+// Mobile endpoint
+app.post("/api/v1/m/create-subscription", mobileAuthMiddleware, async (req: any, res) => {
+  const userId = req.jwtUser?.userId;
+  await handleCreateSubscription(req, res, userId);
+});
+
+// POST /api/cancel-subscription + /api/v1/m/cancel-subscription
+async function handleCancelSubscription(req: Request, res: Response, userId: string) {
+  try {
+    const schema = z.object({
+      subscriptionId: z.string().min(1, "Subscription ID is required"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { subscriptionId } = parseResult.data;
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    if (user.stripeSubscriptionId !== subscriptionId) {
+      return res.status(403).json({ success: false, error: "You can only cancel your own subscription" });
+    }
+
+    const stripe = await getStripeClient();
+
+    const subscription = await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: true,
+    });
+
+    const cancelAt = (subscription as any).cancel_at;
+    const periodEnd = (subscription as any).current_period_end;
+
+    res.json({
+      success: true,
+      message: "Subscription will be cancelled at the end of the current billing period",
+      cancel_at: cancelAt ? new Date(cancelAt * 1000).toISOString() : null,
+      current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+    });
+  } catch (error: any) {
+    console.error("[Stripe Cancel Subscription] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to cancel subscription",
+    });
+  }
+}
+
+// Web endpoint
+app.post("/api/cancel-subscription", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
+  await handleCancelSubscription(req, res, userId);
+});
+
+// Mobile endpoint
+app.post("/api/v1/m/cancel-subscription", mobileAuthMiddleware, async (req: any, res) => {
+  const userId = req.jwtUser?.userId;
+  await handleCancelSubscription(req, res, userId);
+});
+
+// POST /api/stripe-webhook + /api/v1/m/stripe-webhook
+async function handleStripeWebhook(req: Request, res: Response) {
+  try {
+    const stripe = await getStripeClient();
+    const sig = req.headers["stripe-signature"];
+
+    if (!sig) {
+      return res.status(400).json({ error: "Missing stripe-signature header" });
+    }
+
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    if (!webhookSecret) {
+      console.error("[Stripe Webhook] STRIPE_WEBHOOK_SECRET not set");
+      return res.status(500).json({ error: "Webhook secret not configured" });
+    }
+
+    const rawBody = (req as any).rawBody;
+    if (!rawBody) {
+      console.error("[Stripe Webhook] rawBody not available");
+      return res.status(400).json({ error: "Raw body not available" });
+    }
+
+    const event = stripe.webhooks.constructEvent(
+      rawBody,
+      Array.isArray(sig) ? sig[0] : sig,
+      webhookSecret,
+    );
+
+    switch (event.type) {
+      case "invoice.paid": {
+        const invoice = event.data.object as any;
+        const customerId = invoice.customer;
+        const subscriptionId = invoice.subscription;
+
+        if (customerId && subscriptionId) {
+          const userResult = await db.select().from(users)
+            .where(eq(users.stripeCustomerId, customerId))
+            .limit(1);
+
+          if (userResult.length > 0) {
+            const user = userResult[0];
+            await db.update(users)
+              .set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() })
+              .where(eq(users.id, user.id));
+
+            const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+            const priceId = stripeSubscription.items.data[0]?.price?.id;
+
+            if (priceId) {
+              let planResult = await db.select().from(subscriptionPlans)
+                .where(eq(subscriptionPlans.stripePriceId, priceId))
+                .limit(1);
+              if (planResult.length === 0) {
+                planResult = await db.select().from(subscriptionPlans)
+                  .where(gte(subscriptionPlans.priceMonthly, 1))
+                  .limit(1);
+              }
+              const matchedPlan = planResult[0];
+
+              if (matchedPlan) {
+                let carryoverMinutes = 0;
+                const trial = await getTrialInfo(user.id);
+                if (trial && trial.is_active && trial.minutes_remaining > 0) {
+                  carryoverMinutes = trial.minutes_remaining;
+                }
+
+                await db.update(users)
+                  .set({ trialUsed: true, updatedAt: new Date() })
+                  .where(eq(users.id, user.id));
+
+                const existingActive = await db.select().from(userSubscriptions)
+                  .where(and(
+                    eq(userSubscriptions.userId, user.id),
+                    eq(userSubscriptions.status, "active"),
+                  )).limit(1);
+
+                if (existingActive.length > 0) {
+                  await db.update(userSubscriptions)
+                    .set({ status: "superseded" })
+                    .where(eq(userSubscriptions.id, existingActive[0].id));
+                }
+
+                const validDateUpto = new Date();
+                validDateUpto.setDate(validDateUpto.getDate() + matchedPlan.validDays);
+                const totalMinutes = (matchedPlan.validTotalMinutes || 0) + carryoverMinutes;
+
+                await db.insert(userSubscriptions).values({
+                  userId: user.id,
+                  planId: matchedPlan.id,
+                  validDateUpto,
+                  minutesUsed: 0,
+                  chunksUsed: 0,
+                  minutesRemaining: String(totalMinutes),
+                  paymentToken: subscriptionId,
+                  status: "active",
+                });
+
+                console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
+              }
+            }
+          }
+        }
+        break;
+      }
+
+      case "invoice.payment_failed": {
+        const failedInvoice = event.data.object as any;
+        const failedCustomerId = failedInvoice.customer;
+        const failedSubId = failedInvoice.subscription;
+
+        if (failedCustomerId) {
+          const userResult = await db.select().from(users)
+            .where(eq(users.stripeCustomerId, failedCustomerId))
+            .limit(1);
+
+          if (userResult.length > 0) {
+            const user = userResult[0];
+
+            if (failedSubId) {
+              const activeSubResult = await db.select().from(userSubscriptions)
+                .where(and(
+                  eq(userSubscriptions.userId, user.id),
+                  eq(userSubscriptions.status, "active"),
+                  eq(userSubscriptions.paymentToken, failedSubId),
+                )).limit(1);
+
+              if (activeSubResult.length > 0) {
+                await db.update(userSubscriptions)
+                  .set({ status: "payment_failed" })
+                  .where(eq(userSubscriptions.id, activeSubResult[0].id));
+              }
+            }
+
+            console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${failedSubId}`);
+          }
+        }
+        break;
+      }
+
+      case "customer.subscription.updated": {
+        const updatedSub = event.data.object as any;
+        const updatedCustomerId = updatedSub.customer;
+        const updatedSubId = updatedSub.id;
+        const newStatus = updatedSub.status;
+
+        if (updatedCustomerId && updatedSubId) {
+          const userResult = await db.select().from(users)
+            .where(eq(users.stripeCustomerId, updatedCustomerId))
+            .limit(1);
+
+          if (userResult.length > 0) {
+            const user = userResult[0];
+
+            if (newStatus === "active") {
+              const priceId = updatedSub.items?.data?.[0]?.price?.id;
+              if (priceId) {
+                let planResult = await db.select().from(subscriptionPlans)
+                  .where(eq(subscriptionPlans.stripePriceId, priceId))
+                  .limit(1);
+                if (planResult.length === 0) {
+                  planResult = await db.select().from(subscriptionPlans)
+                    .where(gte(subscriptionPlans.priceMonthly, 1))
+                    .limit(1);
+                }
+                const matchedPlan = planResult[0];
+
+                if (matchedPlan) {
+                  const activeSubResult = await db.select().from(userSubscriptions)
+                    .where(and(
+                      eq(userSubscriptions.userId, user.id),
+                      eq(userSubscriptions.paymentToken, updatedSubId),
+                    )).limit(1);
+
+                  if (activeSubResult.length > 0) {
+                    await db.update(userSubscriptions)
+                      .set({ status: "active", planId: matchedPlan.id })
+                      .where(eq(userSubscriptions.id, activeSubResult[0].id));
+                  }
+                }
+              }
+
+              await db.update(users)
+                .set({ stripeSubscriptionId: updatedSubId, updatedAt: new Date() })
+                .where(eq(users.id, user.id));
+            } else if (newStatus === "past_due" || newStatus === "unpaid") {
+              const activeSubResult = await db.select().from(userSubscriptions)
+                .where(and(
+                  eq(userSubscriptions.userId, user.id),
+                  eq(userSubscriptions.status, "active"),
+                  eq(userSubscriptions.paymentToken, updatedSubId),
+                )).limit(1);
+
+              if (activeSubResult.length > 0) {
+                await db.update(userSubscriptions)
+                  .set({ status: "payment_failed" })
+                  .where(eq(userSubscriptions.id, activeSubResult[0].id));
+              }
+            }
+
+            console.log(`[Stripe Webhook] subscription.updated: User ${user.id} status=${newStatus}`);
+          }
+        }
+        break;
+      }
+
+      case "customer.subscription.deleted": {
+        const deletedSub = event.data.object as any;
+        const deletedCustomerId = deletedSub.customer;
+
+        if (deletedCustomerId) {
+          const userResult = await db.select().from(users)
+            .where(eq(users.stripeCustomerId, deletedCustomerId))
+            .limit(1);
+
+          if (userResult.length > 0) {
+            const user = userResult[0];
+
+            await db.update(users)
+              .set({ stripeSubscriptionId: null, updatedAt: new Date() })
+              .where(eq(users.id, user.id));
+
+            const activeSubResult = await db.select().from(userSubscriptions)
+              .where(and(
+                eq(userSubscriptions.userId, user.id),
+                eq(userSubscriptions.status, "active"),
+              )).limit(1);
+
+            if (activeSubResult.length > 0) {
+              await db.update(userSubscriptions)
+                .set({ status: "cancelled" })
+                .where(eq(userSubscriptions.id, activeSubResult[0].id));
+            }
+
+            console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
+          }
+        }
+        break;
+      }
+
+      default:
+        console.log(`[Stripe Webhook] Unhandled event type: ${event.type}`);
+    }
+
+    res.json({ received: true });
+  } catch (error: any) {
+    console.error("[Stripe Webhook] Error:", error.message);
+    res.status(400).json({ error: "Webhook processing failed" });
+  }
+}
+
+app.post("/api/stripe-webhook", handleStripeWebhook);
+app.post("/api/v1/m/stripe-webhook", handleStripeWebhook);
 
 // Error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
