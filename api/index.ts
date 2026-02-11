@@ -127,6 +127,12 @@ const db = drizzle(client);
 
 // ============ STRIPE CLIENT ============
 async function getStripeClient() {
+  if (process.env.STRIPE_SECRET_KEY) {
+    return new Stripe(process.env.STRIPE_SECRET_KEY, {
+      apiVersion: '2025-11-17.clover' as any,
+    });
+  }
+
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? 'repl ' + process.env.REPL_IDENTITY
@@ -135,7 +141,7 @@ async function getStripeClient() {
       : null;
 
   if (!xReplitToken) {
-    throw new Error('Stripe credentials not available');
+    throw new Error('Stripe credentials not available. Set STRIPE_SECRET_KEY env var or run on Replit.');
   }
 
   const connectorName = 'stripe';
@@ -167,6 +173,10 @@ async function getStripeClient() {
 }
 
 async function getStripePublishableKey(): Promise<string> {
+  if (process.env.STRIPE_PUBLISHABLE_KEY) {
+    return process.env.STRIPE_PUBLISHABLE_KEY;
+  }
+
   const hostname = process.env.REPLIT_CONNECTORS_HOSTNAME;
   const xReplitToken = process.env.REPL_IDENTITY
     ? 'repl ' + process.env.REPL_IDENTITY
@@ -175,7 +185,7 @@ async function getStripePublishableKey(): Promise<string> {
       : null;
 
   if (!xReplitToken) {
-    throw new Error('Stripe credentials not available');
+    throw new Error('Stripe credentials not available. Set STRIPE_PUBLISHABLE_KEY env var or run on Replit.');
   }
 
   const connectorName = 'stripe';
