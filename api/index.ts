@@ -3161,6 +3161,14 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
     }
 
     let customerId = user.stripeCustomerId;
+    if (customerId) {
+      try {
+        await stripe.customers.retrieve(customerId);
+      } catch (custErr: any) {
+        console.log("[Stripe] Stored customer not found in current mode, creating new:", custErr.message);
+        customerId = null;
+      }
+    }
     if (!customerId) {
       const customer = await stripe.customers.create({
         email,

@@ -5,8 +5,8 @@ import { z } from "zod";
 
 export const users = pgTable("mvp_users", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
-  username: varchar("username", { length: 255 }).notNull().unique(),
-  email: varchar("email", { length: 255 }),
+  username: varchar("username", { length: 255 }).notNull(),
+  email: varchar("email", { length: 255 }).notNull().unique(),
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
   trialStartsAt: timestamp("trial_starts_at"),
   trialEndsAt: timestamp("trial_ends_at"),
