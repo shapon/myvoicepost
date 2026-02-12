@@ -3193,6 +3193,14 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
     } else if (setupIntent?.client_secret) {
       clientSecret = setupIntent.client_secret;
       type = "setup";
+    } else {
+      const si = await stripe.setupIntents.create({
+        customer: customerId,
+        payment_method_types: ["card"],
+        metadata: { subscription_id: subscription.id },
+      });
+      clientSecret = si.client_secret;
+      type = "setup";
     }
 
     await db.update(users)
