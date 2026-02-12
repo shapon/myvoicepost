@@ -1636,7 +1636,7 @@ export async function registerRoutes(
       if (!user) {
         return res.status(401).json({
           success: false,
-          error: "Invalid credentials",
+          error: "No account found with this email. Please check your email or sign up.",
         });
       }
 
@@ -1645,7 +1645,7 @@ export async function registerRoutes(
       if (!isValidPassword) {
         return res.status(401).json({
           success: false,
-          error: "Invalid credentials",
+          error: "Incorrect password. Please try again or reset your password.",
         });
       }
 

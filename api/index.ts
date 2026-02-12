@@ -1576,7 +1576,7 @@ app.post("/api/v1/p/login", async (req, res) => {
     if (!user) {
       return res.status(401).json({
         success: false,
-        error: "Invalid credentials",
+        error: "No account found with this email. Please check your email or sign up.",
       });
     }
 
@@ -1584,7 +1584,7 @@ app.post("/api/v1/p/login", async (req, res) => {
     if (!isValidPassword) {
       return res.status(401).json({
         success: false,
-        error: "Invalid credentials",
+        error: "Incorrect password. Please try again or reset your password.",
       });
     }
 
