@@ -3176,11 +3176,24 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
       customer: customerId,
       items: [{ price: priceId }],
       payment_behavior: "default_incomplete",
-      expand: ["latest_invoice.payment_intent"],
+      payment_settings: { save_default_payment_method: "on_subscription" },
+      expand: ["latest_invoice.payment_intent", "pending_setup_intent"],
     });
 
     const invoice = subscription.latest_invoice as any;
     const paymentIntent = invoice?.payment_intent as any;
+    const setupIntent = subscription.pending_setup_intent as any;
+
+    let clientSecret: string | null = null;
+    let type: "payment" | "setup" = "payment";
+
+    if (paymentIntent?.client_secret) {
+      clientSecret = paymentIntent.client_secret;
+      type = "payment";
+    } else if (setupIntent?.client_secret) {
+      clientSecret = setupIntent.client_secret;
+      type = "setup";
+    }
 
     await db.update(users)
       .set({ stripeSubscriptionId: subscription.id, updatedAt: new Date() })
@@ -3189,7 +3202,8 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
     res.json({
       success: true,
       subscriptionId: subscription.id,
-      clientSecret: paymentIntent?.client_secret || null,
+      clientSecret,
+      type,
     });
   } catch (error: any) {
     console.error("[Stripe Create Subscription] Error:", error);
