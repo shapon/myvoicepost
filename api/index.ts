@@ -2445,7 +2445,8 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const userId = (req as any).jwtUser?.id;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
     if (userId && durationSeconds > 0) {
       try {
         const totalSec = Math.round(durationSeconds);
@@ -3282,7 +3283,8 @@ app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => 
 
 app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
   try {
-    const userId = (req as any).jwtUser?.id;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
     if (!userId) {
       return res.status(401).json({ success: false, error: "User not found" });
     }
@@ -3325,7 +3327,8 @@ app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
 
 app.get("/api/v1/m/audio-logs", mobileAuthMiddleware, async (req, res) => {
   try {
-    const userId = (req as any).jwtUser?.id;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
     if (!userId) {
       return res.status(401).json({ success: false, error: "User not found" });
     }
