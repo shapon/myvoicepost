@@ -1463,10 +1463,14 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
       });
     }
 
+    const GUEST_MAX_DURATION_SECONDS = 55;
+    const GUEST_MAX_AUDIO_SIZE_BYTES = 5 * 1024 * 1024;
+
     const schema = z.object({
       audio: z.string().min(1, "Audio data is required"),
       mimeType: z.string().optional().default("audio/mp4"),
       language: z.string().optional().default("en"),
+      durationSeconds: z.number().optional(),
     });
 
     const parseResult = schema.safeParse(req.body);
@@ -1478,8 +1482,22 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
       });
     }
 
-    const { audio, mimeType, language } = parseResult.data;
+    const { audio, mimeType, language, durationSeconds } = parseResult.data;
+
+    if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
+      return res.status(400).json({
+        success: false,
+        error: `Guest recordings are limited to ${GUEST_MAX_DURATION_SECONDS} seconds. Please register for a free account to record longer.`,
+      });
+    }
+
     const audioBuffer = Buffer.from(audio, 'base64');
+    if (audioBuffer.length > GUEST_MAX_AUDIO_SIZE_BYTES) {
+      return res.status(400).json({
+        success: false,
+        error: `Guest recordings are limited to ${GUEST_MAX_DURATION_SECONDS} seconds. The uploaded audio file is too large. Please register for a free account to record longer.`,
+      });
+    }
 
     const originalText = await transcribeAudio(audioBuffer, mimeType);
 
@@ -1775,7 +1793,7 @@ app.post("/api/v1/p/login", async (req, res) => {
     );
 
     let trialExpired = false;
-    if (user && user.trialEndsAt && !user.trialUsed) {
+    if (user && user.trialEndsAt) {
       const now = new Date();
       const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
       const trialMinutesTotal = user.trialMinutesTotal || 90;
@@ -1783,22 +1801,6 @@ app.post("/api/v1/p/login", async (req, res) => {
 
       if (now > user.trialEndsAt || trialMinutesRemaining <= 0) {
         trialExpired = true;
-        const existingSub = await db.select().from(userSubscriptions).where(eq(userSubscriptions.userId, user.id)).limit(1);
-        if (existingSub.length === 0) {
-          const defaultPlanResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.isDefault, true)).limit(1);
-          if (defaultPlanResult.length > 0) {
-            const defaultPlan = defaultPlanResult[0];
-            await db.insert(userSubscriptions).values({
-              userId: user.id,
-              planId: defaultPlan.id,
-              validDateUpto: new Date(),
-              minutesUsed: 0,
-              chunksUsed: 0,
-              minutesRemaining: "0",
-              status: "pending_payment",
-            });
-          }
-        }
       }
     }
 
@@ -2807,11 +2809,16 @@ async function getTrialInfo(userId: string) {
   const trialMinutesRemaining = Math.max(0, trialMinutesTotal - trialMinutesUsed);
   const timeExpired = now > user.trialEndsAt;
   const minutesExpired = trialMinutesRemaining <= 0;
-  const isActive = !user.trialUsed && !timeExpired && !minutesExpired;
+  const isActive = !timeExpired && !minutesExpired;
+
+  const hasActiveSubscription = await db.select().from(userSubscriptions)
+    .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+    .limit(1);
+  const isSubscribed = hasActiveSubscription.length > 0;
 
   let status: string;
-  if (user.trialUsed) status = "converted";
-  else if (timeExpired || minutesExpired) status = "expired";
+  if (timeExpired || minutesExpired) status = "expired";
+  else if (isSubscribed) status = "subscribed";
   else status = "active";
 
   const timeRemainingMs = Math.max(0, user.trialEndsAt.getTime() - now.getTime());
@@ -2821,6 +2828,7 @@ async function getTrialInfo(userId: string) {
   return {
     status,
     is_active: isActive,
+    is_subscribed: isSubscribed,
     starts_at: user.trialStartsAt.toISOString(),
     ends_at: user.trialEndsAt.toISOString(),
     minutes_total: trialMinutesTotal,
@@ -2833,11 +2841,12 @@ async function getTrialInfo(userId: string) {
 
 async function checkUserAccess(userId: string) {
   const trial = await getTrialInfo(userId);
+
   const activeSubResult = await db.select().from(userSubscriptions)
     .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, new Date())))
     .limit(1);
 
-  let subscription = null;
+  let subscription: any = null;
   if (activeSubResult.length > 0) {
     const sub = activeSubResult[0];
     const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, sub.planId)).limit(1);
@@ -2855,12 +2864,14 @@ async function checkUserAccess(userId: string) {
     }
   }
 
-  const trialGrantsAccess = trial !== null && trial.is_active && trial.minutes_remaining > 0;
-  const subGrantsAccess = subscription !== null && subscription.status === "active" && subscription.minutes_remaining > 0;
+  const accessGranted = trial !== null && trial.is_active && trial.minutes_remaining > 0;
+  let accessSource = "none";
+  if (accessGranted && trial?.is_subscribed) accessSource = "subscription";
+  else if (accessGranted) accessSource = "trial";
 
   return {
-    access_granted: trialGrantsAccess || subGrantsAccess,
-    access_source: trialGrantsAccess ? "trial" : subGrantsAccess ? "subscription" : "none",
+    access_granted: accessGranted,
+    access_source: accessSource,
     trial,
     subscription,
   };
@@ -2925,7 +2936,8 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
     }
 
     const { plan_id, payment_token } = parseResult.data;
-    const userId = (req as any).jwtUser.userId;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
 
     const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, plan_id)).limit(1);
     const plan = planResult[0];
@@ -3034,8 +3046,16 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
 // POST /api/v1/m/check-access - Check user access (trial + subscription)
 app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
   try {
-    const userId = (req as any).jwtUser.userId;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    if (!userId) {
+      console.error("[Check Access] No userId in JWT token:", jwtUser);
+      return res.status(401).json({ success: false, error: "User not found in token" });
+    }
+
     const accessInfo = await checkUserAccess(userId);
+
+    console.log(`[Check Access] userId=${userId} granted=${accessInfo.access_granted} source=${accessInfo.access_source} trial_active=${accessInfo.trial?.is_active} trial_status=${accessInfo.trial?.status}`);
 
     res.json({
       success: true,
@@ -3056,7 +3076,8 @@ app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
 // GET /api/v1/m/subscription - Get active subscription for logged-in user
 app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
   try {
-    const userId = (req as any).jwtUser.userId;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
     const trial = await getTrialInfo(userId);
 
     const activeSubResult = await db.select().from(userSubscriptions)
@@ -3464,7 +3485,8 @@ app.get("/api/subscription-status", async (req, res) => {
 });
 
 app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) => {
-  const userId = (req as any).jwtUser?.userId!;
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
   await handleSubscriptionStatus(req, res, userId);
 });
 
@@ -3570,6 +3592,59 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
     });
   }
 }
+
+// Pre-subscribe check - returns current access info so user can confirm extension
+async function handlePreSubscribeCheck(req: Request, res: Response, userId: string) {
+  try {
+    const trial = await getTrialInfo(userId);
+    const activeSubResult = await db.select().from(userSubscriptions)
+      .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, new Date())))
+      .limit(1);
+
+    let currentPlanName: string | null = null;
+    let currentValidUntil: string | null = null;
+    let currentMinutesRemaining = 0;
+    let currentDaysRemaining = 0;
+
+    if (activeSubResult.length > 0) {
+      const sub = activeSubResult[0];
+      const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, sub.planId)).limit(1);
+      if (planResult.length > 0) currentPlanName = planResult[0].name;
+      currentValidUntil = sub.validDateUpto.toISOString();
+      currentMinutesRemaining = parseFloat(sub.minutesRemaining || "0");
+      const remainMs = Math.max(0, sub.validDateUpto.getTime() - Date.now());
+      currentDaysRemaining = Math.ceil(remainMs / (1000 * 60 * 60 * 24));
+    }
+
+    const hasActiveAccess = (trial !== null && trial.is_active && trial.minutes_remaining > 0) || activeSubResult.length > 0;
+
+    res.json({
+      success: true,
+      has_active_access: hasActiveAccess,
+      is_subscribed: activeSubResult.length > 0,
+      current_plan_name: currentPlanName,
+      current_valid_until: currentValidUntil,
+      current_minutes_remaining: trial?.minutes_remaining ?? currentMinutesRemaining,
+      current_days_remaining: trial?.days_remaining ?? currentDaysRemaining,
+      trial_status: trial?.status || null,
+    });
+  } catch (error: any) {
+    console.error("[Pre-Subscribe Check] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to check subscription status" });
+  }
+}
+
+app.post("/api/v1/m/pre-subscribe-check", mobileAuthMiddleware, async (req: any, res) => {
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  await handlePreSubscribeCheck(req, res, userId);
+});
+
+app.post("/api/pre-subscribe-check", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handlePreSubscribeCheck(req, res, userId);
+});
 
 // Web endpoint
 app.post("/api/create-subscription", async (req: any, res) => {
@@ -3713,14 +3788,38 @@ async function handleStripeWebhook(req: Request, res: Response) {
               const matchedPlan = planResult[0];
 
               if (matchedPlan) {
-                let carryoverMinutes = 0;
-                const trial = await getTrialInfo(user.id);
-                if (trial && trial.is_active && trial.minutes_remaining > 0) {
-                  carryoverMinutes = trial.minutes_remaining;
+                const now = new Date();
+                const planMinutes = matchedPlan.validTotalMinutes || 0;
+                const planDays = matchedPlan.validDays || 30;
+
+                const currentTrialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+                const currentMinutesTotal = user.trialMinutesTotal || 90;
+                const currentMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+                const currentMinutesRemaining = Math.max(0, currentMinutesTotal - currentMinutesUsed);
+                const isWithinTrial = currentTrialEndsAt && currentTrialEndsAt > now;
+
+                let newTrialEndsAt: Date;
+                let newMinutesTotal: number;
+
+                if (isWithinTrial) {
+                  newTrialEndsAt = new Date(currentTrialEndsAt!);
+                  newTrialEndsAt.setDate(newTrialEndsAt.getDate() + planDays);
+                  newMinutesTotal = currentMinutesTotal + planMinutes;
+                  console.log(`[Stripe Webhook] Within trial: extending trialEndsAt by ${planDays} days, adding ${planMinutes} mins (current remaining: ${currentMinutesRemaining})`);
+                } else {
+                  newTrialEndsAt = new Date(now);
+                  newTrialEndsAt.setDate(newTrialEndsAt.getDate() + planDays);
+                  newMinutesTotal = currentMinutesTotal + planMinutes;
+                  console.log(`[Stripe Webhook] After trial/expired: setting trialEndsAt to now+${planDays} days, adding ${planMinutes} mins to total ${currentMinutesTotal}`);
                 }
 
                 await db.update(users)
-                  .set({ trialUsed: true, updatedAt: new Date() })
+                  .set({
+                    trialEndsAt: newTrialEndsAt,
+                    trialMinutesTotal: newMinutesTotal,
+                    trialUsed: false,
+                    updatedAt: now,
+                  })
                   .where(eq(users.id, user.id));
 
                 const existingActive = await db.select().from(userSubscriptions)
@@ -3730,35 +3829,49 @@ async function handleStripeWebhook(req: Request, res: Response) {
                   )).limit(1);
 
                 if (existingActive.length > 0) {
+                  const existingSub = existingActive[0];
+                  const existingValidDate = new Date(existingSub.validDateUpto);
+                  const newValidDate = existingValidDate > now
+                    ? new Date(existingValidDate.getTime() + planDays * 24 * 60 * 60 * 1000)
+                    : new Date(now.getTime() + planDays * 24 * 60 * 60 * 1000);
+                  const existingRemaining = parseFloat(existingSub.minutesRemaining || "0");
+                  const newRemaining = existingRemaining + planMinutes;
+
                   await db.update(userSubscriptions)
-                    .set({ status: "superseded" })
-                    .where(eq(userSubscriptions.id, existingActive[0].id));
+                    .set({
+                      validDateUpto: newValidDate,
+                      minutesRemaining: String(newRemaining),
+                      planId: matchedPlan.id,
+                      paymentToken: subscriptionId,
+                    })
+                    .where(eq(userSubscriptions.id, existingSub.id));
+
+                  console.log(`[Stripe Webhook] Extended existing subscription: +${planDays} days, +${planMinutes} mins (new remaining: ${newRemaining})`);
+                } else {
+                  await db.insert(userSubscriptions).values({
+                    userId: user.id,
+                    planId: matchedPlan.id,
+                    validDateUpto: newTrialEndsAt,
+                    minutesUsed: 0,
+                    chunksUsed: 0,
+                    minutesRemaining: String(planMinutes),
+                    paymentToken: subscriptionId,
+                    status: "active",
+                  });
+                  console.log(`[Stripe Webhook] Created new subscription record`);
                 }
 
-                const validDateUpto = new Date();
-                validDateUpto.setDate(validDateUpto.getDate() + matchedPlan.validDays);
-                const totalMinutes = (matchedPlan.validTotalMinutes || 0) + carryoverMinutes;
-
-                await db.insert(userSubscriptions).values({
-                  userId: user.id,
-                  planId: matchedPlan.id,
-                  validDateUpto,
-                  minutesUsed: 0,
-                  chunksUsed: 0,
-                  minutesRemaining: String(totalMinutes),
-                  paymentToken: subscriptionId,
-                  status: "active",
-                });
-
-                console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
+                const totalNewMinutesRemaining = newMinutesTotal - currentMinutesUsed;
+                console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}, access until ${newTrialEndsAt.toISOString()}, ${totalNewMinutesRemaining} mins remaining`);
 
                 if (user.email) {
+                  const carryoverMinutes = isWithinTrial ? currentMinutesRemaining : 0;
                   sendSubscriptionConfirmationEmail(
                     user.email,
                     matchedPlan.name,
                     matchedPlan.priceMonthly,
-                    totalMinutes,
-                    validDateUpto,
+                    totalNewMinutesRemaining,
+                    newTrialEndsAt,
                     carryoverMinutes
                   ).catch(err => console.error("[Stripe Webhook] Email send error:", err.message));
                 }
