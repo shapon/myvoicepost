@@ -455,6 +455,177 @@ If you didn't request this password reset, you can safely ignore this email. You
   }
 }
 
+async function sendSubscriptionConfirmationEmail(
+  email: string,
+  planName: string,
+  priceMonthly: number,
+  totalMinutes: number,
+  validUntil: Date,
+  carryoverMinutes: number
+) {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn("[SUB EMAIL] SMTP configuration missing - skipping confirmation email");
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && {
+        requireTLS: true,
+        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+      }),
+    });
+
+    await transporter.verify();
+
+    const formattedDate = validUntil.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+    const formattedPrice = `$${(priceMonthly / 100).toFixed(2)}`;
+    const carryoverNote = carryoverMinutes > 0
+      ? `<p style="color: #4CAF50; font-size: 14px;">Includes <strong>${carryoverMinutes} bonus minutes</strong> carried over from your trial!</p>`
+      : "";
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Subscription Confirmed</title></head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">MyVoicePost</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Subscription Confirmed</p>
+        </div>
+        <div style="background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
+          <h2 style="color: #333; margin-top: 0;">Thank you for subscribing!</h2>
+          <p>Your subscription is now active. Here are the details:</p>
+          <div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 8px 0; color: #666;">Plan</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${planName}</td></tr>
+              <tr><td style="padding: 8px 0; color: #666;">Monthly Price</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${formattedPrice}/mo</td></tr>
+              <tr><td style="padding: 8px 0; color: #666;">Recording Minutes</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${totalMinutes} min</td></tr>
+              <tr><td style="padding: 8px 0; color: #666;">Valid Until</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${formattedDate}</td></tr>
+            </table>
+          </div>
+          ${carryoverNote}
+          <p style="color: #666; font-size: 14px;">You can manage your subscription anytime from the app settings.</p>
+          <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
+          <p style="color: #888; font-size: 13px; margin-bottom: 0;">-- The MyVoicePost Team</p>
+        </div>
+        <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+          <p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: emailFrom,
+      to: email,
+      subject: `MyVoicePost - Subscription Confirmed: ${planName}`,
+      text: `Your MyVoicePost ${planName} subscription is now active. Monthly price: ${formattedPrice}. Recording minutes: ${totalMinutes}. Valid until: ${formattedDate}.`,
+      html: htmlContent,
+    });
+
+    console.log(`[SUB EMAIL] Confirmation email sent to ${email}`);
+  } catch (emailError: any) {
+    console.error(`[SUB EMAIL] Failed to send confirmation email: ${emailError.message}`);
+  }
+}
+
+async function sendPaymentFailedEmail(
+  email: string,
+  failureReason: string,
+  amountDue: number,
+  planName: string
+) {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn("[FAIL EMAIL] SMTP configuration missing - skipping failure email");
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && {
+        requireTLS: true,
+        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+      }),
+    });
+
+    await transporter.verify();
+
+    const formattedAmount = `$${(amountDue / 100).toFixed(2)}`;
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Payment Failed</title></head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #e53935 0%, #c62828 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">MyVoicePost</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Payment Failed</p>
+        </div>
+        <div style="background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
+          <h2 style="color: #333; margin-top: 0;">We could not process your payment</h2>
+          <p>Unfortunately, we were unable to charge your payment method for your <strong>${planName}</strong> subscription.</p>
+          <div style="background: #fff3f3; border-left: 4px solid #e53935; border-radius: 0 8px 8px 0; padding: 16px 20px; margin: 20px 0;">
+            <p style="margin: 0; color: #333; font-weight: 600;">Failure Reason</p>
+            <p style="margin: 8px 0 0 0; color: #555;">${failureReason}</p>
+          </div>
+          <div style="background: #f8f9fa; border-radius: 8px; padding: 16px 20px; margin: 20px 0;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 6px 0; color: #666;">Amount Due</td><td style="padding: 6px 0; font-weight: bold; text-align: right;">${formattedAmount}</td></tr>
+              <tr><td style="padding: 6px 0; color: #666;">Plan</td><td style="padding: 6px 0; font-weight: bold; text-align: right;">${planName}</td></tr>
+            </table>
+          </div>
+          <p style="color: #666; font-size: 14px;">To keep your subscription active, please update your payment method in the app and try again. Stripe will automatically retry the charge in a few days.</p>
+          <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
+          <p style="color: #888; font-size: 13px; margin-bottom: 0;">-- The MyVoicePost Team</p>
+        </div>
+        <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+          <p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: emailFrom,
+      to: email,
+      subject: `MyVoicePost - Payment Failed for ${planName}`,
+      text: `Your payment of ${formattedAmount} for MyVoicePost ${planName} has failed. Reason: ${failureReason}. Please update your payment method in the app.`,
+      html: htmlContent,
+    });
+
+    console.log(`[FAIL EMAIL] Payment failure email sent to ${email}`);
+  } catch (emailError: any) {
+    console.error(`[FAIL EMAIL] Failed to send payment failure email: ${emailError.message}`);
+  }
+}
+
 // ============ GEMINI AI SETUP ============
 const ai = new GoogleGenAI({
   apiKey: process.env.GEMINI_API_KEY,
@@ -3137,12 +3308,20 @@ app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) 
 
 async function handleCreateSubscription(req: Request, res: Response, userId: string) {
   try {
+    console.log("[Stripe Create Subscription] Raw body:", JSON.stringify(req.body));
+
+    const body = req.body || {};
+    const normalizedBody = {
+      email: body.email,
+      priceId: body.priceId || body.price_id || body.stripePriceId || body.stripe_price_id,
+    };
+
     const schema = z.object({
       email: z.string().email("Valid email is required"),
       priceId: z.string().min(1, "Price ID is required"),
     });
 
-    const parseResult = schema.safeParse(req.body);
+    const parseResult = schema.safeParse(normalizedBody);
     if (!parseResult.success) {
       return res.status(400).json({
         success: false,
@@ -3410,6 +3589,17 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 });
 
                 console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
+
+                if (user.email) {
+                  sendSubscriptionConfirmationEmail(
+                    user.email,
+                    matchedPlan.name,
+                    matchedPlan.priceMonthly,
+                    totalMinutes,
+                    validDateUpto,
+                    carryoverMinutes
+                  ).catch(err => console.error("[Stripe Webhook] Email send error:", err.message));
+                }
               }
             }
           }
@@ -3446,6 +3636,34 @@ async function handleStripeWebhook(req: Request, res: Response) {
             }
 
             console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${failedSubId}`);
+
+            if (user.email) {
+              const failureMessage = failedInvoice.last_finalization_error?.message
+                || (failedInvoice.attempt_count > 1
+                  ? `Payment retry attempt ${failedInvoice.attempt_count} failed. Your card was declined.`
+                  : "Your payment method was declined. Please check your card details or try a different payment method.");
+
+              let planName = "Starter";
+              if (failedSubId) {
+                try {
+                  const sub = await stripe.subscriptions.retrieve(failedSubId);
+                  const priceId = sub.items.data[0]?.price?.id;
+                  if (priceId) {
+                    const planResult = await db.select().from(subscriptionPlans)
+                      .where(eq(subscriptionPlans.stripePriceId, priceId))
+                      .limit(1);
+                    if (planResult.length > 0) planName = planResult[0].name;
+                  }
+                } catch (_) {}
+              }
+
+              sendPaymentFailedEmail(
+                user.email,
+                failureMessage,
+                failedInvoice.amount_due || 0,
+                planName
+              ).catch(err => console.error("[Stripe Webhook] Failure email send error:", err.message));
+            }
           }
         }
         break;

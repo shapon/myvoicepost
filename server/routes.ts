@@ -2982,12 +2982,20 @@ export async function registerRoutes(
   // POST /api/create-subscription (Web) + POST /api/v1/m/create-subscription (Mobile)
   async function handleCreateSubscription(req: Request, res: Response, userId: string, userEmail: string) {
     try {
+      console.log("[Stripe Create Subscription] Raw body:", JSON.stringify(req.body));
+
+      const body = req.body || {};
+      const normalizedBody = {
+        email: body.email,
+        priceId: body.priceId || body.price_id || body.stripePriceId || body.stripe_price_id,
+      };
+
       const schema = z.object({
         email: z.string().email("Valid email is required"),
         priceId: z.string().min(1, "Price ID is required"),
       });
 
-      const parseResult = schema.safeParse(req.body);
+      const parseResult = schema.safeParse(normalizedBody);
       if (!parseResult.success) {
         return res.status(400).json({
           success: false,
