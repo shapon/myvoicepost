@@ -2357,16 +2357,54 @@ app.post("/api/v1/m/logout", mobileAuthMiddleware, (req, res) => {
 });
 
 // Mobile Auth: Get current user
-app.get("/api/v1/m/me", mobileAuthMiddleware, (req, res) => {
-  const jwtUser = (req as any).jwtUser;
-  res.json({
-    success: true,
-    user: {
-      id: jwtUser?.userId,
-      email: jwtUser?.email,
-      username: jwtUser?.username,
-    },
-  });
+app.get("/api/v1/m/me", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+
+    let trialData: any = {};
+    if (userId) {
+      const userResult = await db.select({
+        trialMinutesTotal: users.trialMinutesTotal,
+        trialMinutesUsed: users.trialMinutesUsed,
+        trialStartsAt: users.trialStartsAt,
+        trialEndsAt: users.trialEndsAt,
+        trialUsed: users.trialUsed,
+      }).from(users).where(eq(users.id, userId)).limit(1);
+
+      if (userResult.length > 0) {
+        const u = userResult[0];
+        trialData = {
+          trialMinutesTotal: u.trialMinutesTotal || 90,
+          trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
+          trialStartsAt: u.trialStartsAt,
+          trialEndsAt: u.trialEndsAt,
+          trialUsed: u.trialUsed,
+        };
+      }
+    }
+
+    res.json({
+      success: true,
+      user: {
+        id: userId,
+        email: jwtUser?.email,
+        username: jwtUser?.username,
+        ...trialData,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Mobile Me] Error:", error);
+    const jwtUser = (req as any).jwtUser;
+    res.json({
+      success: true,
+      user: {
+        id: jwtUser?.userId || jwtUser?.id,
+        email: jwtUser?.email,
+        username: jwtUser?.username,
+      },
+    });
+  }
 });
 
 // Mobile: Transcribe audio
