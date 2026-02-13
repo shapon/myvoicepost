@@ -176,6 +176,17 @@ export const insertUserSettingSchema = createInsertSchema(userSettings).omit({
 export type InsertUserSetting = z.infer<typeof insertUserSettingSchema>;
 export type UserSetting = typeof userSettings.$inferSelect;
 
+export const audioLogs = pgTable("mvp_audio_log", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").notNull().references(() => users.id),
+  usageTime: varchar("usage_time", { length: 20 }).notNull(),
+  usageSeconds: integer("usage_seconds").notNull().default(0),
+  sourceLanguage: varchar("source_language", { length: 10 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type AudioLog = typeof audioLogs.$inferSelect;
+
 export const emailOtps = pgTable("mvp_email_otps", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   email: varchar("email", { length: 255 }).notNull(),

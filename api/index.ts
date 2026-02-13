@@ -9,7 +9,7 @@ import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, and, desc, gte } from "drizzle-orm";
+import { eq, and, desc, gte, sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, integer, boolean, numeric } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
@@ -96,6 +96,15 @@ const userSettings = pgTable("mvp_user_settings", {
   settingValue: text("setting_value").notNull(),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+const audioLogs = pgTable("mvp_audio_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  usageTime: varchar("usage_time", { length: 20 }).notNull(),
+  usageSeconds: integer("usage_seconds").notNull().default(0),
+  sourceLanguage: varchar("source_language", { length: 10 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 const emailOtps = pgTable("mvp_email_otps", {
@@ -2374,6 +2383,7 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
       audio: z.string().min(1, "Audio data is required"),
       mimeType: z.string().optional().default("audio/mp4"),
       language: z.string().optional().default("en"),
+      durationSeconds: z.number().optional().default(0),
     });
 
     const parseResult = schema.safeParse(req.body);
@@ -2385,7 +2395,7 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const { audio, mimeType, language } = parseResult.data;
+    const { audio, mimeType, language, durationSeconds } = parseResult.data;
     const audioBuffer = Buffer.from(audio, 'base64');
 
     const originalText = await transcribeAudio(audioBuffer, mimeType);
@@ -2395,6 +2405,36 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
         success: false,
         error: "Could not transcribe audio. Please try speaking more clearly.",
       });
+    }
+
+    const userId = (req as any).jwtUser?.id;
+    if (userId && durationSeconds > 0) {
+      try {
+        const totalSec = Math.round(durationSeconds);
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+        const usageTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+        await db.insert(audioLogs).values({
+          userId,
+          usageTime,
+          usageSeconds: totalSec,
+          sourceLanguage: language,
+        });
+
+        const usageMinutes = totalSec / 60;
+        await db.update(users)
+          .set({
+            trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, userId));
+
+        console.log(`[Mobile Transcribe] Logged ${usageTime} usage for user ${userId}`);
+      } catch (logError: any) {
+        console.error("[Mobile Transcribe] Failed to log usage:", logError.message);
+      }
     }
 
     res.json({
@@ -3195,6 +3235,87 @@ app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => 
   } catch (error: any) {
     console.error("[Settings DELETE] Error:", error);
     res.status(500).json({ success: false, error: "Failed to delete setting" });
+  }
+});
+
+// ============================================================
+// USAGE STATS & AUDIO LOG ENDPOINTS (Mobile)
+// ============================================================
+
+app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const userId = (req as any).jwtUser?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "User not found" });
+    }
+
+    const userResult = await db.select({
+      trialMinutesTotal: users.trialMinutesTotal,
+      trialMinutesUsed: users.trialMinutesUsed,
+      trialStartsAt: users.trialStartsAt,
+      trialEndsAt: users.trialEndsAt,
+      trialUsed: users.trialUsed,
+    }).from(users).where(eq(users.id, userId)).limit(1);
+
+    if (userResult.length === 0) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    const user = userResult[0];
+    const totalLogs = await db.select({
+      count: sql<number>`count(*)::int`,
+      totalSeconds: sql<number>`COALESCE(sum(${audioLogs.usageSeconds}), 0)::int`,
+    }).from(audioLogs).where(eq(audioLogs.userId, userId));
+
+    res.json({
+      success: true,
+      stats: {
+        trialMinutesTotal: user.trialMinutesTotal || 90,
+        trialMinutesUsed: parseFloat(String(user.trialMinutesUsed || "0")),
+        trialStartsAt: user.trialStartsAt,
+        trialEndsAt: user.trialEndsAt,
+        trialUsed: user.trialUsed,
+        totalTranscriptions: totalLogs[0]?.count || 0,
+        totalUsageSeconds: totalLogs[0]?.totalSeconds || 0,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Usage Stats] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch usage stats" });
+  }
+});
+
+app.get("/api/v1/m/audio-logs", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const userId = (req as any).jwtUser?.id;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "User not found" });
+    }
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+    const offset = (page - 1) * limit;
+
+    const logs = await db.select().from(audioLogs)
+      .where(eq(audioLogs.userId, userId))
+      .orderBy(desc(audioLogs.createdAt))
+      .limit(limit)
+      .offset(offset);
+
+    const countResult = await db.select({
+      count: sql<number>`count(*)::int`,
+    }).from(audioLogs).where(eq(audioLogs.userId, userId));
+
+    res.json({
+      success: true,
+      logs,
+      total: countResult[0]?.count || 0,
+      page,
+      limit,
+    });
+  } catch (error: any) {
+    console.error("[Audio Logs] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch audio logs" });
   }
 });
 

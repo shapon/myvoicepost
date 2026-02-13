@@ -793,11 +793,11 @@ function PolishRecorder() {
     });
   };
 
-  const shareText = async (text: string) => {
+  const shareText = async (text: string, label: string = "Polished Text") => {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "MyVoicePost - Polished Text",
+          title: `MyVoicePost - ${label}`,
           text: text,
         });
       } catch (err) {
@@ -1151,6 +1151,14 @@ function PolishRecorder() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            onClick={() => shareText(editableText || result.originalText, "Original Text")}
+                            data-testid="button-share-polish-original"
+                          >
+                            <Share2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={() => copyToClipboard(editableText || result.originalText, "original")}
                             data-testid="button-copy-polish-original"
                           >
@@ -1211,7 +1219,7 @@ function PolishRecorder() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => shareText(editablePolishedText || result.polishedText)}
+                            onClick={() => shareText(editablePolishedText || result.polishedText, "Polished Text")}
                             data-testid="button-share-polish-result"
                           >
                             <Share2 className="w-4 h-4" />
@@ -1958,11 +1966,11 @@ function TranslateRecorder() {
     });
   };
 
-  const shareText = async (text: string) => {
+  const shareText = async (text: string, label: string = "Translation") => {
     if (navigator.share) {
       try {
         await navigator.share({
-          title: "MyVoicePost - Translation",
+          title: `MyVoicePost - ${label}`,
           text: text,
         });
       } catch (err) {
@@ -2329,6 +2337,14 @@ function TranslateRecorder() {
                           <Button
                             variant="ghost"
                             size="icon"
+                            onClick={() => shareText(editableText || result.originalText, "Original Text")}
+                            data-testid="button-share-translate-original"
+                          >
+                            <Share2 className="w-4 h-4" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
                             onClick={() => copyToClipboard(editableText || result.originalText, "original")}
                             data-testid="button-copy-original"
                           >
@@ -2371,7 +2387,7 @@ function TranslateRecorder() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => shareText(editableTranslatedText || result.translatedText)}
+                            onClick={() => shareText(editableTranslatedText || result.translatedText, "Translated Text")}
                             data-testid="button-share-translated"
                           >
                             <Share2 className="w-4 h-4" />
@@ -2438,7 +2454,7 @@ function TranslateRecorder() {
                           <Button
                             variant="ghost"
                             size="icon"
-                            onClick={() => shareText(editablePolishedText || result.polishedText)}
+                            onClick={() => shareText(editablePolishedText || result.polishedText, "Polished Text")}
                             data-testid="button-share-polished"
                           >
                             <Share2 className="w-4 h-4" />
