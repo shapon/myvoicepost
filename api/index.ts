@@ -1116,6 +1116,7 @@ app.post("/api/auth/signup", async (req, res) => {
 
     const { username, email, password, otp } = parseResult.data;
     const normalizedEmail = email.toLowerCase().trim();
+    console.log(`[DEBUG /p/register] INPUT: username=${username}, email=${normalizedEmail}`);
 
     const otpRecords = await db.select().from(emailOtps)
       .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
@@ -1483,6 +1484,7 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
     }
 
     const { audio, mimeType, language, durationSeconds } = parseResult.data;
+    console.log(`[DEBUG /p/transcribe] INPUT: language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioBase64Length=${audio?.length}`);
 
     if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
       return res.status(400).json({
@@ -1501,20 +1503,24 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
 
     const originalText = await transcribeAudio(audioBuffer, mimeType);
 
+    console.log(`[DEBUG /p/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+
     if (!originalText || originalText.trim() === "") {
+      console.log(`[DEBUG /p/transcribe] OUTPUT: FAILED - empty transcription`);
       return res.status(400).json({
         success: false,
         error: "Could not transcribe audio. Please try speaking more clearly.",
       });
     }
 
+    console.log(`[DEBUG /p/transcribe] OUTPUT: success=true, textLength=${originalText.length}`);
     res.json({
       success: true,
       originalText,
       language,
     });
   } catch (error: any) {
-    console.error("[Public Transcribe] Error:", error);
+    console.error("[DEBUG /p/transcribe] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to transcribe audio",
@@ -1549,8 +1555,11 @@ app.post("/api/v1/p/polish", async (req, res) => {
     }
 
     const { text, language, outputFormat, outputType } = parseResult.data;
+    console.log(`[DEBUG /p/polish] INPUT: language=${language}, outputFormat=${outputFormat}, outputType=${outputType}, textLength=${text.length}, text="${text.substring(0, 100)}..."`);
+
     const polishedText = await polishText(text, language, outputFormat, outputType);
 
+    console.log(`[DEBUG /p/polish] OUTPUT: success=true, polishedTextLength=${polishedText?.length || 0}`);
     res.json({
       success: true,
       originalText: text,
@@ -1560,7 +1569,7 @@ app.post("/api/v1/p/polish", async (req, res) => {
       outputType,
     });
   } catch (error: any) {
-    console.error("[Public Polish] Error:", error);
+    console.error("[DEBUG /p/polish] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to polish text",
@@ -1595,8 +1604,11 @@ app.post("/api/v1/p/translate", async (req, res) => {
     }
 
     const { text, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+    console.log(`[DEBUG /p/translate] INPUT: sourceLanguage=${sourceLanguage}, targetLanguage=${targetLanguage}, outputFormat=${outputFormat}, textLength=${text.length}`);
+
     const result = await translateAndPolish(text, sourceLanguage, targetLanguage, outputFormat);
 
+    console.log(`[DEBUG /p/translate] OUTPUT: success=true, translatedLength=${result.translatedText?.length || 0}, polishedLength=${result.polishedText?.length || 0}`);
     res.json({
       success: true,
       originalText: text,
@@ -1607,7 +1619,7 @@ app.post("/api/v1/p/translate", async (req, res) => {
       outputFormat,
     });
   } catch (error: any) {
-    console.error("[Public Translate] Error:", error);
+    console.error("[DEBUG /p/translate] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to translate text",
@@ -1700,6 +1712,7 @@ app.post("/api/v1/p/mail_otp", async (req, res) => {
 
     const { email } = parseResult.data;
     const normalizedEmail = email.toLowerCase().trim();
+    console.log(`[DEBUG /p/mail_otp] INPUT: email=${normalizedEmail}`);
 
     const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
     if (existingEmail.length > 0) {
@@ -1761,6 +1774,7 @@ app.post("/api/v1/p/login", async (req, res) => {
     }
 
     const { identifier, password } = parseResult.data;
+    console.log(`[DEBUG /p/login] INPUT: identifier=${identifier}, isEmail=${identifier.includes("@")}`);
     const isEmail = identifier.includes('@');
     
     let result;
@@ -1804,7 +1818,7 @@ app.post("/api/v1/p/login", async (req, res) => {
       }
     }
 
-    console.log(`[Public Login] User ${user.username} logged in via /api/v1/p/login`);
+    console.log(`[DEBUG /p/login] OUTPUT: success=true, userId=${user.id}, username=${user.username}, trialExpired=${trialExpired}`);
 
     res.json({
       success: true,
@@ -1913,7 +1927,7 @@ app.post("/api/v1/p/register", async (req, res) => {
       { expiresIn: "3d" }
     );
 
-    console.log(`[Public Register] User ${user.username} created via /api/v1/p/register with 7-day trial`);
+    console.log(`[DEBUG /p/register] OUTPUT: success=true, userId=${user.id}, username=${user.username}, trialEnds=${trialEndsAt.toISOString()}`);
 
     res.status(201).json({
       success: true,
@@ -1968,7 +1982,7 @@ app.post("/api/v1/p/forgot-password", async (req, res) => {
     const user = result[0];
 
     if (!user) {
-      console.log(`[Mobile Forgot Password] Email not found: ${email}`);
+      console.log(`[DEBUG /p/forgot-password] INPUT: email=${email}, userFound=false`);
       return res.json({
         success: true,
         message: "If an account with that email exists, a password reset code has been sent.",
@@ -1997,7 +2011,7 @@ app.post("/api/v1/p/forgot-password", async (req, res) => {
       true
     );
 
-    console.log(`[Mobile Forgot Password] Reset code generated for user: ${user.username}`);
+    console.log(`[DEBUG /p/forgot-password] OUTPUT: success=true, userId=${user.id}, username=${user.username}`);
 
     const response: any = {
       success: true,
@@ -2040,6 +2054,7 @@ app.post("/api/v1/p/reset-password", async (req, res) => {
     }
 
     const { email, code, newPassword } = parseResult.data;
+    console.log(`[DEBUG /p/reset-password] INPUT: email=${email}`);
 
     const userResult = await db.select().from(users).where(eq(users.email, email)).limit(1);
     const user = userResult[0];
@@ -2095,7 +2110,7 @@ app.post("/api/v1/p/reset-password", async (req, res) => {
       .set({ usedAt: new Date() })
       .where(eq(passwordResetTokens.id, resetRecord.id));
 
-    console.log(`[Mobile Reset Password] Password successfully reset for userId: ${user.id}`);
+    console.log(`[DEBUG /p/reset-password] OUTPUT: success=true, userId=${user.id}`);
 
     res.json({
       success: true,
@@ -2352,6 +2367,8 @@ function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
 
 // Mobile Auth: Logout (use /api/v1/p/login and /api/v1/p/register for login/signup)
 app.post("/api/v1/m/logout", mobileAuthMiddleware, (req, res) => {
+  const jwtUser = (req as any).jwtUser;
+  console.log(`[DEBUG /m/logout] userId=${jwtUser?.userId || jwtUser?.id}`);
   res.json({
     success: true,
     message: "Logged out successfully",
@@ -2364,6 +2381,7 @@ app.get("/api/v1/m/me", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
 
+    console.log(`[DEBUG /m/me] INPUT: userId=${userId}`);
     let trialData: any = {};
     if (userId) {
       const userResult = await db.select({
@@ -2386,6 +2404,7 @@ app.get("/api/v1/m/me", mobileAuthMiddleware, async (req, res) => {
       }
     }
 
+    console.log(`[DEBUG /m/me] OUTPUT: success=true, userId=${userId}, trialMinutesUsed=${trialData.trialMinutesUsed}, trialMinutesTotal=${trialData.trialMinutesTotal}`);
     res.json({
       success: true,
       user: {
@@ -2396,7 +2415,7 @@ app.get("/api/v1/m/me", mobileAuthMiddleware, async (req, res) => {
       },
     });
   } catch (error: any) {
-    console.error("[Mobile Me] Error:", error);
+    console.error("[DEBUG /m/me] ERROR:", error);
     const jwtUser = (req as any).jwtUser;
     res.json({
       success: true,
@@ -2438,17 +2457,22 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
     const { audio, mimeType, language, durationSeconds } = parseResult.data;
     const audioBuffer = Buffer.from(audio, 'base64');
 
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/transcribe] INPUT: userId=${userId}, language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioSize=${audioBuffer.length} bytes`);
+
     const originalText = await transcribeAudio(audioBuffer, mimeType);
 
+    console.log(`[DEBUG /m/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+
     if (!originalText || originalText.trim() === "") {
+      console.log(`[DEBUG /m/transcribe] OUTPUT: FAILED - empty transcription`);
       return res.status(400).json({
         success: false,
         error: "Could not transcribe audio. Please try speaking more clearly.",
       });
     }
 
-    const jwtUser = (req as any).jwtUser;
-    const userId = jwtUser?.userId || jwtUser?.id;
     if (userId && durationSeconds > 0) {
       try {
         const totalSec = Math.round(durationSeconds);
@@ -2472,12 +2496,15 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
           })
           .where(eq(users.id, userId));
 
-        console.log(`[Mobile Transcribe] Logged ${usageTime} usage for user ${userId}`);
+        console.log(`[DEBUG /m/transcribe] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`);
       } catch (logError: any) {
-        console.error("[Mobile Transcribe] Failed to log usage:", logError.message);
+        console.error("[DEBUG /m/transcribe] USAGE LOG FAILED:", logError.message);
       }
+    } else {
+      console.log(`[DEBUG /m/transcribe] USAGE NOT LOGGED: userId=${userId}, durationSeconds=${durationSeconds} (need both userId and durationSeconds>0)`);
     }
 
+    console.log(`[DEBUG /m/transcribe] OUTPUT: success=true, textLength=${originalText.length}`);
     res.json({
       success: true,
       originalText,
@@ -2519,8 +2546,13 @@ app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
     }
 
     const { text, language, outputFormat, outputType } = parseResult.data;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/polish] INPUT: userId=${userId}, language=${language}, outputFormat=${outputFormat}, outputType=${outputType}, textLength=${text.length}, text="${text.substring(0, 100)}..."`);
+
     const polishedText = await polishText(text, language, outputFormat, outputType);
 
+    console.log(`[DEBUG /m/polish] OUTPUT: success=true, polishedTextLength=${polishedText?.length || 0}, polishedText="${polishedText?.substring(0, 100)}..."`);
     res.json({
       success: true,
       originalText: text,
@@ -2530,7 +2562,7 @@ app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
       outputType,
     });
   } catch (error: any) {
-    console.error("[Mobile Polish] Error:", error);
+    console.error("[DEBUG /m/polish] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to polish text",
@@ -2565,8 +2597,13 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
     }
 
     const { text, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/translate] INPUT: userId=${userId}, sourceLanguage=${sourceLanguage}, targetLanguage=${targetLanguage}, outputFormat=${outputFormat}, textLength=${text.length}, text="${text.substring(0, 100)}..."`);
+
     const result = await translateAndPolish(text, sourceLanguage, targetLanguage, outputFormat);
 
+    console.log(`[DEBUG /m/translate] OUTPUT: success=true, translatedLength=${result.translatedText?.length || 0}, polishedLength=${result.polishedText?.length || 0}`);
     res.json({
       success: true,
       originalText: text,
@@ -2577,7 +2614,7 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
       outputFormat,
     });
   } catch (error: any) {
-    console.error("[Mobile Translate] Error:", error);
+    console.error("[DEBUG /m/translate] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to translate text",
@@ -2612,6 +2649,7 @@ app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
     }
 
     const data = parseResult.data;
+    console.log(`[DEBUG /m/saved-texts POST] INPUT: userId=${userId}, type=${data.type}, sourceLanguage=${data.sourceLanguage}, originalTextLength=${data.originalText?.length}`);
     const result = await db.insert(savedTexts).values({
       userId,
       type: data.type,
@@ -2624,12 +2662,13 @@ app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
       outputType: data.outputType || null,
     }).returning();
 
+    console.log(`[DEBUG /m/saved-texts POST] OUTPUT: success=true, savedTextId=${result[0]?.id}`);
     res.json({
       success: true,
       savedText: result[0],
     });
   } catch (error: any) {
-    console.error("[Mobile Save] Error:", error);
+    console.error("[DEBUG /m/saved-texts POST] ERROR:", error);
     res.status(500).json({
       success: false,
       error: "Failed to save text",
@@ -2643,6 +2682,7 @@ app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
     const type = req.query.type as string | undefined;
+    console.log(`[DEBUG /m/saved-texts GET] INPUT: userId=${userId}, type=${type || "all"}`);
 
     let result;
     if (type) {
@@ -2655,13 +2695,14 @@ app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
         .orderBy(desc(savedTexts.createdAt));
     }
 
+    console.log(`[DEBUG /m/saved-texts GET] OUTPUT: success=true, count=${result.length}`);
     res.json({
       success: true,
       savedTexts: result,
       count: result.length,
     });
   } catch (error: any) {
-    console.error("[Mobile Get Saved] Error:", error);
+    console.error("[DEBUG /m/saved-texts GET] ERROR:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch saved texts",
@@ -2675,6 +2716,7 @@ app.get("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
 
+    console.log(`[DEBUG /m/saved-texts/:id GET] INPUT: userId=${userId}, id=${req.params.id}`);
     const result = await db.select().from(savedTexts)
       .where(and(eq(savedTexts.id, req.params.id), eq(savedTexts.userId, userId)));
 
@@ -2704,6 +2746,7 @@ app.put("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
     const { id } = req.params;
+    console.log(`[DEBUG /m/saved-texts/:id PUT] INPUT: userId=${userId}, id=${id}`);
 
     const existing = await db.select().from(savedTexts)
       .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)));
@@ -2769,6 +2812,7 @@ app.delete("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) =
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
 
+    console.log(`[DEBUG /m/saved-texts/:id DELETE] INPUT: userId=${userId}, id=${req.params.id}`);
     const existing = await db.select().from(savedTexts)
       .where(and(eq(savedTexts.id, req.params.id), eq(savedTexts.userId, userId)));
 
@@ -2881,6 +2925,7 @@ async function checkUserAccess(userId: string) {
 app.get("/api/v1/p/plans", async (req, res) => {
   try {
     const showAll = req.query.all === "true";
+    console.log(`[DEBUG /p/plans] INPUT: showAll=${showAll}`);
     let plans;
     if (showAll) {
       plans = await db.select().from(subscriptionPlans);
@@ -2905,12 +2950,13 @@ app.get("/api/v1/p/plans", async (req, res) => {
       is_visible: plan.isVisible,
     }));
 
+    console.log(`[DEBUG /p/plans] OUTPUT: success=true, planCount=${formattedPlans.length}`);
     res.json({
       success: true,
       plans: formattedPlans,
     });
   } catch (error: any) {
-    console.error("[Plans] Error fetching plans:", error);
+    console.error("[DEBUG /p/plans] ERROR:", error);
     res.status(500).json({
       success: false,
       error: "Failed to fetch plans",
@@ -2938,6 +2984,7 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
     const { plan_id, payment_token } = parseResult.data;
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/subscribe] INPUT: userId=${userId}, planId=${plan_id}`);
 
     const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, plan_id)).limit(1);
     const plan = planResult[0];
@@ -3016,7 +3063,7 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
       status: "active",
     }).returning();
 
-    console.log(`[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()} (carryover: ${carryoverMinutes} min)`);
+    console.log(`[DEBUG /m/subscribe] OUTPUT: success=true, userId=${userId}, plan=${plan.name}, validUntil=${validDateUpto.toISOString()}, carryover=${carryoverMinutes}min, totalMinutes=${totalMinutesAvailable}`);
 
     res.json({
       success: true,
@@ -3055,7 +3102,7 @@ app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
 
     const accessInfo = await checkUserAccess(userId);
 
-    console.log(`[Check Access] userId=${userId} granted=${accessInfo.access_granted} source=${accessInfo.access_source} trial_active=${accessInfo.trial?.is_active} trial_status=${accessInfo.trial?.status}`);
+    console.log(`[DEBUG /m/check-access] OUTPUT: userId=${userId}, granted=${accessInfo.access_granted}, source=${accessInfo.access_source}, trialActive=${accessInfo.trial?.is_active}, trialStatus=${accessInfo.trial?.status}, minutesRemaining=${accessInfo.trial?.minutes_remaining}, minutesUsed=${accessInfo.trial?.minutes_used}`);
 
     res.json({
       success: true,
@@ -3078,6 +3125,7 @@ app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/subscription GET] INPUT: userId=${userId}`);
     const trial = await getTrialInfo(userId);
 
     const activeSubResult = await db.select().from(userSubscriptions)
@@ -3169,6 +3217,7 @@ app.get("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
       return res.status(401).json({ success: false, error: "Unauthorized" });
     }
 
+    console.log(`[DEBUG /m/settings GET] INPUT: userId=${userId}`);
     const settings = await db
       .select()
       .from(userSettings)
@@ -3213,6 +3262,7 @@ app.put("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
     }
 
     const settingsToSave = parseResult.data;
+    console.log(`[DEBUG /m/settings PUT] INPUT: userId=${userId}, settingsCount=${settingsToSave.length}, keys=${settingsToSave.map(s => s.setting_key).join(",")}`);
     const saved: any[] = [];
 
     for (const setting of settingsToSave) {
@@ -3276,6 +3326,7 @@ app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => 
     }
 
     const { key } = req.params;
+    console.log(`[DEBUG /m/settings DELETE] INPUT: userId=${userId}, key=${key}`);
 
     const deleted = await db
       .delete(userSettings)
@@ -3310,6 +3361,7 @@ app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
       return res.status(401).json({ success: false, error: "User not found" });
     }
 
+    console.log(`[DEBUG /m/usage-stats] INPUT: userId=${userId}`);
     const userResult = await db.select({
       trialMinutesTotal: users.trialMinutesTotal,
       trialMinutesUsed: users.trialMinutesUsed,
@@ -3328,6 +3380,7 @@ app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
       totalSeconds: sql<number>`COALESCE(sum(${audioLogs.usageSeconds}), 0)::int`,
     }).from(audioLogs).where(eq(audioLogs.userId, userId));
 
+    console.log(`[DEBUG /m/usage-stats] OUTPUT: userId=${userId}, trialMinutesTotal=${user.trialMinutesTotal || 90}, trialMinutesUsed=${parseFloat(String(user.trialMinutesUsed || "0"))}, totalTranscriptions=${totalLogs[0]?.count || 0}, totalUsageSeconds=${totalLogs[0]?.totalSeconds || 0}`);
     res.json({
       success: true,
       stats: {
@@ -3354,6 +3407,7 @@ app.get("/api/v1/m/audio-logs", mobileAuthMiddleware, async (req, res) => {
       return res.status(401).json({ success: false, error: "User not found" });
     }
 
+    console.log(`[DEBUG /m/audio-logs] INPUT: userId=${userId}`);
     const page = parseInt(req.query.page as string) || 1;
     const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
     const offset = (page - 1) * limit;
@@ -3368,6 +3422,7 @@ app.get("/api/v1/m/audio-logs", mobileAuthMiddleware, async (req, res) => {
       count: sql<number>`count(*)::int`,
     }).from(audioLogs).where(eq(audioLogs.userId, userId));
 
+    console.log(`[DEBUG /m/audio-logs] OUTPUT: userId=${userId}, logsCount=${logs.length}, total=${countResult[0]?.count || 0}, page=${page}`);
     res.json({
       success: true,
       logs,
@@ -3376,7 +3431,7 @@ app.get("/api/v1/m/audio-logs", mobileAuthMiddleware, async (req, res) => {
       limit,
     });
   } catch (error: any) {
-    console.error("[Audio Logs] Error:", error);
+    console.error("[DEBUG /m/audio-logs] ERROR:", error);
     res.status(500).json({ success: false, error: "Failed to fetch audio logs" });
   }
 });
@@ -3402,6 +3457,7 @@ app.get("/api/v1/p/stripe-config", handleStripeConfig);
 // GET /api/subscription-status + /api/v1/m/subscription-status - Get current subscription status
 async function handleSubscriptionStatus(_req: Request, res: Response, userId: string) {
   try {
+    console.log(`[DEBUG /subscription-status] INPUT: userId=${userId}`);
     const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     const user = userResult[0];
     if (!user) {
@@ -3492,7 +3548,7 @@ app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) 
 
 async function handleCreateSubscription(req: Request, res: Response, userId: string) {
   try {
-    console.log("[Stripe Create Subscription] Raw body:", JSON.stringify(req.body));
+    console.log(`[DEBUG /create-subscription] INPUT: userId=${userId}, body=${JSON.stringify(req.body)}`);
 
     const body = req.body || {};
     const normalizedBody = {
@@ -3596,6 +3652,7 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
 // Pre-subscribe check - returns current access info so user can confirm extension
 async function handlePreSubscribeCheck(req: Request, res: Response, userId: string) {
   try {
+    console.log(`[DEBUG /pre-subscribe-check] INPUT: userId=${userId}`);
     const trial = await getTrialInfo(userId);
     const activeSubResult = await db.select().from(userSubscriptions)
       .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, new Date())))
@@ -3678,6 +3735,7 @@ async function handleCancelSubscription(req: Request, res: Response, userId: str
     }
 
     const { subscriptionId } = parseResult.data;
+    console.log(`[DEBUG /cancel-subscription] INPUT: userId=${userId}, subscriptionId=${subscriptionId}`);
 
     const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     const user = userResult[0];
@@ -3755,6 +3813,8 @@ async function handleStripeWebhook(req: Request, res: Response) {
       Array.isArray(sig) ? sig[0] : sig,
       webhookSecret,
     );
+
+    console.log(`[DEBUG /stripe-webhook] EVENT: type=${event.type}, id=${event.id}`);
 
     switch (event.type) {
       case "invoice.paid": {
