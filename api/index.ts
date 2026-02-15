@@ -3728,7 +3728,7 @@ app.post("/api/pre-subscribe-check", async (req: any, res) => {
 });
 
 // ============================================
-// TOP-UP: $5 for 60 minutes (one-time purchase via Stripe Checkout)
+// TOP-UP: $5 for 60 minutes (one-time purchase via PaymentIntent / Payment Sheet)
 // ============================================
 const TOPUP_MINUTES = 60;
 
@@ -3789,25 +3789,41 @@ async function handleCreateTopupCheckout(req: Request, res: Response, userId: st
         .where(eq(users.id, userId));
     }
 
-    // Create Stripe Checkout Session for one-time payment
-    const session = await stripe.checkout.sessions.create({
+    // Look up price to get the amount
+    const price = await stripe.prices.retrieve(priceId);
+    const amount = price.unit_amount;
+    const currency = price.currency;
+
+    if (!amount) {
+      return res.status(500).json({ success: false, error: "Invalid price configuration" });
+    }
+
+    // Create ephemeral key for the customer (needed for Payment Sheet)
+    const ephemeralKey = await stripe.ephemeralKeys.create(
+      { customer: customerId },
+      { apiVersion: "2024-06-20" }
+    );
+
+    // Create PaymentIntent for one-time payment (in-app Payment Sheet)
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount,
+      currency,
       customer: customerId,
-      mode: "payment",
-      line_items: [{ price: priceId, quantity: 1 }],
+      automatic_payment_methods: { enabled: true },
       metadata: {
         userId,
         type: "topup",
         topup_minutes: String(TOPUP_MINUTES),
       },
-      success_url: `https://www.myvoicepost.com/topup-success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `https://www.myvoicepost.com/topup-cancel`,
     });
 
-    console.log(`[DEBUG /create-topup-checkout] OUTPUT: sessionId=${session.id}, url=${session.url}`);
+    console.log(`[DEBUG /create-topup-checkout] OUTPUT: paymentIntentId=${paymentIntent.id}, clientSecret=${paymentIntent.client_secret ? 'present' : 'missing'}`);
     res.json({
       success: true,
-      sessionId: session.id,
-      url: session.url,
+      clientSecret: paymentIntent.client_secret,
+      ephemeralKey: ephemeralKey.secret,
+      customerId,
+      paymentIntentId: paymentIntent.id,
     });
   } catch (error: any) {
     console.error("[Stripe Top-up Checkout] Error:", error);
@@ -4228,72 +4244,70 @@ async function handleStripeWebhook(req: Request, res: Response) {
         break;
       }
 
-      case "checkout.session.completed": {
-        const session = event.data.object as any;
-        const sessionMetadata = session.metadata || {};
+      case "payment_intent.succeeded": {
+        const paymentIntent = event.data.object as any;
+        const piMetadata = paymentIntent.metadata || {};
 
-        if (sessionMetadata.type === "topup" && sessionMetadata.userId) {
-          const topupUserId = sessionMetadata.userId;
-          const topupMinutes = parseInt(sessionMetadata.topup_minutes || "60", 10);
-          const sessionId = session.id;
+        if (piMetadata.type === "topup" && piMetadata.userId) {
+          const topupUserId = piMetadata.userId;
+          const topupMinutes = parseInt(piMetadata.topup_minutes || "60", 10);
+          const piId = paymentIntent.id;
 
-          console.log(`[Stripe Webhook] checkout.session.completed (topup): userId=${topupUserId}, minutes=${topupMinutes}, paymentStatus=${session.payment_status}, sessionId=${sessionId}`);
+          console.log(`[Stripe Webhook] payment_intent.succeeded (topup): userId=${topupUserId}, minutes=${topupMinutes}, piId=${piId}`);
 
-          // Idempotency check: skip if this session was already processed
+          // Idempotency check: skip if this payment intent was already processed
           const existingTopup = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.paymentToken, sessionId)))
+            .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.paymentToken, piId)))
             .limit(1);
           if (existingTopup.length > 0) {
-            console.log(`[Stripe Webhook] Top-up already processed for session ${sessionId}, skipping duplicate`);
+            console.log(`[Stripe Webhook] Top-up already processed for PI ${piId}, skipping duplicate`);
             break;
           }
 
-          if (session.payment_status === "paid") {
-            const userResult = await db.select().from(users).where(eq(users.id, topupUserId)).limit(1);
-            if (userResult.length > 0) {
-              const user = userResult[0];
-              const currentMinutesTotal = user.trialMinutesTotal || 90;
-              const newMinutesTotal = currentMinutesTotal + topupMinutes;
+          const userResult = await db.select().from(users).where(eq(users.id, topupUserId)).limit(1);
+          if (userResult.length > 0) {
+            const user = userResult[0];
+            const currentMinutesTotal = user.trialMinutesTotal || 90;
+            const newMinutesTotal = currentMinutesTotal + topupMinutes;
 
-              await db.update(users)
-                .set({
-                  trialMinutesTotal: newMinutesTotal,
-                  updatedAt: new Date(),
-                })
-                .where(eq(users.id, topupUserId));
-
-              // Also update active subscription record minutes_remaining if exists
-              const activeSub = await db.select().from(userSubscriptions)
-                .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.status, "active")))
-                .limit(1);
-              if (activeSub.length > 0) {
-                const existingRemaining = parseFloat(activeSub[0].minutesRemaining || "0");
-                await db.update(userSubscriptions)
-                  .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
-                  .where(eq(userSubscriptions.id, activeSub[0].id));
-              }
-
-              // Record the top-up for idempotency tracking
-              await db.insert(userSubscriptions).values({
-                userId: topupUserId,
-                planType: "topup",
-                status: "completed",
-                minutesRemaining: String(topupMinutes),
-                paymentToken: sessionId,
-                validDateFrom: new Date(),
-                validDateUpto: new Date(),
-                createdAt: new Date(),
+            await db.update(users)
+              .set({
+                trialMinutesTotal: newMinutesTotal,
                 updatedAt: new Date(),
-              });
+              })
+              .where(eq(users.id, topupUserId));
 
-              const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
-              console.log(`[Stripe Webhook] Top-up applied: userId=${topupUserId}, +${topupMinutes} mins, newTotal=${newMinutesTotal}, remaining=${newRemaining.toFixed(2)}`);
-            } else {
-              console.error(`[Stripe Webhook] Top-up: User not found: ${topupUserId}`);
+            // Also update active subscription record minutes_remaining if exists
+            const activeSub = await db.select().from(userSubscriptions)
+              .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.status, "active")))
+              .limit(1);
+            if (activeSub.length > 0) {
+              const existingRemaining = parseFloat(activeSub[0].minutesRemaining || "0");
+              await db.update(userSubscriptions)
+                .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
+                .where(eq(userSubscriptions.id, activeSub[0].id));
             }
+
+            // Record the top-up for idempotency tracking
+            await db.insert(userSubscriptions).values({
+              userId: topupUserId,
+              planType: "topup",
+              status: "completed",
+              minutesRemaining: String(topupMinutes),
+              paymentToken: piId,
+              validDateFrom: new Date(),
+              validDateUpto: new Date(),
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
+
+            const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
+            console.log(`[Stripe Webhook] Top-up applied: userId=${topupUserId}, +${topupMinutes} mins, newTotal=${newMinutesTotal}, remaining=${newRemaining.toFixed(2)}`);
+          } else {
+            console.error(`[Stripe Webhook] Top-up: User not found: ${topupUserId}`);
           }
         } else {
-          console.log(`[Stripe Webhook] checkout.session.completed: non-topup session ${session.id}`);
+          console.log(`[Stripe Webhook] payment_intent.succeeded: non-topup PI ${paymentIntent.id}`);
         }
         break;
       }
