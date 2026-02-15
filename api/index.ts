@@ -273,6 +273,16 @@ const PLAN_DEFINITIONS = [
     offlineRecording: true,
     priceMonthly: 2499,
   },
+  {
+    name: "Top-Up",
+    validTotalMinutes: 60,
+    validDays: 0,
+    recordingsAvailableDays: 0,
+    chunksCount: 0,
+    offlineRecording: false,
+    priceMonthly: 500,
+    isVisible: false,
+  },
 ];
 
 async function seedSubscriptionPlans() {
@@ -292,6 +302,7 @@ async function seedSubscriptionPlans() {
             chunksCount: plan.chunksCount,
             offlineRecording: plan.offlineRecording,
             priceMonthly: plan.priceMonthly,
+            ...((plan as any).isVisible !== undefined ? { isVisible: (plan as any).isVisible } : {}),
           })
           .where(eq(subscriptionPlans.name, plan.name));
       }
@@ -4288,17 +4299,34 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 .where(eq(userSubscriptions.id, activeSub[0].id));
             }
 
-            // Record the top-up for idempotency tracking
+            // Look up or use the Top-Up plan for recording
+            let topupPlanId: string;
+            const topupPlanResult = await db.select().from(subscriptionPlans)
+              .where(eq(subscriptionPlans.name, "Top-Up")).limit(1);
+            if (topupPlanResult.length > 0) {
+              topupPlanId = topupPlanResult[0].id;
+            } else {
+              const [newPlan] = await db.insert(subscriptionPlans).values({
+                name: "Top-Up",
+                validTotalMinutes: 60,
+                validDays: 0,
+                recordingsAvailableDays: 0,
+                chunksCount: 0,
+                offlineRecording: false,
+                priceMonthly: 500,
+                isVisible: false,
+              }).returning();
+              topupPlanId = newPlan.id;
+            }
+
+            // Record the top-up purchase in mvp_user_subscriptions
             await db.insert(userSubscriptions).values({
               userId: topupUserId,
-              planType: "topup",
+              planId: topupPlanId,
               status: "completed",
               minutesRemaining: String(topupMinutes),
               paymentToken: piId,
-              validDateFrom: new Date(),
               validDateUpto: new Date(),
-              createdAt: new Date(),
-              updatedAt: new Date(),
             });
 
             const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
