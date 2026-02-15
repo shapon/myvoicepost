@@ -3854,6 +3854,153 @@ app.post("/api/create-topup-checkout", async (req: any, res) => {
   await handleCreateTopupCheckout(req, res, userId);
 });
 
+// ============ CONFIRM TOP-UP (called after Payment Sheet succeeds) ============
+async function handleConfirmTopup(req: Request, res: Response, userId: string) {
+  try {
+    const { paymentIntentId } = req.body;
+    if (!paymentIntentId) {
+      return res.status(400).json({ success: false, error: "paymentIntentId is required" });
+    }
+
+    console.log(`[Confirm Top-up] userId=${userId}, piId=${paymentIntentId}`);
+
+    const stripe = await getStripeClient();
+    const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+
+    if (paymentIntent.status !== "succeeded") {
+      console.log(`[Confirm Top-up] Payment not succeeded: status=${paymentIntent.status}`);
+      return res.status(400).json({ success: false, error: `Payment not completed. Status: ${paymentIntent.status}` });
+    }
+
+    const piMetadata = paymentIntent.metadata || {};
+    if (piMetadata.type !== "topup" || piMetadata.userId !== userId) {
+      console.log(`[Confirm Top-up] Metadata mismatch: type=${piMetadata.type}, metaUserId=${piMetadata.userId}, reqUserId=${userId}`);
+      return res.status(400).json({ success: false, error: "Invalid payment intent for this user" });
+    }
+
+    const topupMinutes = parseInt(piMetadata.topup_minutes || "60", 10);
+
+    // Idempotency check: skip if already processed
+    const existingTopup = await db.select().from(userSubscriptions)
+      .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, paymentIntentId)))
+      .limit(1);
+    if (existingTopup.length > 0) {
+      console.log(`[Confirm Top-up] Already processed for PI ${paymentIntentId}`);
+      const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      return res.json({
+        success: true,
+        message: "Top-up already applied",
+        trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+      });
+    }
+
+    // Use a transaction with advisory lock for atomic credit application
+    const result = await db.transaction(async (tx) => {
+      // Advisory lock on hash of paymentIntentId to prevent concurrent processing
+      const lockKey = paymentIntentId.split('').reduce((a: number, c: string) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
+
+      // Double-check idempotency inside transaction (now serialized by lock)
+      const doubleCheck = await tx.select().from(userSubscriptions)
+        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, paymentIntentId)))
+        .limit(1);
+      if (doubleCheck.length > 0) {
+        return { alreadyApplied: true };
+      }
+
+      const userResult = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (userResult.length === 0) {
+        throw new Error("User not found");
+      }
+
+      const user = userResult[0];
+      const currentMinutesTotal = user.trialMinutesTotal || 90;
+      const newMinutesTotal = currentMinutesTotal + topupMinutes;
+
+      await tx.update(users)
+        .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+
+      // Also update active subscription record minutes_remaining if exists
+      const activeSub = await tx.select().from(userSubscriptions)
+        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+        .limit(1);
+      if (activeSub.length > 0) {
+        const existingRemaining = parseFloat(activeSub[0].minutesRemaining || "0");
+        await tx.update(userSubscriptions)
+          .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
+          .where(eq(userSubscriptions.id, activeSub[0].id));
+      }
+
+      // Look up the Top-Up plan
+      let topupPlanId: string;
+      const topupPlanResult = await tx.select().from(subscriptionPlans)
+        .where(eq(subscriptionPlans.name, "Top-Up")).limit(1);
+      if (topupPlanResult.length > 0) {
+        topupPlanId = topupPlanResult[0].id;
+      } else {
+        const [newPlan] = await tx.insert(subscriptionPlans).values({
+          name: "Top-Up",
+          validTotalMinutes: 60,
+          validDays: 0,
+          recordingsAvailableDays: 0,
+          chunksCount: 0,
+          offlineRecording: false,
+          priceMonthly: 500,
+          isVisible: false,
+        }).returning();
+        topupPlanId = newPlan.id;
+      }
+
+      // Record the top-up purchase in mvp_user_subscriptions
+      await tx.insert(userSubscriptions).values({
+        userId,
+        planId: topupPlanId,
+        status: "completed",
+        minutesRemaining: String(topupMinutes),
+        paymentToken: paymentIntentId,
+        validDateUpto: new Date(),
+      });
+
+      const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
+      return { alreadyApplied: false, newMinutesTotal, newRemaining };
+    });
+
+    if (result.alreadyApplied) {
+      const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      return res.json({
+        success: true,
+        message: "Top-up already applied",
+        trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+      });
+    }
+
+    console.log(`[Confirm Top-up] Applied: userId=${userId}, +${topupMinutes} mins, newTotal=${result.newMinutesTotal}, remaining=${result.newRemaining!.toFixed(2)}`);
+
+    res.json({
+      success: true,
+      message: `Top-up of ${topupMinutes} minutes applied successfully`,
+      trialMinutesTotal: result.newMinutesTotal,
+      minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
+    });
+  } catch (error: any) {
+    console.error("[Confirm Top-up] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to confirm top-up" });
+  }
+}
+
+app.post("/api/v1/m/confirm-topup", mobileAuthMiddleware, async (req: any, res) => {
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  await handleConfirmTopup(req, res, userId);
+});
+
+app.post("/api/confirm-topup", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handleConfirmTopup(req, res, userId);
+});
+
 // Web endpoint
 app.post("/api/create-subscription", async (req: any, res) => {
   const userId = req.session?.userId;
