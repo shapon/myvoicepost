@@ -2504,11 +2504,35 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
       console.log(`[DEBUG /m/transcribe] USAGE NOT LOGGED: userId=${userId}, durationSeconds=${durationSeconds} (need both userId and durationSeconds>0)`);
     }
 
-    console.log(`[DEBUG /m/transcribe] OUTPUT: success=true, textLength=${originalText.length}`);
+    // Fetch updated trial info to return with response
+    let trialInfo: { trial_minutes_total: number; trial_minutes_used: number; is_subscribed: boolean } | null = null;
+    if (userId) {
+      try {
+        const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+        if (updatedUser.length > 0) {
+          const u = updatedUser[0];
+          const minutesTotal = u.trialMinutesTotal || 90;
+          const minutesUsed = parseFloat(u.trialMinutesUsed || "0") || 0;
+          const hasActiveSub = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+            .limit(1);
+          trialInfo = {
+            trial_minutes_total: minutesTotal,
+            trial_minutes_used: Math.round(minutesUsed * 100) / 100,
+            is_subscribed: hasActiveSub.length > 0,
+          };
+        }
+      } catch (trialErr: any) {
+        console.error("[DEBUG /m/transcribe] TRIAL INFO FETCH FAILED:", trialErr.message);
+      }
+    }
+
+    console.log(`[DEBUG /m/transcribe] OUTPUT: success=true, textLength=${originalText.length}, trialInfo=${JSON.stringify(trialInfo)}`);
     res.json({
       success: true,
       originalText,
       language,
+      ...(trialInfo ? trialInfo : {}),
     });
   } catch (error: any) {
     console.error("[Mobile Transcribe] Error:", error);
@@ -3703,6 +3727,106 @@ app.post("/api/pre-subscribe-check", async (req: any, res) => {
   await handlePreSubscribeCheck(req, res, userId);
 });
 
+// ============================================
+// TOP-UP: $5 for 60 minutes (one-time purchase via Stripe Checkout)
+// ============================================
+const TOPUP_MINUTES = 60;
+
+async function handleCreateTopupCheckout(req: Request, res: Response, userId: string) {
+  try {
+    console.log(`[DEBUG /create-topup-checkout] INPUT: userId=${userId}, body=${JSON.stringify(req.body)}`);
+
+    const priceId = process.env.STRIPE_TOPUP_PRICE_ID;
+
+    if (!priceId) {
+      console.error("[Stripe Top-up] STRIPE_TOPUP_PRICE_ID environment variable is not set");
+      return res.status(500).json({ success: false, error: "Top-up is not configured. Please contact support." });
+    }
+
+    const stripe = await getStripeClient();
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    // Check that user has active trial or subscription period
+    const now = new Date();
+    const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+    const hasTimeRemaining = trialEndsAt && trialEndsAt > now;
+
+    if (!hasTimeRemaining) {
+      const activeSub = await db.select().from(userSubscriptions)
+        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, now)))
+        .limit(1);
+      if (activeSub.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Top-up requires an active trial or subscription period. Please subscribe first.",
+        });
+      }
+    }
+
+    // Reuse or create Stripe customer
+    let customerId = user.stripeCustomerId;
+    if (customerId) {
+      try {
+        await stripe.customers.retrieve(customerId);
+      } catch (custErr: any) {
+        console.log("[Stripe Top-up] Stored customer not found, creating new:", custErr.message);
+        customerId = null;
+      }
+    }
+    if (!customerId) {
+      const customer = await stripe.customers.create({
+        email: user.email,
+        metadata: { userId },
+      });
+      customerId = customer.id;
+      await db.update(users)
+        .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+    }
+
+    // Create Stripe Checkout Session for one-time payment
+    const session = await stripe.checkout.sessions.create({
+      customer: customerId,
+      mode: "payment",
+      line_items: [{ price: priceId, quantity: 1 }],
+      metadata: {
+        userId,
+        type: "topup",
+        topup_minutes: String(TOPUP_MINUTES),
+      },
+      success_url: `https://www.myvoicepost.com/topup-success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `https://www.myvoicepost.com/topup-cancel`,
+    });
+
+    console.log(`[DEBUG /create-topup-checkout] OUTPUT: sessionId=${session.id}, url=${session.url}`);
+    res.json({
+      success: true,
+      sessionId: session.id,
+      url: session.url,
+    });
+  } catch (error: any) {
+    console.error("[Stripe Top-up Checkout] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to create top-up checkout" });
+  }
+}
+
+app.post("/api/v1/m/create-topup-checkout", mobileAuthMiddleware, async (req: any, res) => {
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  await handleCreateTopupCheckout(req, res, userId);
+});
+
+app.post("/api/create-topup-checkout", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handleCreateTopupCheckout(req, res, userId);
+});
+
 // Web endpoint
 app.post("/api/create-subscription", async (req: any, res) => {
   const userId = req.session?.userId;
@@ -4100,6 +4224,76 @@ async function handleStripeWebhook(req: Request, res: Response) {
 
             console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
           }
+        }
+        break;
+      }
+
+      case "checkout.session.completed": {
+        const session = event.data.object as any;
+        const sessionMetadata = session.metadata || {};
+
+        if (sessionMetadata.type === "topup" && sessionMetadata.userId) {
+          const topupUserId = sessionMetadata.userId;
+          const topupMinutes = parseInt(sessionMetadata.topup_minutes || "60", 10);
+          const sessionId = session.id;
+
+          console.log(`[Stripe Webhook] checkout.session.completed (topup): userId=${topupUserId}, minutes=${topupMinutes}, paymentStatus=${session.payment_status}, sessionId=${sessionId}`);
+
+          // Idempotency check: skip if this session was already processed
+          const existingTopup = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.paymentToken, sessionId)))
+            .limit(1);
+          if (existingTopup.length > 0) {
+            console.log(`[Stripe Webhook] Top-up already processed for session ${sessionId}, skipping duplicate`);
+            break;
+          }
+
+          if (session.payment_status === "paid") {
+            const userResult = await db.select().from(users).where(eq(users.id, topupUserId)).limit(1);
+            if (userResult.length > 0) {
+              const user = userResult[0];
+              const currentMinutesTotal = user.trialMinutesTotal || 90;
+              const newMinutesTotal = currentMinutesTotal + topupMinutes;
+
+              await db.update(users)
+                .set({
+                  trialMinutesTotal: newMinutesTotal,
+                  updatedAt: new Date(),
+                })
+                .where(eq(users.id, topupUserId));
+
+              // Also update active subscription record minutes_remaining if exists
+              const activeSub = await db.select().from(userSubscriptions)
+                .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.status, "active")))
+                .limit(1);
+              if (activeSub.length > 0) {
+                const existingRemaining = parseFloat(activeSub[0].minutesRemaining || "0");
+                await db.update(userSubscriptions)
+                  .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
+                  .where(eq(userSubscriptions.id, activeSub[0].id));
+              }
+
+              // Record the top-up for idempotency tracking
+              await db.insert(userSubscriptions).values({
+                userId: topupUserId,
+                planType: "topup",
+                status: "completed",
+                minutesRemaining: String(topupMinutes),
+                paymentToken: sessionId,
+                validDateFrom: new Date(),
+                validDateUpto: new Date(),
+                createdAt: new Date(),
+                updatedAt: new Date(),
+              });
+
+              const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
+              console.log(`[Stripe Webhook] Top-up applied: userId=${topupUserId}, +${topupMinutes} mins, newTotal=${newMinutesTotal}, remaining=${newRemaining.toFixed(2)}`);
+            } else {
+              console.error(`[Stripe Webhook] Top-up: User not found: ${topupUserId}`);
+            }
+          }
+        } else {
+          console.log(`[Stripe Webhook] checkout.session.completed: non-topup session ${session.id}`);
         }
         break;
       }
