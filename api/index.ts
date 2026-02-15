@@ -4117,6 +4117,147 @@ app.post("/api/confirm-topup", async (req: any, res) => {
   await handleConfirmTopup(req, res, userId);
 });
 
+// ============ PAYMENT HISTORY ============
+async function handlePaymentHistory(_req: Request, res: Response, userId: string) {
+  try {
+    console.log(`[DEBUG /payment-history] INPUT: userId=${userId}`);
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    // Get subscription records from DB with plan info
+    const subRecords = await db
+      .select({
+        id: userSubscriptions.id,
+        planId: userSubscriptions.planId,
+        status: userSubscriptions.status,
+        minutesRemaining: userSubscriptions.minutesRemaining,
+        paymentToken: userSubscriptions.paymentToken,
+        validDateUpto: userSubscriptions.validDateUpto,
+        createdAt: userSubscriptions.createdAt,
+        planName: subscriptionPlans.name,
+        planPrice: subscriptionPlans.priceMonthly,
+        planMinutes: subscriptionPlans.validTotalMinutes,
+      })
+      .from(userSubscriptions)
+      .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+      .where(eq(userSubscriptions.userId, userId))
+      .orderBy(desc(userSubscriptions.createdAt));
+
+    // Try to get Stripe charges for richer payment info
+    let stripePayments: any[] = [];
+    if (user.stripeCustomerId) {
+      try {
+        const stripe = await getStripeClient();
+        const charges = await stripe.charges.list({
+          customer: user.stripeCustomerId,
+          limit: 50,
+        });
+        stripePayments = charges.data.map((charge) => ({
+          id: charge.id,
+          paymentIntent: charge.payment_intent || null,
+          amount: charge.amount,
+          currency: charge.currency,
+          status: charge.status,
+          description: charge.description,
+          created: new Date(charge.created * 1000).toISOString(),
+          paymentMethod: charge.payment_method_details?.type || "card",
+          cardBrand: charge.payment_method_details?.card?.brand || null,
+          cardLast4: charge.payment_method_details?.card?.last4 || null,
+          receiptUrl: charge.receipt_url || null,
+          refunded: charge.refunded,
+          metadata: charge.metadata || {},
+        }));
+      } catch (stripeErr: any) {
+        console.warn("[Payment History] Stripe charges fetch failed:", stripeErr.message);
+      }
+    }
+
+    const matchStripeCharge = (paymentToken: string | null, sp: any): boolean => {
+      if (!paymentToken) return false;
+      if (sp.paymentIntent === paymentToken) return true;
+      if (sp.id === paymentToken) return true;
+      if (sp.metadata?.payment_intent === paymentToken) return true;
+      return false;
+    };
+
+    // Merge: combine DB records with Stripe charge details
+    const matchedChargeIds = new Set<string>();
+    const payments = subRecords.map((sub) => {
+      const stripeCharge = stripePayments.find((sp) => matchStripeCharge(sub.paymentToken, sp));
+      if (stripeCharge) matchedChargeIds.add(stripeCharge.id);
+
+      return {
+        id: sub.id,
+        type: sub.planName === "Top-Up" ? "topup" : "subscription",
+        planName: sub.planName || "Unknown",
+        amount: stripeCharge?.amount || sub.planPrice || 0,
+        currency: stripeCharge?.currency || "usd",
+        status: sub.status,
+        minutesAdded: sub.planName === "Top-Up" ? parseInt(sub.minutesRemaining || "60") : sub.planMinutes,
+        date: sub.createdAt ? new Date(sub.createdAt).toISOString() : null,
+        validUntil: sub.validDateUpto ? new Date(sub.validDateUpto).toISOString() : null,
+        cardBrand: stripeCharge?.cardBrand || null,
+        cardLast4: stripeCharge?.cardLast4 || null,
+        receiptUrl: stripeCharge?.receiptUrl || null,
+        refunded: stripeCharge?.refunded || false,
+      };
+    });
+
+    // Also include Stripe charges not matched to DB records (e.g. direct Stripe payments)
+    const unmatchedCharges = stripePayments
+      .filter((sp) => !matchedChargeIds.has(sp.id))
+      .map((sp) => ({
+        id: sp.id,
+        type: sp.metadata?.type === "topup" ? "topup" : "stripe_charge",
+        planName: sp.description || "Stripe Payment",
+        amount: sp.amount,
+        currency: sp.currency,
+        status: sp.status,
+        minutesAdded: sp.metadata?.topup_minutes ? parseInt(sp.metadata.topup_minutes) : null,
+        date: sp.created,
+        validUntil: null,
+        cardBrand: sp.cardBrand,
+        cardLast4: sp.cardLast4,
+        receiptUrl: sp.receiptUrl,
+        refunded: sp.refunded,
+      }));
+
+    const allPayments = [...payments, ...unmatchedCharges].sort((a, b) => {
+      const da = a.date ? new Date(a.date).getTime() : 0;
+      const db_ = b.date ? new Date(b.date).getTime() : 0;
+      return db_ - da;
+    });
+
+    console.log(`[DEBUG /payment-history] OUTPUT: success=true, count=${allPayments.length}`);
+
+    res.json({
+      success: true,
+      payments: allPayments,
+      total: allPayments.length,
+    });
+  } catch (error: any) {
+    console.error("[Payment History] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch payment history" });
+  }
+}
+
+app.get("/api/v1/m/payment-history", mobileAuthMiddleware, async (req: any, res) => {
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handlePaymentHistory(req, res, userId);
+});
+
+app.get("/api/payment-history", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handlePaymentHistory(req, res, userId);
+});
+
 // Web endpoint
 app.post("/api/create-subscription", async (req: any, res) => {
   const userId = req.session?.userId;
