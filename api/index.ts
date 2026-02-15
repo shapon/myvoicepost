@@ -3490,6 +3490,115 @@ app.get("/api/stripe-config", handleStripeConfig);
 app.get("/api/v1/p/stripe-config", handleStripeConfig);
 
 // GET /api/subscription-status + /api/v1/m/subscription-status - Get current subscription status
+async function recoverPendingTopups(userId: string, stripeCustomerId: string | null) {
+  if (!stripeCustomerId) return;
+  try {
+    const stripe = await getStripeClient();
+    const paymentIntents = await stripe.paymentIntents.list({
+      customer: stripeCustomerId,
+      limit: 10,
+    });
+
+    for (const pi of paymentIntents.data) {
+      if (pi.status !== "succeeded") continue;
+      const meta = pi.metadata || {};
+      if (meta.type !== "topup" || meta.userId !== userId) continue;
+
+      // Skip if already processed
+      const existing = await db.select().from(userSubscriptions)
+        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, pi.id)))
+        .limit(1);
+      if (existing.length > 0) continue;
+
+      // Skip if refunded or disputed
+      const latestChargeId = typeof pi.latest_charge === "string" ? pi.latest_charge : (pi.latest_charge as any)?.id;
+      if (latestChargeId) {
+        try {
+          const charge = await stripe.charges.retrieve(latestChargeId);
+          if (charge.refunded || charge.disputed) {
+            console.log(`[Recovery] Skipping refunded/disputed PI ${pi.id}`);
+            continue;
+          }
+        } catch (chargeErr: any) {
+          console.warn(`[Recovery] Could not verify charge for PI ${pi.id}: ${chargeErr.message}`);
+          continue;
+        }
+      }
+
+      // Only process recent top-ups (within last 7 days)
+      const piCreated = new Date((pi.created || 0) * 1000);
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      if (piCreated < sevenDaysAgo) continue;
+
+      console.log(`[Recovery] Found unprocessed top-up PI ${pi.id} for user ${userId}`);
+      const topupMinutes = parseInt(meta.topup_minutes || "60", 10);
+
+      await db.transaction(async (tx) => {
+        const lockKey = pi.id.split('').reduce((a: number, c: string) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
+
+        const doubleCheck = await tx.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, pi.id)))
+          .limit(1);
+        if (doubleCheck.length > 0) return;
+
+        const userResult = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+        if (userResult.length === 0) return;
+
+        const user = userResult[0];
+        const currentMinutesTotal = user.trialMinutesTotal || 90;
+        const newMinutesTotal = currentMinutesTotal + topupMinutes;
+
+        await tx.update(users)
+          .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+          .where(eq(users.id, userId));
+
+        const activeSub = await tx.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+          .limit(1);
+        if (activeSub.length > 0) {
+          const existingRemaining = parseFloat(activeSub[0].minutesRemaining || "0");
+          await tx.update(userSubscriptions)
+            .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
+            .where(eq(userSubscriptions.id, activeSub[0].id));
+        }
+
+        let topupPlanId: string;
+        const topupPlanResult = await tx.select().from(subscriptionPlans)
+          .where(eq(subscriptionPlans.name, "Top-Up")).limit(1);
+        if (topupPlanResult.length > 0) {
+          topupPlanId = topupPlanResult[0].id;
+        } else {
+          const [newPlan] = await tx.insert(subscriptionPlans).values({
+            name: "Top-Up",
+            validTotalMinutes: 60,
+            validDays: 0,
+            recordingsAvailableDays: 0,
+            chunksCount: 0,
+            offlineRecording: false,
+            priceMonthly: 500,
+            isVisible: false,
+          }).returning();
+          topupPlanId = newPlan.id;
+        }
+
+        await tx.insert(userSubscriptions).values({
+          userId,
+          planId: topupPlanId,
+          status: "completed",
+          minutesRemaining: String(topupMinutes),
+          paymentToken: pi.id,
+          validDateUpto: new Date(),
+        });
+
+        console.log(`[Recovery] Applied top-up: userId=${userId}, +${topupMinutes} mins, newTotal=${newMinutesTotal}`);
+      });
+    }
+  } catch (err: any) {
+    console.error("[Recovery] Error recovering pending top-ups:", err.message);
+  }
+}
+
 async function handleSubscriptionStatus(_req: Request, res: Response, userId: string) {
   try {
     console.log(`[DEBUG /subscription-status] INPUT: userId=${userId}`);
@@ -3498,6 +3607,13 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
     if (!user) {
       return res.status(404).json({ success: false, error: "User not found" });
     }
+
+    // Recover any pending top-ups that weren't confirmed
+    await recoverPendingTopups(userId, user.stripeCustomerId);
+
+    // Re-fetch user after potential recovery
+    const updatedUserResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const updatedUser = updatedUserResult[0] || user;
 
     const trial = await getTrialInfo(userId);
 
@@ -3521,10 +3637,10 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
     let cancelAtPeriodEnd = false;
     let currentPeriodEnd: string | null = null;
 
-    if (user.stripeSubscriptionId) {
+    if (updatedUser.stripeSubscriptionId) {
       try {
         const stripe = await getStripeClient();
-        const stripeSub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+        const stripeSub = await stripe.subscriptions.retrieve(updatedUser.stripeSubscriptionId);
         stripeStatus = stripeSub.status;
         cancelAtPeriodEnd = stripeSub.cancel_at_period_end;
         const periodEndTs = (stripeSub as any).current_period_end;
@@ -3553,7 +3669,7 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
         valid_date_upto: activeSub.validDateUpto,
         minutes_used: activeSub.minutesUsed,
         minutes_remaining: activeSub.minutesRemaining,
-        stripe_subscription_id: user.stripeSubscriptionId,
+        stripe_subscription_id: updatedUser.stripeSubscriptionId,
         stripe_status: stripeStatus,
         cancel_at_period_end: cancelAtPeriodEnd,
         current_period_end: currentPeriodEnd,
@@ -3791,7 +3907,7 @@ async function handleCreateTopupCheckout(req: Request, res: Response, userId: st
     }
     if (!customerId) {
       const customer = await stripe.customers.create({
-        email: user.email,
+        email: user.email || undefined,
         metadata: { userId },
       });
       customerId = customer.id;
@@ -4413,7 +4529,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
 
           console.log(`[Stripe Webhook] payment_intent.succeeded (topup): userId=${topupUserId}, minutes=${topupMinutes}, piId=${piId}`);
 
-          // Idempotency check: skip if this payment intent was already processed
+          // Idempotency check outside transaction (fast path)
           const existingTopup = await db.select().from(userSubscriptions)
             .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.paymentToken, piId)))
             .limit(1);
@@ -4422,38 +4538,47 @@ async function handleStripeWebhook(req: Request, res: Response) {
             break;
           }
 
-          const userResult = await db.select().from(users).where(eq(users.id, topupUserId)).limit(1);
-          if (userResult.length > 0) {
+          // Use transaction with advisory lock for atomic credit application
+          await db.transaction(async (tx) => {
+            const lockKey = piId.split('').reduce((a: number, c: string) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+            await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
+
+            const doubleCheck = await tx.select().from(userSubscriptions)
+              .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.paymentToken, piId)))
+              .limit(1);
+            if (doubleCheck.length > 0) return;
+
+            const userResult = await tx.select().from(users).where(eq(users.id, topupUserId)).limit(1);
+            if (userResult.length === 0) {
+              console.error(`[Stripe Webhook] Top-up: User not found: ${topupUserId}`);
+              return;
+            }
+
             const user = userResult[0];
             const currentMinutesTotal = user.trialMinutesTotal || 90;
             const newMinutesTotal = currentMinutesTotal + topupMinutes;
 
-            await db.update(users)
-              .set({
-                trialMinutesTotal: newMinutesTotal,
-                updatedAt: new Date(),
-              })
+            await tx.update(users)
+              .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
               .where(eq(users.id, topupUserId));
 
-            // Also update active subscription record minutes_remaining if exists
-            const activeSub = await db.select().from(userSubscriptions)
+            const activeSub = await tx.select().from(userSubscriptions)
               .where(and(eq(userSubscriptions.userId, topupUserId), eq(userSubscriptions.status, "active")))
               .limit(1);
             if (activeSub.length > 0) {
               const existingRemaining = parseFloat(activeSub[0].minutesRemaining || "0");
-              await db.update(userSubscriptions)
+              await tx.update(userSubscriptions)
                 .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
                 .where(eq(userSubscriptions.id, activeSub[0].id));
             }
 
-            // Look up or use the Top-Up plan for recording
             let topupPlanId: string;
-            const topupPlanResult = await db.select().from(subscriptionPlans)
+            const topupPlanResult = await tx.select().from(subscriptionPlans)
               .where(eq(subscriptionPlans.name, "Top-Up")).limit(1);
             if (topupPlanResult.length > 0) {
               topupPlanId = topupPlanResult[0].id;
             } else {
-              const [newPlan] = await db.insert(subscriptionPlans).values({
+              const [newPlan] = await tx.insert(subscriptionPlans).values({
                 name: "Top-Up",
                 validTotalMinutes: 60,
                 validDays: 0,
@@ -4466,8 +4591,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
               topupPlanId = newPlan.id;
             }
 
-            // Record the top-up purchase in mvp_user_subscriptions
-            await db.insert(userSubscriptions).values({
+            await tx.insert(userSubscriptions).values({
               userId: topupUserId,
               planId: topupPlanId,
               status: "completed",
@@ -4478,9 +4602,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
 
             const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
             console.log(`[Stripe Webhook] Top-up applied: userId=${topupUserId}, +${topupMinutes} mins, newTotal=${newMinutesTotal}, remaining=${newRemaining.toFixed(2)}`);
-          } else {
-            console.error(`[Stripe Webhook] Top-up: User not found: ${topupUserId}`);
-          }
+          });
         } else {
           console.log(`[Stripe Webhook] payment_intent.succeeded: non-topup PI ${paymentIntent.id}`);
         }
