@@ -9,7 +9,7 @@ import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, and, desc, gte, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lt, lte, sql } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, integer, boolean, numeric } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
@@ -114,6 +114,27 @@ const emailOtps = pgTable("mvp_email_otps", {
   expiresAt: timestamp("expires_at").notNull(),
   verified: boolean("verified").default(false),
   createdAt: timestamp("created_at").defaultNow(),
+});
+
+const pushTokens = pgTable("mvp_push_tokens", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  pushToken: varchar("push_token", { length: 255 }).notNull(),
+  platform: varchar("platform", { length: 20 }).notNull().default("expo"),
+  deviceId: varchar("device_id", { length: 255 }),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+const notificationLog = pgTable("mvp_notification_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  notificationType: varchar("notification_type", { length: 50 }).notNull(),
+  subscriptionId: uuid("subscription_id"),
+  sentAt: timestamp("sent_at").defaultNow(),
+  status: varchar("status", { length: 20 }).default("sent"),
+  message: text("message"),
 });
 
 type User = typeof users.$inferSelect;
@@ -4763,6 +4784,344 @@ async function handleStripeWebhook(req: Request, res: Response) {
 
 app.post("/api/stripe-webhook", handleStripeWebhook);
 app.post("/api/v1/m/stripe-webhook", handleStripeWebhook);
+
+// ============ PUSH NOTIFICATIONS ============
+
+// Register push token
+async function handleRegisterPushToken(req: Request, res: Response, userId: string) {
+  try {
+    const { pushToken, platform, deviceId } = req.body;
+    if (!pushToken) {
+      return res.status(400).json({ success: false, error: "Push token is required" });
+    }
+
+    console.log(`[Push Token] Registering token for user ${userId}: ${pushToken.substring(0, 20)}...`);
+
+    // Upsert: deactivate old tokens for this user/device, then insert or reactivate
+    const existing = await db.select().from(pushTokens)
+      .where(and(eq(pushTokens.userId, userId), eq(pushTokens.pushToken, pushToken)))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db.update(pushTokens)
+        .set({ isActive: true, platform: platform || "expo", deviceId: deviceId || null, updatedAt: new Date() })
+        .where(eq(pushTokens.id, existing[0].id));
+    } else {
+      await db.insert(pushTokens).values({
+        userId,
+        pushToken,
+        platform: platform || "expo",
+        deviceId: deviceId || null,
+      });
+    }
+
+    res.json({ success: true, message: "Push token registered" });
+  } catch (error: any) {
+    console.error("[Push Token] Error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to register push token" });
+  }
+}
+
+// Unregister push token (on logout)
+async function handleUnregisterPushToken(req: Request, res: Response, userId: string) {
+  try {
+    const { pushToken } = req.body;
+    if (!pushToken) {
+      return res.status(400).json({ success: false, error: "Push token is required" });
+    }
+
+    await db.update(pushTokens)
+      .set({ isActive: false, updatedAt: new Date() })
+      .where(and(eq(pushTokens.userId, userId), eq(pushTokens.pushToken, pushToken)));
+
+    res.json({ success: true, message: "Push token unregistered" });
+  } catch (error: any) {
+    console.error("[Push Token] Unregister error:", error.message);
+    res.status(500).json({ success: false, error: "Failed to unregister push token" });
+  }
+}
+
+app.post("/api/v1/m/push-token", mobileAuthMiddleware, async (req: any, res) => {
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handleRegisterPushToken(req, res, userId);
+});
+
+app.delete("/api/v1/m/push-token", mobileAuthMiddleware, async (req: any, res) => {
+  const jwtUser = (req as any).jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  await handleUnregisterPushToken(req, res, userId);
+});
+
+// Send Expo push notification
+async function sendExpoPushNotifications(tokens: string[], title: string, body: string, data?: any) {
+  const messages = tokens.map((token) => ({
+    to: token,
+    sound: "default" as const,
+    title,
+    body,
+    data: data || {},
+  }));
+
+  // Expo Push API supports batches of up to 100
+  const BATCH_SIZE = 100;
+  const results: any[] = [];
+
+  for (let i = 0; i < messages.length; i += BATCH_SIZE) {
+    const batch = messages.slice(i, i + BATCH_SIZE);
+    try {
+      const response = await fetch("https://exp.host/--/api/v2/push/send", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(batch),
+      });
+      const result = await response.json();
+      results.push(result);
+
+      // Handle invalid tokens
+      if (result.data) {
+        for (let j = 0; j < result.data.length; j++) {
+          const ticket = result.data[j];
+          if (ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered") {
+            const badToken = batch[j].to;
+            console.log(`[Push] Deactivating invalid token: ${badToken.substring(0, 20)}...`);
+            await db.update(pushTokens)
+              .set({ isActive: false, updatedAt: new Date() })
+              .where(eq(pushTokens.pushToken, badToken));
+          }
+        }
+      }
+    } catch (err: any) {
+      console.error(`[Push] Batch send failed:`, err.message);
+    }
+  }
+
+  return results;
+}
+
+// Cron job: Check expiring subscriptions and send notifications
+app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res: Response) => {
+  // Verify cron secret to prevent unauthorized access
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    console.error("[Cron] CRON_SECRET environment variable is not configured");
+    return res.status(500).json({ error: "Cron not configured" });
+  }
+  const authHeader = req.headers.authorization;
+  if (authHeader !== `Bearer ${cronSecret}`) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+
+  try {
+    console.log("[Cron] Starting subscription expiry notification check...");
+
+    const now = new Date();
+    const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const oneDayMs = 24 * 60 * 60 * 1000;
+
+    // Find all active subscriptions
+    const activeSubscriptions = await db
+      .select({
+        subId: userSubscriptions.id,
+        userId: userSubscriptions.userId,
+        planId: userSubscriptions.planId,
+        validDateUpto: userSubscriptions.validDateUpto,
+        planName: subscriptionPlans.name,
+      })
+      .from(userSubscriptions)
+      .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+      .where(eq(userSubscriptions.status, "active"));
+
+    let sentCount = 0;
+    let skippedCount = 0;
+
+    for (const sub of activeSubscriptions) {
+      if (!sub.validDateUpto) continue;
+
+      const expiryDate = new Date(sub.validDateUpto);
+      const daysUntilExpiry = Math.ceil((expiryDate.getTime() - now.getTime()) / oneDayMs);
+
+      // Determine notification type
+      let notificationType: string | null = null;
+      let notificationTitle = "";
+      let notificationBody = "";
+
+      if (daysUntilExpiry <= 2 && daysUntilExpiry > 0) {
+        notificationType = "expiry_2days";
+        notificationTitle = "Subscription Expiring Soon";
+        notificationBody = `Your ${sub.planName || "subscription"} plan expires in ${daysUntilExpiry} day${daysUntilExpiry === 1 ? "" : "s"}. Renew now to keep your recording minutes!`;
+      } else if (daysUntilExpiry <= 7 && daysUntilExpiry > 2) {
+        notificationType = "expiry_7days";
+        notificationTitle = "Subscription Reminder";
+        notificationBody = `Your ${sub.planName || "subscription"} plan expires in ${daysUntilExpiry} days. Consider renewing to continue enjoying extended recording time.`;
+      }
+
+      if (!notificationType) continue;
+
+      // Check if we already sent this notification type for this subscription
+      const alreadySent = await db.select().from(notificationLog)
+        .where(and(
+          eq(notificationLog.userId, sub.userId),
+          eq(notificationLog.notificationType, notificationType),
+          eq(notificationLog.subscriptionId, sub.subId),
+        ))
+        .limit(1);
+
+      if (alreadySent.length > 0) {
+        skippedCount++;
+        continue;
+      }
+
+      // Get active push tokens for this user
+      const userTokens = await db.select().from(pushTokens)
+        .where(and(
+          eq(pushTokens.userId, sub.userId),
+          eq(pushTokens.isActive, true),
+        ));
+
+      if (userTokens.length === 0) {
+        console.log(`[Cron] No active push tokens for user ${sub.userId}, skipping`);
+        skippedCount++;
+        continue;
+      }
+
+      const tokenStrings = userTokens.map((t) => t.pushToken);
+
+      // Send push notification
+      await sendExpoPushNotifications(tokenStrings, notificationTitle, notificationBody, {
+        type: "subscription_expiry",
+        subscriptionId: sub.subId,
+        daysRemaining: daysUntilExpiry,
+      });
+
+      // Log the notification
+      await db.insert(notificationLog).values({
+        userId: sub.userId,
+        notificationType,
+        subscriptionId: sub.subId,
+        status: "sent",
+        message: notificationBody,
+      });
+
+      sentCount++;
+      console.log(`[Cron] Sent ${notificationType} notification to user ${sub.userId} (expires in ${daysUntilExpiry} days)`);
+    }
+
+    // Also check trial expiry (trialEndsAt on user record)
+    // Only fetch users with trials expiring within the next 7 days
+    const usersWithTrials = await db.select().from(users)
+      .where(and(
+        eq(users.trialUsed, false),
+        gte(users.trialEndsAt, now),
+        sql`${users.trialEndsAt} <= ${sevenDaysFromNow}`,
+      ));
+
+    for (const user of usersWithTrials) {
+      if (!user.trialEndsAt) continue;
+
+      const trialExpiry = new Date(user.trialEndsAt);
+      const daysUntilExpiry = Math.ceil((trialExpiry.getTime() - now.getTime()) / oneDayMs);
+
+      let notificationType: string | null = null;
+      let notificationTitle = "";
+      let notificationBody = "";
+
+      if (daysUntilExpiry <= 2 && daysUntilExpiry > 0) {
+        notificationType = "trial_expiry_2days";
+        notificationTitle = "Trial Ending Soon";
+        notificationBody = `Your free trial expires in ${daysUntilExpiry} day${daysUntilExpiry === 1 ? "" : "s"}. Subscribe now to keep recording!`;
+      } else if (daysUntilExpiry <= 7 && daysUntilExpiry > 2) {
+        notificationType = "trial_expiry_7days";
+        notificationTitle = "Trial Reminder";
+        notificationBody = `Your free trial expires in ${daysUntilExpiry} days. Subscribe to continue enjoying MyVoicePost.`;
+      }
+
+      if (!notificationType) continue;
+
+      const alreadySent = await db.select().from(notificationLog)
+        .where(and(
+          eq(notificationLog.userId, user.id),
+          eq(notificationLog.notificationType, notificationType),
+        ))
+        .limit(1);
+
+      if (alreadySent.length > 0) {
+        skippedCount++;
+        continue;
+      }
+
+      const userTokens = await db.select().from(pushTokens)
+        .where(and(
+          eq(pushTokens.userId, user.id),
+          eq(pushTokens.isActive, true),
+        ));
+
+      if (userTokens.length === 0) {
+        skippedCount++;
+        continue;
+      }
+
+      const tokenStrings = userTokens.map((t) => t.pushToken);
+
+      await sendExpoPushNotifications(tokenStrings, notificationTitle, notificationBody, {
+        type: "trial_expiry",
+        daysRemaining: daysUntilExpiry,
+      });
+
+      await db.insert(notificationLog).values({
+        userId: user.id,
+        notificationType,
+        status: "sent",
+        message: notificationBody,
+      });
+
+      sentCount++;
+      console.log(`[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`);
+    }
+
+    console.log(`[Cron] Notifications done. Sent: ${sentCount}, Skipped: ${skippedCount}`);
+
+    // --- Cleanup tasks ---
+    const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // 1. Remove expired password reset tokens
+    const expiredTokensResult = await db.delete(passwordResetTokens)
+      .where(lt(passwordResetTokens.expiresAt, now));
+    const expiredTokensCount = expiredTokensResult.count ?? 0;
+    console.log(`[Cron] Cleaned up ${expiredTokensCount} expired password reset tokens`);
+
+    // 2. Remove audio log records older than 30 days
+    const oldAudioResult = await db.delete(audioLogs)
+      .where(lt(audioLogs.createdAt, thirtyDaysAgo));
+    const oldAudioCount = oldAudioResult.count ?? 0;
+    console.log(`[Cron] Cleaned up ${oldAudioCount} audio log records older than 30 days`);
+
+    // 3. Remove saved texts records older than 30 days
+    const oldTextsResult = await db.delete(savedTexts)
+      .where(lt(savedTexts.createdAt, thirtyDaysAgo));
+    const oldTextsCount = oldTextsResult.count ?? 0;
+    console.log(`[Cron] Cleaned up ${oldTextsCount} saved text records older than 30 days`);
+
+    console.log(`[Cron] All tasks complete.`);
+    res.json({
+      success: true,
+      notifications: { sent: sentCount, skipped: skippedCount },
+      cleanup: {
+        expiredTokens: expiredTokensCount,
+        oldAudioLogs: oldAudioCount,
+        oldSavedTexts: oldTextsCount,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Cron] Notification check error:", error.message);
+    res.status(500).json({ success: false, error: "Notification check failed" });
+  }
+});
 
 // Error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {

@@ -20,5 +20,11 @@
       "maxDuration": 60,
       "memory": 1024
     }
-  }
+  },
+  "crons": [
+    {
+      "path": "/api/cron/subscription-expiry-notifications",
+      "schedule": "0 9 * * *"
+    }
+  ]
 }
