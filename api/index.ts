@@ -33,6 +33,7 @@ const users = pgTable("mvp_users", {
   trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+  subscriptionId: uuid("subscription_id"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -664,6 +665,89 @@ async function sendPaymentFailedEmail(
     console.log(`[FAIL EMAIL] Payment failure email sent to ${email}`);
   } catch (emailError: any) {
     console.error(`[FAIL EMAIL] Failed to send payment failure email: ${emailError.message}`);
+  }
+}
+
+async function sendRenewalReminderEmail(
+  email: string,
+  planName: string,
+  renewalDate: Date,
+  amount: string
+) {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn("[RENEWAL EMAIL] SMTP configuration missing - skipping reminder email");
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && {
+        requireTLS: true,
+        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+      }),
+    });
+
+    await transporter.verify();
+
+    const formattedDate = renewalDate.toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    });
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><title>Renewal Reminder</title></head>
+      <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <div style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 30px; text-align: center; border-radius: 10px 10px 0 0;">
+          <h1 style="color: white; margin: 0; font-size: 28px;">MyVoicePost</h1>
+          <p style="color: rgba(255,255,255,0.9); margin: 10px 0 0 0; font-size: 16px;">Upcoming Renewal</p>
+        </div>
+        <div style="background: #ffffff; padding: 30px; border: 1px solid #e0e0e0; border-top: none; border-radius: 0 0 10px 10px;">
+          <h2 style="color: #333; margin-top: 0;">Your subscription renews soon</h2>
+          <p>Your <strong>${planName}</strong> subscription will automatically renew in 3 days. Here are the details:</p>
+          <div style="background: #f8f9fa; border-radius: 8px; padding: 20px; margin: 20px 0;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr><td style="padding: 8px 0; color: #666;">Plan</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${planName}</td></tr>
+              <tr><td style="padding: 8px 0; color: #666;">Renewal Amount</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${amount}</td></tr>
+              <tr><td style="padding: 8px 0; color: #666;">Renewal Date</td><td style="padding: 8px 0; font-weight: bold; text-align: right;">${formattedDate}</td></tr>
+            </table>
+          </div>
+          <p style="color: #666; font-size: 14px;">If you wish to cancel auto-renewal, you can do so from your Account Settings in the app before the renewal date.</p>
+          <p style="color: #666; font-size: 14px;">If your payment method has changed, please update your card details in the app to avoid any interruption.</p>
+          <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
+          <p style="color: #888; font-size: 13px; margin-bottom: 0;">-- The MyVoicePost Team</p>
+        </div>
+        <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
+          <p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: emailFrom,
+      to: email,
+      subject: `MyVoicePost - Your ${planName} subscription renews on ${formattedDate}`,
+      text: `Your MyVoicePost ${planName} subscription will renew on ${formattedDate} for ${amount}. To cancel auto-renewal, visit your Account Settings in the app.`,
+      html: htmlContent,
+    });
+
+    console.log(`[RENEWAL EMAIL] Reminder email sent to ${email}`);
+  } catch (emailError: any) {
+    console.error(`[RENEWAL EMAIL] Failed to send reminder email: ${emailError.message}`);
   }
 }
 
@@ -3119,6 +3203,10 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
       status: "active",
     }).returning();
 
+    await db.update(users)
+      .set({ subscriptionId: subscription.id, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+
     console.log(`[DEBUG /m/subscribe] OUTPUT: success=true, userId=${userId}, plan=${plan.name}, validUntil=${validDateUpto.toISOString()}, carryover=${carryoverMinutes}min, totalMinutes=${totalMinutesAvailable}`);
 
     res.json({
@@ -4362,6 +4450,138 @@ app.post("/api/v1/m/cancel-subscription", mobileAuthMiddleware, async (req: any,
   await handleCancelSubscription(req, res, userId);
 });
 
+// POST /api/reactivate-subscription + /api/v1/m/reactivate-subscription
+async function handleReactivateSubscription(req: Request, res: Response, userId: string) {
+  try {
+    const schema = z.object({
+      subscriptionId: z.string().min(1, "Subscription ID is required"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { subscriptionId } = parseResult.data;
+    console.log(`[DEBUG /reactivate-subscription] INPUT: userId=${userId}, subscriptionId=${subscriptionId}`);
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    if (user.stripeSubscriptionId !== subscriptionId) {
+      return res.status(403).json({ success: false, error: "You can only reactivate your own subscription" });
+    }
+
+    const stripe = await getStripeClient();
+
+    const subscription = await stripe.subscriptions.update(subscriptionId, {
+      cancel_at_period_end: false,
+    });
+
+    const periodEnd = (subscription as any).current_period_end;
+
+    res.json({
+      success: true,
+      message: "Auto-renewal has been turned back on",
+      current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+    });
+  } catch (error: any) {
+    console.error("[Stripe Reactivate Subscription] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to reactivate subscription",
+    });
+  }
+}
+
+app.post("/api/reactivate-subscription", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
+  await handleReactivateSubscription(req, res, userId);
+});
+
+app.post("/api/v1/m/reactivate-subscription", mobileAuthMiddleware, async (req: any, res) => {
+  const userId = req.jwtUser?.userId;
+  await handleReactivateSubscription(req, res, userId);
+});
+
+// POST /api/update-payment-method + /api/v1/m/update-payment-method
+async function handleUpdatePaymentMethod(_req: Request, res: Response, userId: string) {
+  try {
+    console.log(`[DEBUG /update-payment-method] INPUT: userId=${userId}`);
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    const stripe = await getStripeClient();
+
+    let customerId = user.stripeCustomerId;
+    if (!customerId) {
+      return res.status(400).json({ success: false, error: "No Stripe customer found. Please subscribe first." });
+    }
+
+    try {
+      await stripe.customers.retrieve(customerId);
+    } catch (custErr: any) {
+      return res.status(400).json({ success: false, error: "Stripe customer not found" });
+    }
+
+    const setupIntent = await stripe.setupIntents.create({
+      customer: customerId,
+      payment_method_types: ["card"],
+      usage: "off_session",
+      metadata: {
+        userId,
+        purpose: "update_payment_method",
+      },
+    });
+
+    const ephemeralKey = await stripe.ephemeralKeys.create(
+      { customer: customerId },
+      { apiVersion: "2024-06-20" as any }
+    );
+
+    res.json({
+      success: true,
+      clientSecret: setupIntent.client_secret,
+      ephemeralKey: ephemeralKey.secret,
+      customerId,
+      setupIntentId: setupIntent.id,
+    });
+  } catch (error: any) {
+    console.error("[Stripe Update Payment Method] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to create setup intent",
+    });
+  }
+}
+
+app.post("/api/update-payment-method", async (req: any, res) => {
+  const userId = req.session?.userId;
+  if (!userId) {
+    return res.status(401).json({ success: false, error: "Authentication required" });
+  }
+  await handleUpdatePaymentMethod(req, res, userId);
+});
+
+app.post("/api/v1/m/update-payment-method", mobileAuthMiddleware, async (req: any, res) => {
+  const userId = req.jwtUser?.userId;
+  await handleUpdatePaymentMethod(req, res, userId);
+});
+
 // POST /api/stripe-webhook + /api/v1/m/stripe-webhook
 async function handleStripeWebhook(req: Request, res: Response) {
   try {
@@ -4482,9 +4702,13 @@ async function handleStripeWebhook(req: Request, res: Response) {
                     })
                     .where(eq(userSubscriptions.id, existingSub.id));
 
+                  await db.update(users)
+                    .set({ subscriptionId: existingSub.id, updatedAt: new Date() })
+                    .where(eq(users.id, user.id));
+
                   console.log(`[Stripe Webhook] Extended existing subscription: +${planDays} days, +${planMinutes} mins (new remaining: ${newRemaining})`);
                 } else {
-                  await db.insert(userSubscriptions).values({
+                  const [newSubRecord] = await db.insert(userSubscriptions).values({
                     userId: user.id,
                     planId: matchedPlan.id,
                     validDateUpto: newTrialEndsAt,
@@ -4493,7 +4717,13 @@ async function handleStripeWebhook(req: Request, res: Response) {
                     minutesRemaining: String(planMinutes),
                     paymentToken: subscriptionId,
                     status: "active",
-                  });
+                  }).returning();
+
+                  if (newSubRecord) {
+                    await db.update(users)
+                      .set({ subscriptionId: newSubRecord.id, updatedAt: new Date() })
+                      .where(eq(users.id, user.id));
+                  }
                   console.log(`[Stripe Webhook] Created new subscription record`);
                 }
 
@@ -4659,7 +4889,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
             const user = userResult[0];
 
             await db.update(users)
-              .set({ stripeSubscriptionId: null, updatedAt: new Date() })
+              .set({ stripeSubscriptionId: null, subscriptionId: null, updatedAt: new Date() })
               .where(eq(users.id, user.id));
 
             const activeSubResult = await db.select().from(userSubscriptions)
@@ -4767,6 +4997,40 @@ async function handleStripeWebhook(req: Request, res: Response) {
           });
         } else {
           console.log(`[Stripe Webhook] payment_intent.succeeded: non-topup PI ${paymentIntent.id}`);
+        }
+        break;
+      }
+
+      case "setup_intent.succeeded": {
+        const setupIntentObj = event.data.object as any;
+        const siMetadata = setupIntentObj.metadata || {};
+
+        if (siMetadata.purpose === "update_payment_method" && siMetadata.userId) {
+          const pmId = setupIntentObj.payment_method;
+          const siCustomerId = setupIntentObj.customer;
+
+          if (pmId && siCustomerId) {
+            try {
+              const stripeClient = await getStripeClient();
+
+              await stripeClient.customers.update(siCustomerId, {
+                invoice_settings: { default_payment_method: pmId as string },
+              });
+
+              const userResult = await db.select().from(users)
+                .where(eq(users.id, siMetadata.userId))
+                .limit(1);
+
+              if (userResult.length > 0 && userResult[0].stripeSubscriptionId) {
+                await stripeClient.subscriptions.update(userResult[0].stripeSubscriptionId, {
+                  default_payment_method: pmId as string,
+                });
+                console.log(`[Stripe Webhook] setup_intent.succeeded: Updated default payment method for user ${siMetadata.userId}`);
+              }
+            } catch (pmErr: any) {
+              console.error(`[Stripe Webhook] Failed to update payment method: ${pmErr.message}`);
+            }
+          }
         }
         break;
       }
@@ -5086,6 +5350,68 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
 
     console.log(`[Cron] Notifications done. Sent: ${sentCount}, Skipped: ${skippedCount}`);
 
+    // --- Renewal reminder emails (3 days before Stripe charges) ---
+    let renewalRemindersSent = 0;
+    try {
+      const stripeClient = await getStripeClient();
+      const usersWithSubs = await db.select({
+        userId: users.id,
+        email: users.email,
+        stripeSubscriptionId: users.stripeSubscriptionId,
+      }).from(users)
+        .where(and(
+          sql`${users.stripeSubscriptionId} IS NOT NULL`,
+          sql`${users.stripeSubscriptionId} != ''`,
+        ));
+
+      for (const u of usersWithSubs) {
+        if (!u.stripeSubscriptionId || !u.email) continue;
+
+        try {
+          const stripeSub = await stripeClient.subscriptions.retrieve(u.stripeSubscriptionId);
+          if ((stripeSub.status !== "active" && stripeSub.status !== "trialing") || stripeSub.cancel_at_period_end) continue;
+
+          const periodEnd = new Date((stripeSub as any).current_period_end * 1000);
+          const daysUntilRenewal = Math.ceil((periodEnd.getTime() - now.getTime()) / oneDayMs);
+
+          if (daysUntilRenewal === 3) {
+            const renewalKey = `renewal_${u.stripeSubscriptionId}_${periodEnd.toISOString().split('T')[0]}`;
+            const existingLog = await db.select().from(notificationLog)
+              .where(and(
+                eq(notificationLog.userId, u.userId),
+                eq(notificationLog.notificationType, "renewal_reminder_3days"),
+                eq(notificationLog.message, renewalKey),
+              )).limit(1);
+
+            if (existingLog.length === 0) {
+              const priceItem = stripeSub.items?.data?.[0];
+              const amount = priceItem?.price?.unit_amount
+                ? `$${(priceItem.price.unit_amount / 100).toFixed(2)}`
+                : "your subscription fee";
+              const planName = priceItem?.price?.nickname || "Starter";
+
+              await sendRenewalReminderEmail(u.email, planName, periodEnd, amount);
+
+              await db.insert(notificationLog).values({
+                userId: u.userId,
+                notificationType: "renewal_reminder_3days",
+                status: "sent",
+                message: renewalKey,
+              });
+
+              renewalRemindersSent++;
+              console.log(`[Cron] Sent renewal reminder to user ${u.userId} (renews in ${daysUntilRenewal} days)`);
+            }
+          }
+        } catch (subErr: any) {
+          console.warn(`[Cron] Could not check Stripe sub for user ${u.userId}: ${subErr.message}`);
+        }
+      }
+      console.log(`[Cron] Renewal reminders sent: ${renewalRemindersSent}`);
+    } catch (renewalErr: any) {
+      console.error(`[Cron] Renewal reminder check error: ${renewalErr.message}`);
+    }
+
     // --- Cleanup tasks ---
     const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
 
@@ -5111,6 +5437,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
     res.json({
       success: true,
       notifications: { sent: sentCount, skipped: skippedCount },
+      renewalReminders: renewalRemindersSent,
       cleanup: {
         expiredTokens: expiredTokensCount,
         oldAudioLogs: oldAudioCount,
