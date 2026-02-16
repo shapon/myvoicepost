@@ -3745,6 +3745,7 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
     let stripeStatus: string | null = null;
     let cancelAtPeriodEnd = false;
     let currentPeriodEnd: string | null = null;
+    let stripePriceId: string | null = null;
 
     if (updatedUser.stripeSubscriptionId) {
       try {
@@ -3756,21 +3757,16 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
         currentPeriodEnd = periodEndTs
           ? new Date(periodEndTs * 1000).toISOString()
           : null;
+        stripePriceId = stripeSub.items?.data?.[0]?.price?.id || null;
       } catch (err: any) {
         console.warn("[Subscription Status] Stripe retrieval failed:", err.message);
       }
     }
 
-    res.json({
-      success: true,
-      trial: trial ? {
-        is_active: trial.is_active,
-        days_remaining: trial.days_remaining,
-        minutes_remaining: trial.minutes_remaining,
-        minutes_used: trial.minutes_used,
-        trial_ends_at: trial.ends_at,
-      } : null,
-      subscription: activeSub ? {
+    let subscriptionData: any = null;
+
+    if (activeSub) {
+      subscriptionData = {
         id: activeSub.id,
         plan_name: plan?.name || "Unknown",
         plan_id: activeSub.planId,
@@ -3782,8 +3778,43 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
         stripe_status: stripeStatus,
         cancel_at_period_end: cancelAtPeriodEnd,
         current_period_end: currentPeriodEnd,
+      };
+    } else if (updatedUser.stripeSubscriptionId && stripeStatus) {
+      let stripePlan: any = null;
+      if (stripePriceId) {
+        const stripePlanResult = await db.select().from(subscriptionPlans)
+          .where(eq(subscriptionPlans.stripePriceId, stripePriceId))
+          .limit(1);
+        stripePlan = stripePlanResult[0] || null;
+      }
+
+      subscriptionData = {
+        id: null,
+        plan_name: stripePlan?.name || "Subscription",
+        plan_id: stripePlan?.id || null,
+        status: stripeStatus === "active" || stripeStatus === "trialing" ? "active" : stripeStatus,
+        valid_date_upto: currentPeriodEnd,
+        minutes_used: 0,
+        minutes_remaining: stripePlan?.validTotalMinutes ? String(stripePlan.validTotalMinutes) : "0",
+        stripe_subscription_id: updatedUser.stripeSubscriptionId,
+        stripe_status: stripeStatus,
+        cancel_at_period_end: cancelAtPeriodEnd,
+        current_period_end: currentPeriodEnd,
+      };
+      console.log(`[Subscription Status] No active DB record but Stripe sub exists: ${updatedUser.stripeSubscriptionId}, status=${stripeStatus}, plan=${stripePlan?.name || 'unknown'}`);
+    }
+
+    res.json({
+      success: true,
+      trial: trial ? {
+        is_active: trial.is_active,
+        days_remaining: trial.days_remaining,
+        minutes_remaining: trial.minutes_remaining,
+        minutes_used: trial.minutes_used,
+        trial_ends_at: trial.ends_at,
       } : null,
-      has_active_subscription: !!activeSub,
+      subscription: subscriptionData,
+      has_active_subscription: !!subscriptionData,
       has_active_trial: trial?.is_active || false,
     });
   } catch (error: any) {
@@ -3859,6 +3890,26 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
         .where(eq(users.id, userId));
     }
 
+    // Cancel any existing incomplete/incomplete_expired subscriptions for this customer to avoid duplicates
+    try {
+      for (const status of ["incomplete", "incomplete_expired"] as const) {
+        const existingSubs = await stripe.subscriptions.list({
+          customer: customerId,
+          status,
+        });
+        for (const sub of existingSubs.data) {
+          try {
+            await stripe.subscriptions.cancel(sub.id);
+            console.log(`[Stripe] Cancelled ${status} subscription: ${sub.id}`);
+          } catch (innerErr: any) {
+            console.warn(`[Stripe] Could not cancel sub ${sub.id}:`, innerErr.message);
+          }
+        }
+      }
+    } catch (cancelErr: any) {
+      console.warn("[Stripe] Could not clean up incomplete subscriptions:", cancelErr.message);
+    }
+
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
       items: [{ price: priceId }],
@@ -3890,15 +3941,24 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
       type = "setup";
     }
 
+    const ephemeralKey = await stripe.ephemeralKeys.create(
+      { customer: customerId },
+      { apiVersion: "2024-06-20" }
+    );
+
     await db.update(users)
       .set({ stripeSubscriptionId: subscription.id, updatedAt: new Date() })
       .where(eq(users.id, userId));
+
+    console.log(`[Stripe Create Subscription] Success: subId=${subscription.id}, type=${type}, hasSecret=${!!clientSecret}, customerId=${customerId}`);
 
     res.json({
       success: true,
       subscriptionId: subscription.id,
       clientSecret,
       type,
+      ephemeralKey: ephemeralKey.secret,
+      customerId,
     });
   } catch (error: any) {
     console.error("[Stripe Create Subscription] Error:", error);
@@ -4448,6 +4508,151 @@ app.post("/api/cancel-subscription", async (req: any, res) => {
 app.post("/api/v1/m/cancel-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleCancelSubscription(req, res, userId);
+});
+
+// POST /api/v1/m/confirm-subscription - Confirm subscription after mobile PaymentSheet
+app.post("/api/v1/m/confirm-subscription", mobileAuthMiddleware, async (req: any, res) => {
+  const userId = req.jwtUser?.userId;
+  try {
+    const { subscriptionId } = req.body;
+    if (!subscriptionId) {
+      return res.status(400).json({ success: false, error: "subscriptionId is required" });
+    }
+
+    console.log(`[Confirm Subscription] userId=${userId}, subscriptionId=${subscriptionId}`);
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) {
+      return res.status(404).json({ success: false, error: "User not found" });
+    }
+
+    const stripe = await getStripeClient();
+    const stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
+    console.log(`[Confirm Subscription] Stripe status: ${stripeSub.status}`);
+
+    const stripeCustomerId = typeof stripeSub.customer === 'string' ? stripeSub.customer : (stripeSub.customer as any)?.id;
+    if (!user.stripeCustomerId || stripeCustomerId !== user.stripeCustomerId) {
+      console.warn(`[Confirm Subscription] SECURITY: Stripe customer mismatch. User customerId=${user.stripeCustomerId}, sub customerId=${stripeCustomerId}`);
+      return res.status(403).json({ success: false, error: "This subscription does not belong to your account" });
+    }
+
+    if (user.stripeSubscriptionId !== subscriptionId) {
+      await db.update(users)
+        .set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+      console.log(`[Confirm Subscription] Updated user stripeSubscriptionId from ${user.stripeSubscriptionId} to ${subscriptionId}`);
+    }
+
+    if (stripeSub.status === "active" || stripeSub.status === "trialing") {
+      const existingForThisSub = await db.select().from(userSubscriptions)
+        .where(and(
+          eq(userSubscriptions.userId, userId),
+          eq(userSubscriptions.paymentToken, subscriptionId),
+          eq(userSubscriptions.status, "active"),
+        )).limit(1);
+
+      if (existingForThisSub.length > 0) {
+        console.log(`[Confirm Subscription] Record already exists for this subscriptionId, skipping creation`);
+        return res.json({ success: true, message: "Subscription is active", status: stripeSub.status });
+      }
+
+      const existingActive = await db.select().from(userSubscriptions)
+        .where(and(
+          eq(userSubscriptions.userId, userId),
+          eq(userSubscriptions.status, "active"),
+        )).limit(1);
+
+      if (existingActive.length > 0) {
+        console.log(`[Confirm Subscription] User already has an active subscription record (possibly from webhook)`);
+        return res.json({ success: true, message: "Subscription is active", status: stripeSub.status });
+      }
+
+      const priceId = stripeSub.items.data[0]?.price?.id;
+      let matchedPlan: any = null;
+      if (priceId) {
+        const planResult = await db.select().from(subscriptionPlans)
+          .where(eq(subscriptionPlans.stripePriceId, priceId))
+          .limit(1);
+        matchedPlan = planResult[0] || null;
+      }
+      if (!matchedPlan) {
+        const fallbackResult = await db.select().from(subscriptionPlans)
+          .where(gte(subscriptionPlans.priceMonthly, 1))
+          .limit(1);
+        matchedPlan = fallbackResult[0] || null;
+      }
+
+      if (matchedPlan) {
+        const now = new Date();
+        const planMinutes = matchedPlan.validTotalMinutes || 0;
+        const planDays = matchedPlan.validDays || 30;
+
+        const currentTrialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+        const currentMinutesTotal = user.trialMinutesTotal || 90;
+        const isWithinTrial = currentTrialEndsAt && currentTrialEndsAt > now;
+
+        let newTrialEndsAt: Date;
+        let newMinutesTotal: number;
+
+        if (isWithinTrial) {
+          newTrialEndsAt = new Date(currentTrialEndsAt!);
+          newTrialEndsAt.setDate(newTrialEndsAt.getDate() + planDays);
+          newMinutesTotal = currentMinutesTotal + planMinutes;
+        } else {
+          newTrialEndsAt = new Date(now);
+          newTrialEndsAt.setDate(newTrialEndsAt.getDate() + planDays);
+          newMinutesTotal = currentMinutesTotal + planMinutes;
+        }
+
+        await db.update(users)
+          .set({
+            trialEndsAt: newTrialEndsAt,
+            trialMinutesTotal: newMinutesTotal,
+            trialUsed: false,
+            updatedAt: now,
+          })
+          .where(eq(users.id, userId));
+
+        const [newSubRecord] = await db.insert(userSubscriptions).values({
+          userId: userId,
+          planId: matchedPlan.id,
+          validDateUpto: newTrialEndsAt,
+          minutesUsed: 0,
+          chunksUsed: 0,
+          minutesRemaining: String(planMinutes),
+          paymentToken: subscriptionId,
+          status: "active",
+        }).returning();
+
+        if (newSubRecord) {
+          await db.update(users)
+            .set({ subscriptionId: newSubRecord.id, updatedAt: new Date() })
+            .where(eq(users.id, userId));
+        }
+
+        console.log(`[Confirm Subscription] Created active subscription record for user ${userId}, plan: ${matchedPlan.name}`);
+      }
+
+      return res.json({ success: true, message: "Subscription is active", status: stripeSub.status });
+    } else if (stripeSub.status === "incomplete") {
+      console.log(`[Confirm Subscription] Subscription still incomplete for user ${userId}`);
+      return res.json({
+        success: true,
+        message: "Payment is still being processed. Your subscription will be activated once payment is confirmed.",
+        status: stripeSub.status,
+      });
+    } else {
+      return res.json({
+        success: true,
+        message: `Subscription status: ${stripeSub.status}`,
+        status: stripeSub.status,
+      });
+    }
+  } catch (error: any) {
+    console.error("[Confirm Subscription] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to confirm subscription" });
+  }
 });
 
 // POST /api/reactivate-subscription + /api/v1/m/reactivate-subscription
