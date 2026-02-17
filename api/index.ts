@@ -16,6 +16,7 @@ import pRetry, { AbortError } from "p-retry";
 import pLimit from "p-limit";
 import nodemailer from "nodemailer";
 import Stripe from "stripe";
+import OpenAI from "openai";
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
 const aiRequestLimiter = pLimit(5);
@@ -126,6 +127,27 @@ const pushTokens = pgTable("mvp_push_tokens", {
   isActive: boolean("is_active").default(true),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+const appSettings = pgTable("mvp_app_settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  settingKey: varchar("setting_key", { length: 100 }).notNull().unique(),
+  settingValue: text("setting_value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+const crashReports = pgTable("mvp_crash_reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  source: varchar("source", { length: 20 }).notNull(),
+  errorMessage: text("error_message").notNull(),
+  stackTrace: text("stack_trace"),
+  userId: uuid("user_id"),
+  deviceInfo: text("device_info"),
+  appVersion: varchar("app_version", { length: 20 }),
+  endpoint: varchar("endpoint", { length: 255 }),
+  emailSent: boolean("email_sent").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 const notificationLog = pgTable("mvp_notification_log", {
@@ -748,6 +770,145 @@ async function sendRenewalReminderEmail(
     console.log(`[RENEWAL EMAIL] Reminder email sent to ${email}`);
   } catch (emailError: any) {
     console.error(`[RENEWAL EMAIL] Failed to send reminder email: ${emailError.message}`);
+  }
+}
+
+// ============ CRASH REPORT EMAIL ============
+let crashEmailThrottle: Record<string, number> = {};
+const CRASH_EMAIL_COOLDOWN_MS = 5 * 60 * 1000;
+
+async function getAdminEmails(): Promise<string[]> {
+  try {
+    const result = await db.select().from(appSettings)
+      .where(eq(appSettings.settingKey, "admin_mail"))
+      .limit(1);
+    if (result.length > 0 && result[0].settingValue) {
+      return result[0].settingValue.split(",").map(e => e.trim()).filter(Boolean);
+    }
+  } catch (err: any) {
+    console.warn("[CRASH REPORT] Could not fetch admin emails:", err.message);
+  }
+  return [];
+}
+
+async function sendCrashReportEmail(opts: {
+  source: string;
+  errorMessage: string;
+  stackTrace?: string;
+  userId?: string;
+  deviceInfo?: string;
+  appVersion?: string;
+  endpoint?: string;
+}) {
+  const throttleKey = `${opts.source}:${opts.errorMessage.substring(0, 100)}`;
+  const now = Date.now();
+  if (crashEmailThrottle[throttleKey] && (now - crashEmailThrottle[throttleKey]) < CRASH_EMAIL_COOLDOWN_MS) {
+    console.log("[CRASH REPORT] Throttled - same error reported recently");
+    return;
+  }
+  crashEmailThrottle[throttleKey] = now;
+
+  try {
+    await db.insert(crashReports).values({
+      source: opts.source,
+      errorMessage: opts.errorMessage,
+      stackTrace: opts.stackTrace || null,
+      userId: opts.userId || null,
+      deviceInfo: opts.deviceInfo || null,
+      appVersion: opts.appVersion || null,
+      endpoint: opts.endpoint || null,
+      emailSent: false,
+    });
+  } catch (dbErr: any) {
+    console.warn("[CRASH REPORT] Could not log to DB:", dbErr.message);
+  }
+
+  const adminEmails = await getAdminEmails();
+  if (adminEmails.length === 0) {
+    console.warn("[CRASH REPORT] No admin emails configured - skipping email notification");
+    return;
+  }
+
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+
+  if (!smtpHost || !smtpUser || !smtpPass) {
+    console.warn("[CRASH REPORT] SMTP not configured - skipping email");
+    return;
+  }
+
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost,
+      port: smtpPort,
+      secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && {
+        requireTLS: true,
+        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+      }),
+    });
+
+    const timestamp = new Date().toISOString();
+    const sourceLabel = opts.source === "mobile" ? "Mobile App" : "Backend Server";
+    const stackHtml = opts.stackTrace
+      ? `<pre style="background:#1e1e1e;color:#d4d4d4;padding:16px;border-radius:6px;overflow-x:auto;font-size:12px;max-height:400px;overflow-y:auto;">${opts.stackTrace.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`
+      : '<p style="color:#999;">No stack trace available</p>';
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+      <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;line-height:1.6;color:#333;max-width:700px;margin:0 auto;padding:20px;">
+        <div style="background:#dc2626;padding:20px;text-align:center;border-radius:10px 10px 0 0;">
+          <h1 style="color:white;margin:0;font-size:22px;">MyVoicePost - Crash Report</h1>
+          <p style="color:rgba(255,255,255,0.9);margin:8px 0 0 0;font-size:14px;">${sourceLabel} Error Detected</p>
+        </div>
+        <div style="background:#fff;padding:24px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+          <table style="width:100%;border-collapse:collapse;margin-bottom:16px;">
+            <tr><td style="padding:6px 8px;color:#666;font-size:13px;width:120px;">Timestamp</td><td style="padding:6px 8px;font-size:13px;">${timestamp}</td></tr>
+            <tr><td style="padding:6px 8px;color:#666;font-size:13px;">Source</td><td style="padding:6px 8px;font-size:13px;">${sourceLabel}</td></tr>
+            ${opts.endpoint ? `<tr><td style="padding:6px 8px;color:#666;font-size:13px;">Endpoint</td><td style="padding:6px 8px;font-size:13px;">${opts.endpoint}</td></tr>` : ''}
+            ${opts.userId ? `<tr><td style="padding:6px 8px;color:#666;font-size:13px;">User ID</td><td style="padding:6px 8px;font-size:13px;">${opts.userId}</td></tr>` : ''}
+            ${opts.appVersion ? `<tr><td style="padding:6px 8px;color:#666;font-size:13px;">App Version</td><td style="padding:6px 8px;font-size:13px;">${opts.appVersion}</td></tr>` : ''}
+            ${opts.deviceInfo ? `<tr><td style="padding:6px 8px;color:#666;font-size:13px;">Device</td><td style="padding:6px 8px;font-size:13px;">${opts.deviceInfo}</td></tr>` : ''}
+          </table>
+          <h3 style="color:#dc2626;margin:16px 0 8px 0;font-size:15px;">Error Message</h3>
+          <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:12px;margin-bottom:16px;">
+            <code style="color:#991b1b;font-size:13px;word-break:break-all;">${opts.errorMessage.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</code>
+          </div>
+          <h3 style="color:#333;margin:16px 0 8px 0;font-size:15px;">Stack Trace</h3>
+          ${stackHtml}
+        </div>
+      </body>
+      </html>
+    `;
+
+    await transporter.sendMail({
+      from: emailFrom,
+      to: adminEmails.join(","),
+      subject: `[CRASH] MyVoicePost ${sourceLabel}: ${opts.errorMessage.substring(0, 80)}`,
+      text: `Crash Report\nSource: ${sourceLabel}\nTime: ${timestamp}\nError: ${opts.errorMessage}\n\nStack Trace:\n${opts.stackTrace || 'N/A'}`,
+      html: htmlContent,
+    });
+
+    try {
+      await db.update(crashReports)
+        .set({ emailSent: true })
+        .where(and(
+          eq(crashReports.source, opts.source),
+          eq(crashReports.errorMessage, opts.errorMessage),
+          eq(crashReports.emailSent, false),
+        ));
+    } catch (_) {}
+
+    console.log(`[CRASH REPORT] Email sent to ${adminEmails.join(", ")}`);
+  } catch (emailErr: any) {
+    console.error(`[CRASH REPORT] Failed to send email: ${emailErr.message}`);
   }
 }
 
@@ -2758,6 +2919,124 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
     res.status(500).json({
       success: false,
       error: error.message || "Failed to translate text",
+    });
+  }
+});
+
+// Mobile: Generate image from text description using DALL-E 3
+app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const openaiKey = process.env.OPENAI_API_KEY;
+    if (!openaiKey) {
+      return res.status(500).json({
+        success: false,
+        error: "OpenAI API key not configured",
+      });
+    }
+
+    const schema = z.object({
+      prompt: z.string().min(1, "Image description is required").max(4000, "Description too long"),
+      size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional().default("1024x1024"),
+      quality: z.enum(["standard", "hd"]).optional().default("standard"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { prompt, size, quality } = parseResult.data;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`);
+
+    const UNSAFE_KEYWORDS = [
+      "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
+      "sex", "sexual", "erotic", "hentai", "xxx",
+      "kill", "killing", "murder", "stab", "stabbing", "shoot", "shooting", "decapitate",
+      "gore", "gory", "bloody", "blood", "dismember", "mutilate", "torture", "beheading",
+      "gun", "rifle", "pistol", "shotgun", "firearm", "assault rifle", "machine gun",
+      "bomb", "grenade", "explosive", "missile", "knife attack",
+      "drug", "drugs", "cocaine", "heroin", "meth", "marijuana", "cannabis", "weed",
+      "smoking", "cigarette", "vaping", "alcohol", "drunk", "beer", "wine", "whiskey",
+      "horror", "scary", "terrifying", "nightmare", "demon", "demonic", "satan", "satanic",
+      "zombie", "undead", "corpse", "dead body", "skull", "skeleton",
+      "racist", "racism", "hate", "nazi", "swastika", "terrorist", "terrorism",
+      "suicide", "self-harm", "cutting", "hanging",
+      "child abuse", "abuse", "assault", "kidnap", "trafficking",
+      "bikini", "lingerie", "underwear", "bra", "panties", "thong",
+      "strip", "stripper", "prostitute", "escort",
+    ];
+
+    const promptLower = prompt.toLowerCase();
+    const detectedUnsafe = UNSAFE_KEYWORDS.filter(keyword => {
+      const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      return regex.test(promptLower);
+    });
+
+    if (detectedUnsafe.length > 0) {
+      console.log(`[IMAGE GEN] BLOCKED - unsafe keywords detected for user ${userId}: ${detectedUnsafe.join(', ')}`);
+      return res.status(400).json({
+        success: false,
+        error: "Your image description contains content that is not allowed. Please keep your descriptions family-friendly and appropriate for all ages. Remove any references to violence, weapons, nudity, drugs, scary imagery, or other inappropriate content and try again.",
+      });
+    }
+
+    const SAFETY_PREFIX = "IMPORTANT: This image must be completely safe, family-friendly, and appropriate for all ages including children. " +
+      "Do not include any violence, gore, weapons, nudity, sexual content, drugs, alcohol, tobacco, " +
+      "scary or disturbing imagery, hateful symbols, or any content inappropriate for minors. " +
+      "The image should be clean, wholesome, and suitable for a general audience. " +
+      "Now generate the following: ";
+
+    const safePrompt = SAFETY_PREFIX + prompt;
+
+    const openai = new OpenAI({ apiKey: openaiKey });
+
+    const response = await openai.images.generate({
+      model: "dall-e-3",
+      prompt: safePrompt,
+      n: 1,
+      size: size,
+      quality: quality,
+      response_format: "b64_json",
+    });
+
+    const imageData = response.data[0];
+    if (!imageData?.b64_json) {
+      throw new Error("No image data received from DALL-E");
+    }
+
+    console.log(`[IMAGE GEN] Image generated successfully for user ${userId}`);
+
+    res.json({
+      success: true,
+      imageBase64: imageData.b64_json,
+      revisedPrompt: imageData.revised_prompt || prompt,
+    });
+  } catch (error: any) {
+    console.error("[IMAGE GEN] Error:", error.message);
+
+    if (error?.status === 400 && error?.error?.code === "content_policy_violation") {
+      return res.status(400).json({
+        success: false,
+        error: "Your image description was rejected by the safety filter. Please modify your description and try again.",
+      });
+    }
+
+    if (error?.status === 429) {
+      return res.status(429).json({
+        success: false,
+        error: "Too many image generation requests. Please wait a moment and try again.",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to generate image",
     });
   }
 });
@@ -5655,9 +5934,137 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
   }
 });
 
+// Admin check middleware - only allows users whose email is in admin_mail list
+async function adminCheckMiddleware(req: any, res: any, next: any) {
+  try {
+    const adminEmails = await getAdminEmails();
+    const userEmail = req.user?.email;
+    if (!userEmail || !adminEmails.map((e: string) => e.toLowerCase()).includes(userEmail.toLowerCase())) {
+      return res.status(403).json({ success: false, error: "Admin access required" });
+    }
+    next();
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: "Authorization check failed" });
+  }
+}
+
+// GET /api/v1/m/app-settings/admin-mail - Get admin email addresses (admin only)
+app.get("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const result = await db.select().from(appSettings)
+      .where(eq(appSettings.settingKey, "admin_mail"))
+      .limit(1);
+    const emails = result.length > 0 ? result[0].settingValue : "";
+    res.json({ success: true, adminMail: emails });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// PUT /api/v1/m/app-settings/admin-mail - Update admin email addresses (admin only)
+app.put("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const { adminMail } = req.body;
+    if (typeof adminMail !== "string") {
+      return res.status(400).json({ success: false, error: "adminMail must be a string of comma-separated emails" });
+    }
+
+    const emails = adminMail.split(",").map((e: string) => e.trim()).filter(Boolean);
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    for (const email of emails) {
+      if (!emailRegex.test(email)) {
+        return res.status(400).json({ success: false, error: `Invalid email address: ${email}` });
+      }
+    }
+
+    const existing = await db.select().from(appSettings)
+      .where(eq(appSettings.settingKey, "admin_mail"))
+      .limit(1);
+
+    if (existing.length > 0) {
+      await db.update(appSettings)
+        .set({ settingValue: emails.join(","), updatedAt: new Date() })
+        .where(eq(appSettings.settingKey, "admin_mail"));
+    } else {
+      await db.insert(appSettings).values({
+        settingKey: "admin_mail",
+        settingValue: emails.join(","),
+      });
+    }
+
+    res.json({ success: true, adminMail: emails.join(",") });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// POST /api/v1/m/crash-report - Mobile app crash/error reporting (rate limited)
+const crashReportRateLimit: Record<string, { count: number; resetAt: number }> = {};
+const CRASH_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const CRASH_RATE_LIMIT_MAX = 5;
+
+app.post("/api/v1/m/crash-report", async (req: any, res) => {
+  try {
+    const clientIp = req.headers["x-forwarded-for"] || req.ip || "unknown";
+    const now = Date.now();
+    if (!crashReportRateLimit[clientIp] || crashReportRateLimit[clientIp].resetAt < now) {
+      crashReportRateLimit[clientIp] = { count: 0, resetAt: now + CRASH_RATE_LIMIT_WINDOW_MS };
+    }
+    crashReportRateLimit[clientIp].count++;
+    if (crashReportRateLimit[clientIp].count > CRASH_RATE_LIMIT_MAX) {
+      return res.status(429).json({ success: false, error: "Too many crash reports. Please try again later." });
+    }
+
+    const { errorMessage, stackTrace, deviceInfo, appVersion, userId } = req.body;
+    if (!errorMessage || typeof errorMessage !== "string") {
+      return res.status(400).json({ success: false, error: "errorMessage is required" });
+    }
+
+    const safeErrorMessage = errorMessage.substring(0, 2000);
+    const safeStackTrace = typeof stackTrace === "string" ? stackTrace.substring(0, 10000) : undefined;
+    const safeDeviceInfo = typeof deviceInfo === "string" ? deviceInfo.substring(0, 500) : undefined;
+    const safeAppVersion = typeof appVersion === "string" ? appVersion.substring(0, 20) : undefined;
+
+    console.error(`[MOBILE CRASH] ${safeErrorMessage}`);
+
+    sendCrashReportEmail({
+      source: "mobile",
+      errorMessage: safeErrorMessage,
+      stackTrace: safeStackTrace,
+      deviceInfo: safeDeviceInfo,
+      appVersion: safeAppVersion,
+    }).catch(err => console.error("[MOBILE CRASH] Email error:", err.message));
+
+    res.json({ success: true, message: "Crash report received" });
+  } catch (error: any) {
+    console.error("[MOBILE CRASH] Error processing report:", error.message);
+    res.status(500).json({ success: false, error: "Failed to process crash report" });
+  }
+});
+
+// GET /api/v1/m/crash-reports - Get recent crash reports (admin only)
+app.get("/api/v1/m/crash-reports", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const reports = await db.select().from(crashReports)
+      .orderBy(desc(crashReports.createdAt))
+      .limit(50);
+    res.json({ success: true, reports });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // Error handler
 app.use((err: any, req: Request, res: Response, next: NextFunction) => {
   console.error("Error:", err);
+
+  sendCrashReportEmail({
+    source: "backend",
+    errorMessage: err.message || "Unknown server error",
+    stackTrace: err.stack,
+    endpoint: `${req.method} ${req.originalUrl}`,
+  }).catch(emailErr => console.error("[CRASH REPORT] Failed to send:", emailErr.message));
+
   res.status(err.status || 500).json({ error: err.message || "Internal Server Error" });
 });
 
