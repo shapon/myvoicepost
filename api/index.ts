@@ -2997,7 +2997,7 @@ app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
     const response = await geminiAi.models.generateContent({
-      model: "gemini-2.0-flash-exp",
+      model: "gemini-2.0-flash-exp-image-generation",
       contents: [safePrompt],
       config: {
         responseModalities: ["TEXT", "IMAGE"],
