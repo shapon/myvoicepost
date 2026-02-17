@@ -2923,14 +2923,14 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// Mobile: Generate image from text description using DALL-E 3
+// Mobile: Generate image from text description using Gemini
 app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
   try {
-    const openaiKey = process.env.OPENAI_API_KEY;
-    if (!openaiKey) {
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
       return res.status(500).json({
         success: false,
-        error: "OpenAI API key not configured",
+        error: "Gemini API key not configured",
       });
     }
 
@@ -2994,40 +2994,54 @@ app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
 
     const safePrompt = SAFETY_PREFIX + prompt;
 
-    const openai = new OpenAI({ apiKey: openaiKey });
+    const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
-    const response = await openai.images.generate({
-      model: "dall-e-3",
-      prompt: safePrompt,
-      n: 1,
-      size: size,
-      quality: quality,
-      response_format: "b64_json",
+    const response = await geminiAi.models.generateContent({
+      model: "gemini-2.0-flash-exp",
+      contents: [safePrompt],
+      config: {
+        responseModalities: ["TEXT", "IMAGE"],
+      },
     });
 
-    const imageData = response.data[0];
-    if (!imageData?.b64_json) {
-      throw new Error("No image data received from DALL-E");
+    let imageBase64 = "";
+    let responseText = "";
+
+    if (response.candidates && response.candidates[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData && part.inlineData.data) {
+          imageBase64 = part.inlineData.data;
+        }
+        if (part.text) {
+          responseText = part.text;
+        }
+      }
+    }
+
+    if (!imageBase64) {
+      throw new Error("No image data received from Gemini");
     }
 
     console.log(`[IMAGE GEN] Image generated successfully for user ${userId}`);
 
     res.json({
       success: true,
-      imageBase64: imageData.b64_json,
-      revisedPrompt: imageData.revised_prompt || prompt,
+      imageBase64: imageBase64,
+      revisedPrompt: responseText || prompt,
     });
   } catch (error: any) {
     console.error("[IMAGE GEN] Error:", error.message);
 
-    if (error?.status === 400 && error?.error?.code === "content_policy_violation") {
+    const errorMsg = (error.message || "").toLowerCase();
+
+    if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
       return res.status(400).json({
         success: false,
         error: "Your image description was rejected by the safety filter. Please modify your description and try again.",
       });
     }
 
-    if (error?.status === 429) {
+    if (errorMsg.includes("quota") || errorMsg.includes("rate") || error?.status === 429) {
       return res.status(429).json({
         success: false,
         error: "Too many image generation requests. Please wait a moment and try again.",
