@@ -17,6 +17,8 @@ import pLimit from "p-limit";
 import nodemailer from "nodemailer";
 import Stripe from "stripe";
 import OpenAI from "openai";
+import * as cheerio from "cheerio";
+import { YoutubeTranscript } from "youtube-transcript";
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
 const aiRequestLimiter = pLimit(5);
@@ -6065,6 +6067,227 @@ app.get("/api/v1/m/crash-reports", mobileAuthMiddleware, adminCheckMiddleware, a
     res.json({ success: true, reports });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ============================================================
+// PROCESS ENDPOINTS - URL text extraction & audio transcription + translation
+// ============================================================
+
+function extractYouTubeVideoId(url: string): string | null {
+  const patterns = [
+    /(?:youtube\.com\/(?:[^\/]+\/.+\/|(?:v|e(?:mbed)?)\/|.*[?&]v=)|youtu\.be\/)([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+    /youtube\.com\/live\/([a-zA-Z0-9_-]{11})/,
+  ];
+  for (const pattern of patterns) {
+    const match = url.match(pattern);
+    if (match && match[1]) return match[1];
+  }
+  return null;
+}
+
+async function extractYouTubeTranscript(url: string): Promise<{ text: string; detectedLanguage: string }> {
+  const videoId = extractYouTubeVideoId(url);
+  if (!videoId) throw new Error("Invalid YouTube URL");
+
+  try {
+    const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
+    if (!transcriptItems || transcriptItems.length === 0) {
+      throw new Error("No transcript available for this video");
+    }
+    const text = transcriptItems.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
+    if (!text) throw new Error("Transcript is empty");
+    return { text, detectedLanguage: "auto" };
+  } catch (error: any) {
+    if (error.message.includes("No transcript")) throw error;
+    throw new Error(`Failed to extract YouTube transcript: ${error.message}`);
+  }
+}
+
+async function extractWebpageText(url: string): Promise<{ text: string; detectedLanguage: string }> {
+  const response = await fetch(url, {
+    headers: {
+      "User-Agent": "Mozilla/5.0 (compatible; MyVoicePost/1.0)",
+      "Accept": "text/html,application/xhtml+xml",
+    },
+    signal: AbortSignal.timeout(15000),
+  });
+  if (!response.ok) throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+  const html = await response.text();
+  const $ = cheerio.load(html);
+
+  $("script, style, nav, footer, header, aside, iframe, noscript, .sidebar, .menu, .nav, .footer, .header, .ad, .advertisement, [role='navigation'], [role='banner'], [role='contentinfo']").remove();
+
+  let mainText = "";
+  const mainSelectors = ["article", "main", '[role="main"]', ".post-content", ".entry-content", ".article-body", ".story-body"];
+  for (const sel of mainSelectors) {
+    const el = $(sel);
+    if (el.length && el.text().trim().length > 100) {
+      mainText = el.text().trim();
+      break;
+    }
+  }
+  if (!mainText) {
+    mainText = $("body").text().trim();
+  }
+
+  mainText = mainText.replace(/\s+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+  if (mainText.length > 15000) mainText = mainText.substring(0, 15000);
+  if (!mainText || mainText.length < 20) throw new Error("Could not extract meaningful text from the URL");
+  
+  const htmlLang = $("html").attr("lang") || "";
+  const detectedLanguage = htmlLang ? htmlLang.substring(0, 2).toLowerCase() : "auto";
+  return { text: mainText, detectedLanguage };
+}
+
+async function detectTextLanguage(text: string): Promise<string> {
+  if (!process.env.GEMINI_API_KEY) return "en";
+  try {
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: `Detect the language of this text and return the ISO 639-1 two-letter language code only (e.g. "en", "es", "fr"). Text: "${text.substring(0, 500)}"`,
+      config: { temperature: 0 },
+    });
+    const code = (response.text || "en").trim().toLowerCase().replace(/[^a-z]/g, "").substring(0, 2);
+    return code || "en";
+  } catch { return "en"; }
+}
+
+app.post("/api/v1/p/process-url", async (req, res) => {
+  try {
+    const schema = z.object({
+      url: z.string().url("Valid URL is required"),
+      targetLanguage: z.string().min(1, "Target language is required"),
+    });
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+    }
+    const { url, targetLanguage } = parseResult.data;
+    console.log(`[DEBUG /p/process-url] INPUT: url=${url}, targetLanguage=${targetLanguage}`);
+
+    const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
+    let extracted: { text: string; detectedLanguage: string };
+    
+    if (isYouTube) {
+      extracted = await extractYouTubeTranscript(url);
+    } else {
+      extracted = await extractWebpageText(url);
+    }
+
+    let sourceLanguage = extracted.detectedLanguage;
+    if (sourceLanguage === "auto") {
+      sourceLanguage = await detectTextLanguage(extracted.text);
+    }
+
+    let translatedText = extracted.text;
+    if (sourceLanguage !== targetLanguage) {
+      const result = await translateAndPolish(extracted.text, sourceLanguage, targetLanguage, "professional");
+      translatedText = result.polishedText || result.translatedText || extracted.text;
+    }
+
+    console.log(`[DEBUG /p/process-url] OUTPUT: success=true, sourceLen=${extracted.text.length}, targetLen=${translatedText.length}, sourceLang=${sourceLanguage}`);
+    res.json({
+      success: true,
+      sourceText: extracted.text,
+      targetText: translatedText,
+      sourceLanguage,
+      targetLanguage,
+      sourceType: isYouTube ? "youtube" : "webpage",
+    });
+  } catch (error: any) {
+    console.error("[DEBUG /p/process-url] ERROR:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+  }
+});
+
+app.post("/api/v1/m/process-url", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const schema = z.object({
+      url: z.string().url("Valid URL is required"),
+      targetLanguage: z.string().min(1, "Target language is required"),
+    });
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+    }
+    const { url, targetLanguage } = parseResult.data;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/process-url] INPUT: userId=${userId}, url=${url}, targetLanguage=${targetLanguage}`);
+
+    const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
+    let extracted: { text: string; detectedLanguage: string };
+    
+    if (isYouTube) {
+      extracted = await extractYouTubeTranscript(url);
+    } else {
+      extracted = await extractWebpageText(url);
+    }
+
+    let sourceLanguage = extracted.detectedLanguage;
+    if (sourceLanguage === "auto") {
+      sourceLanguage = await detectTextLanguage(extracted.text);
+    }
+
+    let translatedText = extracted.text;
+    if (sourceLanguage !== targetLanguage) {
+      const result = await translateAndPolish(extracted.text, sourceLanguage, targetLanguage, "professional");
+      translatedText = result.polishedText || result.translatedText || extracted.text;
+    }
+
+    console.log(`[DEBUG /m/process-url] OUTPUT: success=true, sourceLen=${extracted.text.length}, targetLen=${translatedText.length}`);
+    res.json({
+      success: true,
+      sourceText: extracted.text,
+      targetText: translatedText,
+      sourceLanguage,
+      targetLanguage,
+      sourceType: isYouTube ? "youtube" : "webpage",
+    });
+  } catch (error: any) {
+    console.error("[DEBUG /m/process-url] ERROR:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+  }
+});
+
+app.post("/api/v1/m/process-audio", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const { audioBase64, mimeType, targetLanguage } = req.body || {};
+    if (!targetLanguage) {
+      return res.status(400).json({ success: false, error: "Target language is required" });
+    }
+    if (!audioBase64) {
+      return res.status(400).json({ success: false, error: "Audio data is required" });
+    }
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/process-audio] INPUT: userId=${userId}, targetLanguage=${targetLanguage}, audioLength=${audioBase64.length}`);
+
+    const audioBuffer = Buffer.from(audioBase64, "base64");
+    const audioMimeType = mimeType || "audio/webm";
+    const transcribedText = await transcribeAudio(audioBuffer, audioMimeType);
+    const sourceLanguage = await detectTextLanguage(transcribedText);
+
+    let translatedText = transcribedText;
+    if (sourceLanguage !== targetLanguage) {
+      const result = await translateAndPolish(transcribedText, sourceLanguage, targetLanguage, "professional");
+      translatedText = result.polishedText || result.translatedText || transcribedText;
+    }
+
+    console.log(`[DEBUG /m/process-audio] OUTPUT: success=true, sourceLen=${transcribedText.length}, targetLen=${translatedText.length}`);
+    res.json({
+      success: true,
+      sourceText: transcribedText,
+      targetText: translatedText,
+      sourceLanguage,
+      targetLanguage,
+      sourceType: "audio",
+    });
+  } catch (error: any) {
+    console.error("[DEBUG /m/process-audio] ERROR:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to process audio" });
   }
 });
 
