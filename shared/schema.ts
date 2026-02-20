@@ -28,6 +28,30 @@ export const insertUserSchema = createInsertSchema(users).pick({
 export type InsertUser = z.infer<typeof insertUserSchema>;
 export type User = typeof users.$inferSelect;
 
+export const userSsoAccounts = pgTable("mvp_user_sso_accounts", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: varchar("provider", { length: 50 }).notNull(),
+  providerUserId: varchar("provider_user_id", { length: 255 }).notNull(),
+  providerEmail: varchar("provider_email", { length: 255 }),
+  providerName: varchar("provider_name", { length: 255 }),
+  providerAvatar: varchar("provider_avatar", { length: 500 }),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  tokenExpiresAt: timestamp("token_expires_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertUserSsoAccountSchema = createInsertSchema(userSsoAccounts).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertUserSsoAccount = z.infer<typeof insertUserSsoAccountSchema>;
+export type UserSsoAccount = typeof userSsoAccounts.$inferSelect;
+
 // Supported languages for translation
 export const supportedLanguages = [
   { code: "en", name: "English", flag: "🇺🇸" },

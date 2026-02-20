@@ -18,6 +18,7 @@ import nodemailer from "nodemailer";
 import Stripe from "stripe";
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
+import * as PROCESS_AUDIO_CFG from "../shared/audioConfig";
 import { YoutubeTranscript } from "youtube-transcript";
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
@@ -135,6 +136,21 @@ const appSettings = pgTable("mvp_app_settings", {
   id: uuid("id").defaultRandom().primaryKey(),
   settingKey: varchar("setting_key", { length: 100 }).notNull().unique(),
   settingValue: text("setting_value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+const userSsoAccounts = pgTable("mvp_user_sso_accounts", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull().references(() => users.id, { onDelete: "cascade" }),
+  provider: varchar("provider", { length: 50 }).notNull(),
+  providerUserId: varchar("provider_user_id", { length: 255 }).notNull(),
+  providerEmail: varchar("provider_email", { length: 255 }),
+  providerName: varchar("provider_name", { length: 255 }),
+  providerAvatar: varchar("provider_avatar", { length: 500 }),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  tokenExpiresAt: timestamp("token_expires_at"),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -2230,6 +2246,399 @@ app.post("/api/v1/p/register", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Failed to create account",
+    });
+  }
+});
+
+// ============================================================
+// GOOGLE SSO ENDPOINTS - /api/v1/p/auth/google
+// Aggregator approach: Backend handles full OAuth flow
+// Mobile opens /start in browser, backend redirects back to app
+// ============================================================
+
+const GOOGLE_SSO_CONFIG = {
+  clientId: process.env.GOOGLE_CLIENT_ID || "",
+  clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
+  redirectUri: "https://www.myvoicepost.com/api/v1/p/auth/google/callback",
+  appScheme: "myvoicepost",
+};
+
+app.get("/api/v1/p/auth/google/start", (req, res) => {
+  const { clientId, redirectUri } = GOOGLE_SSO_CONFIG;
+
+  if (!clientId) {
+    return res.status(500).send("Google SSO is not configured. Please set GOOGLE_CLIENT_ID.");
+  }
+
+  const state = randomUUID();
+
+  const params = new URLSearchParams({
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    scope: "openid email profile",
+    access_type: "offline",
+    prompt: "select_account",
+    state,
+  });
+
+  const googleAuthUrl = `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`;
+  console.log(`[Google SSO] Redirecting to Google OAuth, state=${state}`);
+  res.redirect(googleAuthUrl);
+});
+
+app.get("/api/v1/p/auth/google/callback", async (req, res) => {
+  try {
+    const { code, error: oauthError } = req.query;
+
+    if (oauthError || !code) {
+      console.error("[Google SSO] OAuth error:", oauthError);
+      const errorRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=${encodeURIComponent(String(oauthError || "no_code"))}`;
+      return res.redirect(errorRedirect);
+    }
+
+    const { clientId, clientSecret, redirectUri } = GOOGLE_SSO_CONFIG;
+
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        code: String(code),
+        client_id: clientId,
+        client_secret: clientSecret,
+        redirect_uri: redirectUri,
+        grant_type: "authorization_code",
+      }),
+    });
+
+    if (!tokenResponse.ok) {
+      const errBody = await tokenResponse.text();
+      console.error("[Google SSO] Token exchange failed:", errBody);
+      const errorRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=token_exchange_failed`;
+      return res.redirect(errorRedirect);
+    }
+
+    const tokenData = await tokenResponse.json() as { id_token: string; access_token: string };
+
+    const userInfoResponse = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+
+    if (!userInfoResponse.ok) {
+      console.error("[Google SSO] User info fetch failed");
+      const errorRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=userinfo_failed`;
+      return res.redirect(errorRedirect);
+    }
+
+    const googleUser = await userInfoResponse.json() as {
+      id: string;
+      email: string;
+      verified_email: boolean;
+      name: string;
+      picture: string;
+    };
+
+    if (!googleUser.email || !googleUser.verified_email) {
+      const errorRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=email_not_verified`;
+      return res.redirect(errorRedirect);
+    }
+
+    const normalizedEmail = googleUser.email.toLowerCase().trim();
+    const googleId = googleUser.id;
+
+    console.log(`[Google SSO] Verified Google user: email=${normalizedEmail}, googleId=${googleId}`);
+
+    const existingSso = await db.select().from(userSsoAccounts)
+      .where(and(eq(userSsoAccounts.provider, "google"), eq(userSsoAccounts.providerUserId, googleId)))
+      .limit(1);
+
+    if (existingSso.length > 0) {
+      const sso = existingSso[0];
+      const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
+      if (userRows.length > 0) {
+        const user = userRows[0];
+        const appToken = jwt.sign(
+          { userId: user.id, email: user.email, username: user.username },
+          JWT_SECRET,
+          { expiresIn: "7d" }
+        );
+
+        await db.update(userSsoAccounts)
+          .set({ providerEmail: normalizedEmail, providerName: googleUser.name, providerAvatar: googleUser.picture, updatedAt: new Date() })
+          .where(eq(userSsoAccounts.id, sso.id));
+
+        console.log(`[Google SSO] Existing SSO user login: userId=${user.id}`);
+        const successRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?token=${appToken}&userId=${user.id}&username=${encodeURIComponent(user.username || "")}&email=${encodeURIComponent(user.email || "")}`;
+        return res.redirect(successRedirect);
+      }
+    }
+
+    const existingEmailUser = await db.select().from(users)
+      .where(eq(users.email, normalizedEmail))
+      .limit(1);
+
+    if (existingEmailUser.length > 0) {
+      const user = existingEmailUser[0];
+
+      await db.insert(userSsoAccounts).values({
+        userId: user.id,
+        provider: "google",
+        providerUserId: googleId,
+        providerEmail: normalizedEmail,
+        providerName: googleUser.name,
+        providerAvatar: googleUser.picture,
+      }).onConflictDoNothing();
+
+      const appToken = jwt.sign(
+        { userId: user.id, email: user.email, username: user.username },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      console.log(`[Google SSO] Linked Google SSO to existing email user: userId=${user.id}`);
+      const successRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?token=${appToken}&userId=${user.id}&username=${encodeURIComponent(user.username || "")}&email=${encodeURIComponent(user.email || "")}`;
+      return res.redirect(successRedirect);
+    }
+
+    const googleName = googleUser.name || normalizedEmail.split("@")[0];
+    let baseUsername = googleName.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20);
+    if (baseUsername.length < 3) baseUsername = "user" + baseUsername;
+
+    let finalUsername = baseUsername;
+    let suffix = 1;
+    while (true) {
+      const existing = await db.select().from(users)
+        .where(eq(users.username, finalUsername))
+        .limit(1);
+      if (existing.length === 0) break;
+      finalUsername = `${baseUsername}${suffix}`;
+      suffix++;
+      if (suffix > 100) {
+        finalUsername = `user_${randomUUID().substring(0, 8)}`;
+        break;
+      }
+    }
+
+    const randomPassword = randomUUID();
+    const hashedPassword = await bcrypt.hash(randomPassword, 10);
+
+    const trialStartsAt = new Date();
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
+    const result = await db.insert(users).values({
+      username: finalUsername,
+      email: normalizedEmail,
+      passwordHash: hashedPassword,
+      trialStartsAt,
+      trialEndsAt,
+      trialUsed: false,
+      trialMinutesTotal: 90,
+      trialMinutesUsed: "0",
+    }).returning();
+
+    const newUser = result[0];
+
+    await db.insert(userSsoAccounts).values({
+      userId: newUser.id,
+      provider: "google",
+      providerUserId: googleId,
+      providerEmail: normalizedEmail,
+      providerName: googleUser.name,
+      providerAvatar: googleUser.picture,
+    });
+
+    const appToken = jwt.sign(
+      { userId: newUser.id, email: newUser.email, username: newUser.username },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    console.log(`[Google SSO] New user created: userId=${newUser.id}, username=${newUser.username}`);
+    const successRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?token=${appToken}&userId=${newUser.id}&username=${encodeURIComponent(newUser.username)}&email=${encodeURIComponent(newUser.email || "")}`;
+    return res.redirect(successRedirect);
+  } catch (error: any) {
+    console.error("[Google SSO] Callback error:", error);
+    const errorRedirect = `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=server_error`;
+    return res.redirect(errorRedirect);
+  }
+});
+
+app.post("/api/v1/p/auth/google", async (req, res) => {
+  try {
+    const schema = z.object({
+      idToken: z.string().min(1, "Google ID token is required"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { idToken } = parseResult.data;
+
+    const googleResponse = await fetch(
+      `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`
+    );
+
+    if (!googleResponse.ok) {
+      console.error("[Google SSO] Token verification failed:", googleResponse.status);
+      return res.status(401).json({
+        success: false,
+        error: "Invalid Google token. Please try again.",
+      });
+    }
+
+    const googleUser = await googleResponse.json() as {
+      sub: string;
+      email: string;
+      email_verified: string;
+      name: string;
+      picture: string;
+    };
+
+    if (!googleUser.email || googleUser.email_verified !== "true") {
+      return res.status(401).json({
+        success: false,
+        error: "Google account email is not verified.",
+      });
+    }
+
+    const normalizedEmail = googleUser.email.toLowerCase().trim();
+    const googleId = googleUser.sub;
+
+    console.log(`[Google SSO] POST Verified Google user: email=${normalizedEmail}, googleId=${googleId}`);
+
+    const existingSso = await db.select().from(userSsoAccounts)
+      .where(and(eq(userSsoAccounts.provider, "google"), eq(userSsoAccounts.providerUserId, googleId)))
+      .limit(1);
+
+    if (existingSso.length > 0) {
+      const sso = existingSso[0];
+      const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
+      if (userRows.length > 0) {
+        const user = userRows[0];
+        const token = jwt.sign(
+          { userId: user.id, email: user.email, username: user.username },
+          JWT_SECRET,
+          { expiresIn: "7d" }
+        );
+
+        await db.update(userSsoAccounts)
+          .set({ providerEmail: normalizedEmail, providerName: googleUser.name, updatedAt: new Date() })
+          .where(eq(userSsoAccounts.id, sso.id));
+
+        return res.json({
+          success: true,
+          token,
+          expiresIn: 7 * 24 * 60 * 60,
+          user: { id: user.id, email: user.email, username: user.username },
+          isNewUser: false,
+        });
+      }
+    }
+
+    const existingEmailUser = await db.select().from(users)
+      .where(eq(users.email, normalizedEmail))
+      .limit(1);
+
+    if (existingEmailUser.length > 0) {
+      const user = existingEmailUser[0];
+
+      await db.insert(userSsoAccounts).values({
+        userId: user.id,
+        provider: "google",
+        providerUserId: googleId,
+        providerEmail: normalizedEmail,
+        providerName: googleUser.name,
+      }).onConflictDoNothing();
+
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, username: user.username },
+        JWT_SECRET,
+        { expiresIn: "7d" }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        expiresIn: 7 * 24 * 60 * 60,
+        user: { id: user.id, email: user.email, username: user.username },
+        isNewUser: false,
+      });
+    }
+
+    const googleName = googleUser.name || normalizedEmail.split("@")[0];
+    let baseUsername = googleName.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20);
+    if (baseUsername.length < 3) baseUsername = "user" + baseUsername;
+
+    let finalUsername = baseUsername;
+    let suffix = 1;
+    while (true) {
+      const existing = await db.select().from(users)
+        .where(eq(users.username, finalUsername))
+        .limit(1);
+      if (existing.length === 0) break;
+      finalUsername = `${baseUsername}${suffix}`;
+      suffix++;
+      if (suffix > 100) {
+        finalUsername = `user_${randomUUID().substring(0, 8)}`;
+        break;
+      }
+    }
+
+    const randomPassword = randomUUID();
+    const hashedPassword = await bcrypt.hash(randomPassword, 10);
+
+    const trialStartsAt = new Date();
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
+    const result = await db.insert(users).values({
+      username: finalUsername,
+      email: normalizedEmail,
+      passwordHash: hashedPassword,
+      trialStartsAt,
+      trialEndsAt,
+      trialUsed: false,
+      trialMinutesTotal: 90,
+      trialMinutesUsed: "0",
+    }).returning();
+
+    const newUser = result[0];
+
+    await db.insert(userSsoAccounts).values({
+      userId: newUser.id,
+      provider: "google",
+      providerUserId: googleId,
+      providerEmail: normalizedEmail,
+      providerName: googleUser.name,
+    });
+
+    const token = jwt.sign(
+      { userId: newUser.id, email: newUser.email, username: newUser.username },
+      JWT_SECRET,
+      { expiresIn: "7d" }
+    );
+
+    console.log(`[Google SSO] POST New user created: userId=${newUser.id}, username=${newUser.username}`);
+
+    res.status(201).json({
+      success: true,
+      token,
+      expiresIn: 7 * 24 * 60 * 60,
+      user: { id: newUser.id, email: newUser.email, username: newUser.username },
+      isNewUser: true,
+    });
+  } catch (error: any) {
+    console.error("[Google SSO] POST Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Google sign-in failed. Please try again.",
     });
   }
 });
@@ -6261,12 +6670,28 @@ app.post("/api/v1/m/process-audio", mobileAuthMiddleware, async (req, res) => {
     if (!audioBase64) {
       return res.status(400).json({ success: false, error: "Audio data is required" });
     }
+
+    const audioMimeType = mimeType || "audio/webm";
+    if (!PROCESS_AUDIO_CFG.isAudioTypeSupported(audioMimeType)) {
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported audio type: ${audioMimeType}. Supported: ${PROCESS_AUDIO_CFG.PROCESS_AUDIO_SUPPORTED_TYPES.join(", ")}`,
+      });
+    }
+
+    const rawByteLength = Math.ceil(audioBase64.length * 3 / 4);
+    if (rawByteLength > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
+      return res.status(400).json({
+        success: false,
+        error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.`,
+      });
+    }
+
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
-    console.log(`[DEBUG /m/process-audio] INPUT: userId=${userId}, targetLanguage=${targetLanguage}, audioLength=${audioBase64.length}`);
+    console.log(`[DEBUG /m/process-audio] INPUT: userId=${userId}, targetLanguage=${targetLanguage}, audioLength=${audioBase64.length}, mimeType=${audioMimeType}`);
 
     const audioBuffer = Buffer.from(audioBase64, "base64");
-    const audioMimeType = mimeType || "audio/webm";
     const transcribedText = await transcribeAudio(audioBuffer, audioMimeType);
     const sourceLanguage = await detectTextLanguage(transcribedText);
 
