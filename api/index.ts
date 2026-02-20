@@ -18,8 +18,25 @@ import nodemailer from "nodemailer";
 import Stripe from "stripe";
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
-import * as PROCESS_AUDIO_CFG from "../shared/audioConfig";
 import { YoutubeTranscript } from "youtube-transcript";
+
+const PROCESS_AUDIO_CFG = {
+  PROCESS_AUDIO_MAX_SIZE_MB: 5,
+  PROCESS_AUDIO_MAX_SIZE_BYTES: 5 * 1024 * 1024,
+  PROCESS_AUDIO_SUPPORTED_TYPES: [
+    'audio/mp4', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
+    'audio/webm', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/m4a', 'audio/flac',
+  ] as const,
+  PROCESS_AUDIO_SUPPORTED_EXTENSIONS: [
+    'mp4', 'mp3', 'mpeg', 'wav', 'webm', 'ogg', 'aac', 'm4a', 'flac',
+  ] as const,
+  isAudioTypeSupported(mimeType: string): boolean {
+    return (this.PROCESS_AUDIO_SUPPORTED_TYPES as readonly string[]).includes(mimeType);
+  },
+  formatMaxSize(): string {
+    return `${this.PROCESS_AUDIO_MAX_SIZE_MB}MB`;
+  },
+};
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
 const aiRequestLimiter = pLimit(5);
