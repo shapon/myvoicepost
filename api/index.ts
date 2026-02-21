@@ -1045,6 +1045,62 @@ This is a transcription task, NOT a creative writing task. Output ONLY the spoke
   }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
 }
 
+async function transcribeAudioLanguageOnly(audioBuffer: Buffer, mimeType: string, language: string): Promise<string> {
+  if (!audioBuffer || audioBuffer.length < 1000) {
+    console.error('[TranscribeLang] Invalid audio: buffer too small', audioBuffer?.length);
+    throw new Error('Invalid audio data - file too small');
+  }
+
+  const langName = languageNames[language] || language;
+
+  return aiRequestLimiter(() => pRetry(async () => {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        config: {
+          temperature: 0,
+          topK: 1,
+          topP: 1,
+        },
+        contents: [{
+          role: "user",
+          parts: [
+            { 
+              text: `You are a precise speech-to-text transcription system. Your ONLY job is to transcribe words spoken in ${langName} from this audio.
+
+STRICT RULES - FAILURE TO FOLLOW WILL RESULT IN ERROR:
+1. Listen carefully and transcribe ONLY the words spoken in ${langName}
+2. IGNORE any words or sentences spoken in other languages - do NOT include them
+3. If no ${langName} speech is detected, respond with exactly: [NO_SPEECH_DETECTED]
+4. NEVER generate, invent, create, or imagine any text
+5. NEVER add words that were not spoken in ${langName}
+6. NEVER describe or summarize - just transcribe word-for-word
+7. If audio quality is poor, transcribe what you CAN hear in ${langName}, even if incomplete
+
+This is a transcription task for ${langName} ONLY. Output ONLY the ${langName} spoken words:` 
+            },
+            { inlineData: { mimeType, data: audioBuffer.toString("base64") } }
+          ]
+        }]
+      });
+      
+      const transcribedText = response.text?.trim() || "";
+      
+      if (transcribedText === "[NO_SPEECH_DETECTED]" || 
+          transcribedText.includes("[NO_SPEECH_DETECTED]") ||
+          transcribedText === "") {
+        console.log(`[TranscribeLang] No ${langName} speech detected in audio`);
+        throw new Error(`No ${langName} speech detected in the audio. Please try speaking more clearly.`);
+      }
+      
+      return transcribedText;
+    } catch (error: any) {
+      if (isRateLimitError(error)) throw error;
+      throw new AbortError(error);
+    }
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
+}
+
 async function polishText(text: string, language: string, outputFormat: string, outputType: string): Promise<string> {
   const langName = languageNames[language] || language;
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
@@ -1833,6 +1889,80 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
     });
   } catch (error: any) {
     console.error("[DEBUG /p/transcribe] ERROR:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to transcribe audio",
+    });
+  }
+});
+
+// Public: Transcribe audio - language-specific (extracts only the specified language)
+app.post("/api/v1/p/transcribe-language", async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const GUEST_MAX_DURATION_SECONDS = 55;
+    const GUEST_MAX_AUDIO_SIZE_BYTES = 5 * 1024 * 1024;
+
+    const schema = z.object({
+      audio: z.string().min(1, "Audio data is required"),
+      mimeType: z.string().optional().default("audio/mp4"),
+      language: z.string().min(1, "Language is required"),
+      durationSeconds: z.number().optional(),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { audio, mimeType, language, durationSeconds } = parseResult.data;
+    console.log(`[DEBUG /p/transcribe-language] INPUT: language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioBase64Length=${audio?.length}`);
+
+    if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
+      return res.status(400).json({
+        success: false,
+        error: `Guest recordings are limited to ${GUEST_MAX_DURATION_SECONDS} seconds. Please register for a free account to record longer.`,
+      });
+    }
+
+    const audioBuffer = Buffer.from(audio, 'base64');
+    if (audioBuffer.length > GUEST_MAX_AUDIO_SIZE_BYTES) {
+      return res.status(400).json({
+        success: false,
+        error: `Guest recordings are limited to ${GUEST_MAX_DURATION_SECONDS} seconds. The uploaded audio file is too large. Please register for a free account to record longer.`,
+      });
+    }
+
+    const originalText = await transcribeAudioLanguageOnly(audioBuffer, mimeType, language);
+
+    console.log(`[DEBUG /p/transcribe-language] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+
+    if (!originalText || originalText.trim() === "") {
+      console.log(`[DEBUG /p/transcribe-language] OUTPUT: FAILED - empty transcription`);
+      return res.status(400).json({
+        success: false,
+        error: "Could not transcribe audio. Please try speaking more clearly.",
+      });
+    }
+
+    console.log(`[DEBUG /p/transcribe-language] OUTPUT: success=true, textLength=${originalText.length}`);
+    res.json({
+      success: true,
+      originalText,
+      language,
+    });
+  } catch (error: any) {
+    console.error("[DEBUG /p/transcribe-language] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to transcribe audio",
@@ -3241,6 +3371,118 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
     });
   } catch (error: any) {
     console.error("[Mobile Transcribe] Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message || "Failed to transcribe audio",
+    });
+  }
+});
+
+// Mobile: Transcribe audio - language-specific (extracts only the specified language)
+app.post("/api/v1/m/transcribe-language", mobileAuthMiddleware, async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({
+        success: false,
+        error: "Gemini AI integration not configured",
+      });
+    }
+
+    const schema = z.object({
+      audio: z.string().min(1, "Audio data is required"),
+      mimeType: z.string().optional().default("audio/mp4"),
+      language: z.string().min(1, "Language is required"),
+      durationSeconds: z.number().optional().default(0),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { audio, mimeType, language, durationSeconds } = parseResult.data;
+    const audioBuffer = Buffer.from(audio, 'base64');
+
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[DEBUG /m/transcribe-language] INPUT: userId=${userId}, language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioSize=${audioBuffer.length} bytes`);
+
+    const originalText = await transcribeAudioLanguageOnly(audioBuffer, mimeType, language);
+
+    console.log(`[DEBUG /m/transcribe-language] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+
+    if (!originalText || originalText.trim() === "") {
+      console.log(`[DEBUG /m/transcribe-language] OUTPUT: FAILED - empty transcription`);
+      return res.status(400).json({
+        success: false,
+        error: "Could not transcribe audio. Please try speaking more clearly.",
+      });
+    }
+
+    if (userId && durationSeconds > 0) {
+      try {
+        const totalSec = Math.round(durationSeconds);
+        const hours = Math.floor(totalSec / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+        const usageTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+        await db.insert(audioLogs).values({
+          userId,
+          usageTime,
+          usageSeconds: totalSec,
+          sourceLanguage: language,
+        });
+
+        const usageMinutes = totalSec / 60;
+        await db.update(users)
+          .set({
+            trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
+            updatedAt: new Date(),
+          })
+          .where(eq(users.id, userId));
+
+        console.log(`[DEBUG /m/transcribe-language] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`);
+      } catch (logError: any) {
+        console.error("[DEBUG /m/transcribe-language] USAGE LOG FAILED:", logError.message);
+      }
+    }
+
+    let trialInfo: { trial_minutes_total: number; trial_minutes_used: number; is_subscribed: boolean } | null = null;
+    if (userId) {
+      try {
+        const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+        if (updatedUser.length > 0) {
+          const u = updatedUser[0];
+          const minutesTotal = u.trialMinutesTotal || 90;
+          const minutesUsed = parseFloat(u.trialMinutesUsed || "0") || 0;
+          const hasActiveSub = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+            .limit(1);
+          trialInfo = {
+            trial_minutes_total: minutesTotal,
+            trial_minutes_used: Math.round(minutesUsed * 100) / 100,
+            is_subscribed: hasActiveSub.length > 0,
+          };
+        }
+      } catch (trialErr: any) {
+        console.error("[DEBUG /m/transcribe-language] TRIAL INFO FETCH FAILED:", trialErr.message);
+      }
+    }
+
+    console.log(`[DEBUG /m/transcribe-language] OUTPUT: success=true, textLength=${originalText.length}, trialInfo=${JSON.stringify(trialInfo)}`);
+    res.json({
+      success: true,
+      originalText,
+      language,
+      ...(trialInfo ? trialInfo : {}),
+    });
+  } catch (error: any) {
+    console.error("[Mobile Transcribe-Language] Error:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to transcribe audio",
