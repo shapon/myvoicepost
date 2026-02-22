@@ -285,3 +285,28 @@ Optional:
 **Font Loading**:
 - Google Fonts: Inter (primary UI), Architects Daughter, DM Sans, Fira Code, Geist Mono
 - Loaded via CDN in HTML head
+
+### Battery Profile System (Feb 2026)
+
+**Files**: `mobile/src/utils/batteryManager.ts`, `mobile/src/contexts/BatteryContext.tsx`, `mobile/src/components/HighBatteryUsageWarning.tsx`
+
+**Profiles**:
+- Power Saver: 15min polling, no background sync, no animations, WorkManager requires idle+unmetered
+- Balanced (default): 30s polling, standard sync, full animations, WorkManager standard constraints
+- Real-time: 5s polling, full sync, full animations, shows high battery warning banner
+
+**Integration**: BatteryContext provides `useBattery()` hook. ReliabilityContext dynamically adjusts polling interval and background sync gating based on active profile. SettingsScreen includes profile selector with radio buttons and confirmation dialog for Real-time mode.
+
+**Persistence**: Profile stored in AsyncStorage (`@battery_profile`). BatteryManager detects Android system power save mode via NativeModules.PowerManager.
+
+### Mobile App Performance Audit (Feb 2026)
+
+**Completed optimizations**:
+- FlatList perf props (removeClippedSubviews, maxToRenderPerBatch, windowSize) on SavedItemsScreen, PendingScreen, ProfileScreen
+- React.memo on MenuItem, SavedItemCard; useCallback on renderItem/keyExtractor/handlers
+- Module-level language maps and helper functions (getLanguageName, formatDuration, formatDate) extracted from render paths
+- useMemo for computed values (trialMinutesRemaining, trialProgress)
+- Stale closure fix: ChunkedVoiceRecorder AppState handler now uses refs (appStateRef, isRecordingRef, offlineRecordingRef) with useCallback instead of re-subscribing on state changes
+- ReliabilityContext polling reduced from 5s to 30s; fixed stale syncStatus.isSyncing reference using functional setState
+- Migrated console.log/error/warn to secureLog in AuthContext, SubscriptionContext, ReliabilityContext, ChunkedVoiceRecorder, ContinuousVoiceRecorder, VoiceRecorder, ProfileScreen
+- Security: tokenManager uses expo-secure-store, certificate pinning in withNetworkSecurity.js, secureLogger redacts sensitive data in production
