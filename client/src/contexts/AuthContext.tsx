@@ -4,11 +4,14 @@ import { apiRequest, setAuthToken, removeAuthToken, getAuthToken } from "@/lib/q
 interface User {
   id: string;
   username: string;
+  email?: string;
+  role?: string;
 }
 
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
+  isAdmin: boolean;
   login: (username: string, password: string) => Promise<void>;
   signup: (username: string, email: string, password: string, confirmPassword: string, otp: string) => Promise<void>;
   sendOtp: (email: string) => Promise<void>;
@@ -98,8 +101,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   };
 
+  const isAdmin = user?.role === "ADMIN";
+
   return (
-    <AuthContext.Provider value={{ user, isLoading, login, signup, sendOtp, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, isAdmin, login, signup, sendOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );

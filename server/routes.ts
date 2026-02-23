@@ -11,11 +11,15 @@ import {
   users,
   userSettings,
   emailOtps,
+  USER_ROLES,
+  supportRequests,
+  errorLogs,
 } from "@shared/schema";
+import type { UserRole } from "@shared/schema";
 import nodemailer from "nodemailer";
 import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
 import { db } from "./supabase-db";
-import { eq, and, gte } from "drizzle-orm";
+import { eq, and, gte, desc, sql, count } from "drizzle-orm";
 import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
 import jwt from "jsonwebtoken";
@@ -70,6 +74,7 @@ declare global {
         userId: string;
         username: string;
         email?: string;
+        role?: UserRole;
       };
     }
   }
@@ -86,6 +91,7 @@ function jwtAuthMiddleware(req: Request, res: Response, next: NextFunction) {
         userId: string;
         username: string;
         email?: string;
+        role?: UserRole;
       };
       req.jwtUser = decoded;
     } catch (err) {
@@ -111,14 +117,74 @@ function getUserId(req: Request): string | null {
 }
 
 // Helper to generate JWT token
-function generateToken(userId: string, username: string): string {
-  return jwt.sign({ userId, username }, JWT_SECRET, {
+function generateToken(userId: string, username: string, role: UserRole = "GUEST"): string {
+  return jwt.sign({ userId, username, role }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
 }
 
 // Use supabase storage for database operations
 const storage = supabaseStorage;
+
+// ============ RBAC: Role Refresh & Middleware ============
+
+async function refreshUserRole(userId: string): Promise<UserRole> {
+  const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const user = userResult[0];
+  if (!user) return "GUEST";
+
+  if (user.role === "ADMIN") return "ADMIN";
+
+  const activeSubResult = await db.select().from(userSubscriptions)
+    .where(and(
+      eq(userSubscriptions.userId, userId),
+      eq(userSubscriptions.status, "active"),
+      gte(userSubscriptions.validDateUpto, new Date()),
+    ))
+    .limit(1);
+
+  const hasActiveSub = activeSubResult.length > 0;
+
+  let newRole: UserRole;
+  if (hasActiveSub) {
+    newRole = "USER";
+  } else {
+    newRole = "GUEST";
+  }
+
+  if (user.role !== newRole) {
+    await storage.updateUserRole(userId, newRole);
+    console.log(`[RBAC] User ${userId} role changed: ${user.role} -> ${newRole}`);
+  }
+
+  return newRole;
+}
+
+function checkRole(...allowedRoles: UserRole[]) {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const userId = getUserId(req);
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Authentication required" });
+    }
+
+    const currentRole = await refreshUserRole(userId);
+
+    if (currentRole === "ADMIN") {
+      return next();
+    }
+
+    if (!allowedRoles.includes(currentRole)) {
+      return res.status(403).json({
+        success: false,
+        error: "Access denied. Insufficient permissions.",
+        required_role: allowedRoles,
+        current_role: currentRole,
+      });
+    }
+
+    next();
+  };
+}
 
 // Login schema
 const loginSchema = z.object({
@@ -1154,7 +1220,7 @@ export async function registerRoutes(
 
       await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
 
-      // Create new user
+      // Create new user (role defaults to GUEST)
       const user = await storage.createUser({ username, email: normalizedEmail, password });
 
       // Initialize trial: 7 days, 90 minutes
@@ -1170,11 +1236,12 @@ export async function registerRoutes(
           trialUsed: false,
           trialMinutesTotal: 90,
           trialMinutesUsed: "0",
+          role: "GUEST",
         })
         .where(eq(users.id, user.id));
 
-      // Generate JWT token
-      const token = generateToken(user.id, user.username);
+      // Generate JWT token with role
+      const token = generateToken(user.id, user.username, "GUEST");
 
       // Also set session for web compatibility
       (req.session as any).userId = user.id;
@@ -1183,7 +1250,7 @@ export async function registerRoutes(
       res.status(201).json({
         message: "Account created successfully",
         token,
-        user: { id: user.id, username: user.username, email: user.email },
+        user: { id: user.id, username: user.username, email: user.email, role: "GUEST" },
       });
     } catch (error: any) {
       console.error("Signup error:", error);
@@ -1216,8 +1283,11 @@ export async function registerRoutes(
         return res.status(401).json({ error: "Invalid username or password" });
       }
 
-      // Generate JWT token
-      const token = generateToken(user.id, user.username);
+      // Refresh role based on current subscription status
+      const currentRole = await refreshUserRole(user.id);
+
+      // Generate JWT token with role
+      const token = generateToken(user.id, user.username, currentRole);
 
       // Also set session for web compatibility
       (req.session as any).userId = user.id;
@@ -1226,7 +1296,7 @@ export async function registerRoutes(
       res.json({
         message: "Login successful",
         token,
-        user: { id: user.id, username: user.username, email: user.email },
+        user: { id: user.id, username: user.username, email: user.email, role: currentRole },
       });
     } catch (error: any) {
       console.error("Login error:", error);
@@ -1251,20 +1321,22 @@ export async function registerRoutes(
     const userId = getUserId(req);
 
     if (userId) {
-      // If we have JWT user info, use it directly
+      const currentRole = await refreshUserRole(userId);
+
       if (req.jwtUser) {
         res.json({
           user: {
             id: req.jwtUser.userId,
             username: req.jwtUser.username,
+            role: currentRole,
           },
         });
       } else if ((req.session as any).userId) {
-        // Fallback to session
         res.json({
           user: {
             id: (req.session as any).userId,
             username: (req.session as any).username,
+            role: currentRole,
           },
         });
       } else {
@@ -1878,6 +1950,7 @@ export async function registerRoutes(
         userId: string;
         username: string;
         email?: string;
+        role?: UserRole;
         exp?: number;
       };
       req.jwtUser = decoded;
@@ -1913,16 +1986,35 @@ export async function registerRoutes(
     });
   });
 
-  // Mobile Auth: Verify token and get user info
-  app.get("/api/v1/m/auth/me", mobileAuthMiddleware, (req, res) => {
-    res.json({
-      success: true,
-      user: {
-        id: req.jwtUser?.userId,
-        email: req.jwtUser?.email,
-        username: req.jwtUser?.username,
-      },
-    });
+  // Mobile Auth: Verify token and get user info (with live role refresh)
+  app.get("/api/v1/m/auth/me", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const userId = req.jwtUser?.userId;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Not authenticated" });
+      }
+      const currentRole = await refreshUserRole(userId);
+      res.json({
+        success: true,
+        user: {
+          id: req.jwtUser?.userId,
+          email: req.jwtUser?.email,
+          username: req.jwtUser?.username,
+          role: currentRole,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Auth Me] Error refreshing role:", error);
+      res.json({
+        success: true,
+        user: {
+          id: req.jwtUser?.userId,
+          email: req.jwtUser?.email,
+          username: req.jwtUser?.username,
+          role: req.jwtUser?.role || "GUEST",
+        },
+      });
+    }
   });
 
   // Mobile: Transcribe audio to text (get original text)
@@ -2474,6 +2566,16 @@ export async function registerRoutes(
         })
         .returning();
 
+      // Promote role to USER on subscription activation (skip if ADMIN)
+      const currentUserResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const currentUserRole = currentUserResult[0]?.role || "GUEST";
+      let updatedRole: UserRole = currentUserRole as UserRole;
+      if (currentUserRole !== "ADMIN") {
+        await storage.updateUserRole(userId, "USER");
+        updatedRole = "USER";
+        console.log(`[RBAC] User ${userId} promoted to USER via subscription`);
+      }
+
       console.log(
         `[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()} (carryover: ${carryoverMinutes} mins)`,
       );
@@ -2493,6 +2595,7 @@ export async function registerRoutes(
           offline_recording: plan.offlineRecording,
           status: "active",
         },
+        role: updatedRole,
       });
     } catch (error: any) {
       console.error("[Subscribe] Error:", error);
@@ -3263,6 +3366,13 @@ export async function registerRoutes(
                     status: "active",
                   });
 
+                  // Promote role to USER on successful payment (skip if ADMIN)
+                  const currentUser = userResult[0];
+                  if (currentUser.role !== "ADMIN") {
+                    await storage.updateUserRole(user.id, "USER");
+                    console.log(`[RBAC] User ${user.id} promoted to USER via invoice.paid`);
+                  }
+
                   console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
                 }
               }
@@ -3297,6 +3407,12 @@ export async function registerRoutes(
                     .set({ status: "payment_failed" })
                     .where(eq(userSubscriptions.id, activeSubResult[0].id));
                 }
+              }
+
+              // Demote role to GUEST on payment failure (skip if ADMIN)
+              if (user.role !== "ADMIN") {
+                await storage.updateUserRole(user.id, "GUEST");
+                console.log(`[RBAC] User ${user.id} demoted to GUEST via payment failure`);
               }
 
               console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${subscriptionId}`);
@@ -3350,6 +3466,12 @@ export async function registerRoutes(
                 await db.update(users)
                   .set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() })
                   .where(eq(users.id, user.id));
+
+                // Promote role to USER when subscription becomes active (skip if ADMIN)
+                if (user.role !== "ADMIN") {
+                  await storage.updateUserRole(user.id, "USER");
+                  console.log(`[RBAC] User ${user.id} promoted to USER via subscription.updated(active)`);
+                }
               } else if (newStatus === "past_due" || newStatus === "unpaid") {
                 const activeSubResult = await db.select().from(userSubscriptions)
                   .where(and(
@@ -3362,6 +3484,12 @@ export async function registerRoutes(
                   await db.update(userSubscriptions)
                     .set({ status: "payment_failed" })
                     .where(eq(userSubscriptions.id, activeSubResult[0].id));
+                }
+
+                // Demote role to GUEST on past_due/unpaid (skip if ADMIN)
+                if (user.role !== "ADMIN") {
+                  await storage.updateUserRole(user.id, "GUEST");
+                  console.log(`[RBAC] User ${user.id} demoted to GUEST via subscription.updated(${newStatus})`);
                 }
               }
 
@@ -3397,6 +3525,12 @@ export async function registerRoutes(
                 await db.update(userSubscriptions)
                   .set({ status: "cancelled" })
                   .where(eq(userSubscriptions.id, activeSubResult[0].id));
+              }
+
+              // Demote role to GUEST on subscription deletion (skip if ADMIN)
+              if (user.role !== "ADMIN") {
+                await storage.updateUserRole(user.id, "GUEST");
+                console.log(`[RBAC] User ${user.id} demoted to GUEST via subscription.deleted`);
               }
 
               console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
@@ -3456,6 +3590,307 @@ export async function registerRoutes(
   }
 
   initStripeSync();
+
+  // ============ RBAC: Admin Bootstrap ============
+  // Set ADMIN_EMAILS env var (comma-separated) to auto-promote users to ADMIN on startup
+  async function bootstrapAdminRoles() {
+    const adminEmails = process.env.ADMIN_EMAILS;
+    if (!adminEmails) return;
+
+    const emails = adminEmails.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    for (const email of emails) {
+      try {
+        const userResult = await db.select().from(users)
+          .where(eq(users.email, email))
+          .limit(1);
+
+        if (userResult.length > 0 && userResult[0].role !== "ADMIN") {
+          await storage.updateUserRole(userResult[0].id, "ADMIN");
+          console.log(`[RBAC] Bootstrapped ADMIN role for ${email}`);
+        }
+      } catch (err: any) {
+        console.warn(`[RBAC] Failed to bootstrap admin for ${email}:`, err.message);
+      }
+    }
+  }
+
+  bootstrapAdminRoles();
+
+  // GET /api/v1/m/user-role - Get current user role (refreshed from DB)
+  app.get("/api/v1/m/user-role", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const userId = req.jwtUser?.userId;
+      if (!userId) {
+        return res.status(401).json({ success: false, error: "Not authenticated" });
+      }
+      const role = await refreshUserRole(userId);
+      res.json({ success: true, role });
+    } catch (error: any) {
+      console.error("[User Role] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch user role" });
+    }
+  });
+
+  // ==========================================
+  // ADMIN DASHBOARD API ENDPOINTS
+  // ==========================================
+
+  // GET /api/admin/stats - Dashboard summary stats
+  app.get("/api/admin/stats", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const [userCount] = await db.select({ value: count() }).from(users);
+      const [subCount] = await db.select({ value: count() }).from(userSubscriptions).where(eq(userSubscriptions.status, "active"));
+      const [supportCount] = await db.select({ value: count() }).from(supportRequests).where(eq(supportRequests.status, "open"));
+      const [errorCount] = await db.select({ value: count() }).from(errorLogs);
+
+      res.json({
+        success: true,
+        stats: {
+          totalUsers: userCount.value,
+          activeSubscriptions: subCount.value,
+          openSupportRequests: supportCount.value,
+          totalErrors: errorCount.value,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Admin Stats] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch stats" });
+    }
+  });
+
+  // GET /api/admin/users - List all users
+  app.get("/api/admin/users", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = (page - 1) * limit;
+
+      const allUsers = await db.select({
+        id: users.id,
+        username: users.username,
+        email: users.email,
+        role: users.role,
+        trialStartsAt: users.trialStartsAt,
+        trialEndsAt: users.trialEndsAt,
+        trialUsed: users.trialUsed,
+        stripeCustomerId: users.stripeCustomerId,
+        stripeSubscriptionId: users.stripeSubscriptionId,
+        createdAt: users.createdAt,
+        updatedAt: users.updatedAt,
+      }).from(users).orderBy(desc(users.createdAt)).limit(limit).offset(offset);
+
+      const [totalResult] = await db.select({ value: count() }).from(users);
+
+      res.json({
+        success: true,
+        users: allUsers,
+        pagination: { page, limit, total: totalResult.value },
+      });
+    } catch (error: any) {
+      console.error("[Admin Users] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch users" });
+    }
+  });
+
+  // GET /api/admin/subscriptions - List all subscriptions
+  app.get("/api/admin/subscriptions", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = (page - 1) * limit;
+
+      const allSubs = await db.select({
+        id: userSubscriptions.id,
+        userId: userSubscriptions.userId,
+        planId: userSubscriptions.planId,
+        validDateUpto: userSubscriptions.validDateUpto,
+        minutesUsed: userSubscriptions.minutesUsed,
+        minutesRemaining: userSubscriptions.minutesRemaining,
+        status: userSubscriptions.status,
+        createdAt: userSubscriptions.createdAt,
+      }).from(userSubscriptions).orderBy(desc(userSubscriptions.createdAt)).limit(limit).offset(offset);
+
+      const [totalResult] = await db.select({ value: count() }).from(userSubscriptions);
+
+      const plans = await db.select().from(subscriptionPlans);
+      const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
+
+      const subsWithUser = await Promise.all(allSubs.map(async (sub) => {
+        const userResult = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, sub.userId)).limit(1);
+        return {
+          ...sub,
+          username: userResult[0]?.username || "Unknown",
+          email: userResult[0]?.email || "Unknown",
+          planName: planMap[sub.planId]?.name || "Unknown",
+        };
+      }));
+
+      res.json({
+        success: true,
+        subscriptions: subsWithUser,
+        pagination: { page, limit, total: totalResult.value },
+      });
+    } catch (error: any) {
+      console.error("[Admin Subscriptions] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch subscriptions" });
+    }
+  });
+
+  // GET /api/admin/payments - List Stripe payment history
+  app.get("/api/admin/payments", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const limit = parseInt(req.query.limit as string) || 20;
+      const startingAfter = req.query.starting_after as string | undefined;
+
+      const stripe = await getUncachableStripeClient();
+      const params: any = { limit, expand: ["data.customer"] };
+      if (startingAfter) params.starting_after = startingAfter;
+
+      const charges = await stripe.charges.list(params);
+
+      const payments = charges.data.map((charge: any) => ({
+        id: charge.id,
+        amount: charge.amount / 100,
+        currency: charge.currency,
+        status: charge.status,
+        customerEmail: charge.customer?.email || charge.billing_details?.email || "N/A",
+        customerName: charge.customer?.name || charge.billing_details?.name || "N/A",
+        description: charge.description || "Subscription payment",
+        created: new Date(charge.created * 1000).toISOString(),
+        receiptUrl: charge.receipt_url,
+      }));
+
+      res.json({
+        success: true,
+        payments,
+        hasMore: charges.has_more,
+        lastId: charges.data.length > 0 ? charges.data[charges.data.length - 1].id : null,
+      });
+    } catch (error: any) {
+      console.error("[Admin Payments] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch payments" });
+    }
+  });
+
+  // GET /api/admin/support - List support requests
+  app.get("/api/admin/support", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = (page - 1) * limit;
+      const status = req.query.status as string | undefined;
+
+      let query = db.select().from(supportRequests).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset);
+
+      const allRequests = status
+        ? await db.select().from(supportRequests).where(eq(supportRequests.status, status)).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset)
+        : await db.select().from(supportRequests).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset);
+
+      const totalQuery = status
+        ? await db.select({ value: count() }).from(supportRequests).where(eq(supportRequests.status, status))
+        : await db.select({ value: count() }).from(supportRequests);
+
+      res.json({
+        success: true,
+        requests: allRequests,
+        pagination: { page, limit, total: totalQuery[0].value },
+      });
+    } catch (error: any) {
+      console.error("[Admin Support] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch support requests" });
+    }
+  });
+
+  // PATCH /api/admin/support/:id - Update support request status
+  app.patch("/api/admin/support/:id", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status } = req.body;
+      if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
+        return res.status(400).json({ success: false, error: "Invalid status" });
+      }
+      await db.update(supportRequests).set({ status, updatedAt: new Date() }).where(eq(supportRequests.id, id));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Admin Support Update] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to update support request" });
+    }
+  });
+
+  // GET /api/admin/errors - List error logs
+  app.get("/api/admin/errors", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+    try {
+      const page = parseInt(req.query.page as string) || 1;
+      const limit = parseInt(req.query.limit as string) || 20;
+      const offset = (page - 1) * limit;
+
+      const allErrors = await db.select().from(errorLogs).orderBy(desc(errorLogs.createdAt)).limit(limit).offset(offset);
+      const [totalResult] = await db.select({ value: count() }).from(errorLogs);
+
+      const errorsWithUser = await Promise.all(allErrors.map(async (err) => {
+        if (err.userId) {
+          const userResult = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, err.userId)).limit(1);
+          return { ...err, username: userResult[0]?.username, email: userResult[0]?.email };
+        }
+        return { ...err, username: null, email: null };
+      }));
+
+      res.json({
+        success: true,
+        errors: errorsWithUser,
+        pagination: { page, limit, total: totalResult.value },
+      });
+    } catch (error: any) {
+      console.error("[Admin Errors] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch error logs" });
+    }
+  });
+
+  // POST /api/support - Submit a support request (any authenticated user)
+  app.post("/api/support", jwtAuthMiddleware, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const { subject, message, email, platform } = req.body;
+      if (!subject || !message || !email) {
+        return res.status(400).json({ success: false, error: "Subject, message, and email are required" });
+      }
+      await db.insert(supportRequests).values({
+        userId: userId || undefined,
+        email,
+        subject,
+        message,
+        platform: platform || "web",
+      });
+      res.json({ success: true, message: "Support request submitted" });
+    } catch (error: any) {
+      console.error("[Support] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to submit support request" });
+    }
+  });
+
+  // POST /api/error-log - Log an error from client (any user, even unauthenticated)
+  app.post("/api/error-log", jwtAuthMiddleware, async (req, res) => {
+    try {
+      const userId = getUserId(req);
+      const { errorMessage, errorStack, errorCode, platform, endpoint, metadata } = req.body;
+      if (!errorMessage) {
+        return res.status(400).json({ success: false, error: "errorMessage is required" });
+      }
+      await db.insert(errorLogs).values({
+        userId: userId || undefined,
+        errorMessage,
+        errorStack: errorStack || null,
+        errorCode: errorCode || null,
+        platform: platform || "web",
+        endpoint: endpoint || null,
+        metadata: metadata ? JSON.stringify(metadata) : null,
+      });
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Error Log] Error:", error);
+      res.status(500).json({ success: false, error: "Failed to log error" });
+    }
+  });
 
   return httpServer;
 }

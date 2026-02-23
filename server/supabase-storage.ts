@@ -1,7 +1,7 @@
 import { db } from "./supabase-db";
 import { users, savedTexts } from "@shared/schema";
 import { eq, and, desc } from "drizzle-orm";
-import type { User, TranslationResult, InsertTranslation, SavedText, InsertSavedText } from "@shared/schema";
+import type { User, UserRole, TranslationResult, InsertTranslation, SavedText, InsertSavedText } from "@shared/schema";
 import type { IStorage, CreateUserInput } from "./storage";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
@@ -41,6 +41,12 @@ export class SupabaseStorage implements IStorage {
 
   async validatePassword(user: User, password: string): Promise<boolean> {
     return bcrypt.compare(password, user.passwordHash);
+  }
+
+  async updateUserRole(userId: string, role: UserRole): Promise<void> {
+    await db.update(users)
+      .set({ role, updatedAt: new Date() })
+      .where(eq(users.id, userId));
   }
 
   async createTranslation(insertTranslation: InsertTranslation): Promise<TranslationResult> {

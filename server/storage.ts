@@ -1,4 +1,4 @@
-import { type User, type TranslationResult, type InsertTranslation, type SavedText, type InsertSavedText } from "@shared/schema";
+import { type User, type UserRole, type TranslationResult, type InsertTranslation, type SavedText, type InsertSavedText } from "@shared/schema";
 import { randomUUID } from "crypto";
 import bcrypt from "bcryptjs";
 
@@ -14,6 +14,7 @@ export interface IStorage {
   getUserByEmail?(email: string): Promise<User | undefined>;
   createUser(user: CreateUserInput): Promise<User>;
   validatePassword?(user: User, password: string): Promise<boolean>;
+  updateUserRole(userId: string, role: UserRole): Promise<void>;
   
   // Translation operations
   createTranslation(translation: InsertTranslation): Promise<TranslationResult>;
@@ -57,6 +58,7 @@ export class MemStorage implements IStorage {
       username: input.username, 
       email: input.email || null,
       passwordHash: hashedPassword,
+      role: "GUEST",
       createdAt: new Date(),
       updatedAt: new Date(),
     };
@@ -66,6 +68,15 @@ export class MemStorage implements IStorage {
 
   async validatePassword(user: User, password: string): Promise<boolean> {
     return bcrypt.compare(password, user.passwordHash);
+  }
+
+  async updateUserRole(userId: string, role: UserRole): Promise<void> {
+    const user = this.users.get(userId);
+    if (user) {
+      user.role = role;
+      user.updatedAt = new Date();
+      this.users.set(userId, user);
+    }
   }
 
   async createTranslation(insertTranslation: InsertTranslation): Promise<TranslationResult> {

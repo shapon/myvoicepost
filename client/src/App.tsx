@@ -12,6 +12,7 @@ import Pricing from "@/pages/Pricing";
 import PrivacyPolicy from "@/pages/PrivacyPolicy";
 import TermsOfService from "@/pages/TermsOfService";
 import AffiliateProgram from "@/pages/AffiliateProgram";
+import Dashboard from "@/pages/Dashboard";
 
 function Router() {
   return (
@@ -23,6 +24,7 @@ function Router() {
       <Route path="/privacy" component={PrivacyPolicy} />
       <Route path="/terms" component={TermsOfService} />
       <Route path="/affiliate" component={AffiliateProgram} />
+      <Route path="/dashboard" component={Dashboard} />
       <Route component={NotFound} />
     </Switch>
   );

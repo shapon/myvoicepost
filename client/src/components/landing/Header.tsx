@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Mic, LogOut, User } from "lucide-react";
+import { Menu, X, Mic, LogOut, User, BarChart3 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
@@ -16,7 +16,7 @@ import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 export default function Header() {
   const [isScrolled, setIsScrolled] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const { user, logout, isLoading } = useAuth();
+  const { user, logout, isLoading, isAdmin } = useAuth();
 
   useEffect(() => {
     const handleScroll = () => {
@@ -104,6 +104,17 @@ export default function Header() {
                     <User className="w-4 h-4" />
                     <span>{user.username}</span>
                   </DropdownMenuItem>
+                  {isAdmin && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <Link href="/dashboard">
+                        <DropdownMenuItem className="gap-2 cursor-pointer" data-testid="link-dashboard">
+                          <BarChart3 className="w-4 h-4" />
+                          <span>Dashboard</span>
+                        </DropdownMenuItem>
+                      </Link>
+                    </>
+                  )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem 
                     className="gap-2 text-destructive focus:text-destructive"
@@ -185,6 +196,14 @@ export default function Header() {
                       </Avatar>
                       <span className="font-medium">{user.username}</span>
                     </div>
+                    {isAdmin && (
+                      <Link href="/dashboard" onClick={() => setIsMobileMenuOpen(false)}>
+                        <Button variant="outline" className="w-full gap-2" data-testid="link-dashboard-mobile">
+                          <BarChart3 className="w-4 h-4" />
+                          Dashboard
+                        </Button>
+                      </Link>
+                    )}
                     <Button 
                       variant="outline" 
                       className="w-full gap-2" 
