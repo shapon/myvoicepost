@@ -3,11 +3,15 @@ import { pgTable, text, varchar, uuid, timestamp, boolean, integer, numeric } fr
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
+export const USER_ROLES = ["GUEST", "USER", "ADMIN"] as const;
+export type UserRole = typeof USER_ROLES[number];
+
 export const users = pgTable("mvp_users", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   username: varchar("username", { length: 255 }).notNull(),
   email: varchar("email", { length: 255 }).notNull().unique(),
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  role: varchar("role", { length: 20 }).notNull().default("GUEST"),
   trialStartsAt: timestamp("trial_starts_at"),
   trialEndsAt: timestamp("trial_ends_at"),
   trialUsed: boolean("trial_used").default(false),
@@ -221,3 +225,44 @@ export const emailOtps = pgTable("mvp_email_otps", {
 });
 
 export type EmailOtp = typeof emailOtps.$inferSelect;
+
+export const supportRequests = pgTable("mvp_support_requests", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").references(() => users.id),
+  email: varchar("email", { length: 255 }).notNull(),
+  subject: varchar("subject", { length: 500 }).notNull(),
+  message: text("message").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("open"),
+  platform: varchar("platform", { length: 20 }).notNull().default("web"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export const insertSupportRequestSchema = createInsertSchema(supportRequests).omit({
+  id: true,
+  createdAt: true,
+  updatedAt: true,
+});
+
+export type InsertSupportRequest = z.infer<typeof insertSupportRequestSchema>;
+export type SupportRequest = typeof supportRequests.$inferSelect;
+
+export const errorLogs = pgTable("mvp_error_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id").references(() => users.id),
+  errorMessage: text("error_message").notNull(),
+  errorStack: text("error_stack"),
+  errorCode: varchar("error_code", { length: 50 }),
+  platform: varchar("platform", { length: 20 }).notNull().default("web"),
+  endpoint: varchar("endpoint", { length: 500 }),
+  metadata: text("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertErrorLogSchema = createInsertSchema(errorLogs).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertErrorLog = z.infer<typeof insertErrorLogSchema>;
+export type ErrorLog = typeof errorLogs.$inferSelect;
