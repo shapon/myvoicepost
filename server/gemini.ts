@@ -430,6 +430,145 @@ ${text}`,
   );
 }
 
+// Tone categories and their sub-tones for the Process page
+export const toneCategories: Record<string, { label: string; tones: { id: string; label: string; instruction: string }[] }> = {
+  conversational: {
+    label: "Conversational & Media Tones",
+    tones: [
+      { id: "casual", label: "Casual", instruction: "Use a casual, laid-back conversational tone. Write as if chatting with a friend." },
+      { id: "friendly", label: "Friendly", instruction: "Use a warm, approachable, and friendly tone that makes the reader feel welcome." },
+      { id: "humorous", label: "Humorous", instruction: "Use a witty, humorous tone with light jokes and clever phrasing. Keep it tasteful." },
+      { id: "storytelling", label: "Storytelling", instruction: "Use a narrative, storytelling tone. Structure the content as an engaging story with flow and vivid details." },
+      { id: "podcast", label: "Podcast-style", instruction: "Write in a podcast host style — conversational, engaging, with rhetorical questions and natural flow as if speaking to an audience." },
+      { id: "interview", label: "Interview", instruction: "Format the content as if presenting interview insights. Structured, clear, with key quotes and takeaways." },
+    ],
+  },
+  informational: {
+    label: "Information-Driven Tones",
+    tones: [
+      { id: "professional", label: "Professional", instruction: "Use a polished, professional business tone. Be clear, concise, and authoritative." },
+      { id: "formal", label: "Formal", instruction: "Use a formal, official tone suitable for documents, reports, and official communications." },
+      { id: "academic", label: "Academic", instruction: "Use an academic, scholarly tone with precise language, citations-ready structure, and analytical depth." },
+      { id: "technical", label: "Technical", instruction: "Use a technical tone with precise terminology, structured explanations, and detail-oriented content." },
+      { id: "educational", label: "Educational", instruction: "Use an educational, teaching tone. Explain concepts clearly with examples, making complex ideas accessible." },
+      { id: "instructional", label: "Instructional", instruction: "Use a step-by-step instructional tone. Provide clear directions and actionable guidance." },
+    ],
+  },
+  emotional: {
+    label: "Emotional & Rhetorical Tones",
+    tones: [
+      { id: "persuasive", label: "Persuasive", instruction: "Use a persuasive, compelling tone. Build strong arguments, use rhetorical devices, and drive the reader toward a conclusion." },
+      { id: "inspirational", label: "Inspirational", instruction: "Use an uplifting, inspirational tone. Motivate and encourage the reader with powerful, positive language." },
+      { id: "empathetic", label: "Empathetic", instruction: "Use a compassionate, empathetic tone. Show understanding, validate feelings, and connect emotionally with the reader." },
+      { id: "dramatic", label: "Dramatic", instruction: "Use a dramatic, impactful tone with vivid descriptions, tension, and emotional weight." },
+      { id: "motivational", label: "Motivational", instruction: "Use an energizing, motivational tone. Push the reader to take action with strong calls-to-action and positive reinforcement." },
+      { id: "passionate", label: "Passionate", instruction: "Use a deeply passionate, enthusiastic tone that conveys strong conviction and excitement about the subject." },
+    ],
+  },
+};
+
+// Get tone instruction by tone ID
+function getToneInstruction(toneId: string): string {
+  for (const category of Object.values(toneCategories)) {
+    const tone = category.tones.find(t => t.id === toneId);
+    if (tone) return tone.instruction;
+  }
+  return toneInstructions.professional;
+}
+
+// Transform text with a specific tone using Gemini
+export async function transformTextWithTone(
+  text: string,
+  toneId: string,
+): Promise<string> {
+  const toneGuide = getToneInstruction(toneId);
+
+  return pRetry(
+    async () => {
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: `You are an expert writer and content transformer. Rewrite the following text applying the specified tone while preserving the original meaning and key information.
+
+Tone: ${toneGuide}
+
+Important rules:
+- Preserve all factual information and key points from the original text
+- Adapt the writing style, vocabulary, and structure to match the requested tone
+- Make the output feel natural and authentic to the tone
+- Do not add information that wasn't in the original text
+
+Return your response as JSON with this exact format:
+{"transformedText": "the transformed text here"}
+
+Original text:
+${text}`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                transformedText: { type: Type.STRING }
+              },
+              required: ["transformedText"]
+            }
+          }
+        });
+
+        const result = safeJsonParse(response.text || "{}", { transformedText: text });
+        return result.transformedText || text;
+      } catch (error: any) {
+        if (isRateLimitError(error)) {
+          throw error;
+        }
+        throw new AbortError(error);
+      }
+    },
+    {
+      retries: 5,
+      minTimeout: 2000,
+      maxTimeout: 30000,
+      factor: 2,
+    }
+  );
+}
+
+// Transcribe audio from a URL by downloading it first
+export async function transcribeAudioFromUrl(url: string): Promise<string> {
+  // Basic URL validation - only allow http/https
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error("Only HTTP and HTTPS URLs are supported");
+  }
+
+  console.log(`[Gemini] Fetching audio from URL: ${url}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audio from URL: ${response.status} ${response.statusText}`);
+  }
+
+  // Check content length before downloading
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && parseInt(contentLength) > 25 * 1024 * 1024) {
+    throw new Error("Audio file is too large (max 25MB)");
+  }
+
+  const contentType = response.headers.get("content-type") || "audio/mpeg";
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  console.log(`[Gemini] Downloaded ${buffer.length} bytes, content-type: ${contentType}`);
+
+  if (buffer.length > 25 * 1024 * 1024) {
+    throw new Error("Audio file is too large (max 25MB)");
+  }
+
+  if (buffer.length < 1000) {
+    throw new Error("Downloaded file is too small to be valid audio");
+  }
+
+  return transcribeAudio(buffer, contentType);
+}
+
 // Polish text using Gemini (same language, with output type formatting)
 export async function polishText(
   text: string,

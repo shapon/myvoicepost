@@ -17,7 +17,7 @@ import {
 } from "@shared/schema";
 import type { UserRole } from "@shared/schema";
 import nodemailer from "nodemailer";
-import { transcribeAudio, translateAndPolish, polishText } from "./gemini";
+import { transcribeAudio, translateAndPolish, polishText, transformTextWithTone, transcribeAudioFromUrl, toneCategories } from "./gemini";
 import { db } from "./supabase-db";
 import { eq, and, gte, desc, sql, count } from "drizzle-orm";
 import multer, { FileFilterCallback } from "multer";
@@ -2211,6 +2211,160 @@ export async function registerRoutes(
       res.status(500).json({
         success: false,
         error: error.message || "Failed to translate text",
+      });
+    }
+  });
+
+  // Process: Get available tone categories
+  app.get("/api/v1/m/tone-categories", (req, res) => {
+    res.json({ success: true, categories: toneCategories });
+  });
+
+  // Process: Transcribe audio from URL
+  app.post("/api/v1/m/transcribe-url", async (req, res) => {
+    try {
+      if (
+        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      const schema = z.object({
+        url: z.string().url("Please provide a valid URL"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { url } = parseResult.data;
+      console.log(`[Process Transcribe-URL] Fetching audio from: ${url}`);
+
+      const transcribedText = await transcribeAudioFromUrl(url);
+
+      if (!transcribedText || transcribedText.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "Could not transcribe audio from the provided URL. The file may not contain speech.",
+        });
+      }
+
+      console.log(`[Process Transcribe-URL] Success: "${transcribedText.substring(0, 100)}..."`);
+
+      res.json({
+        success: true,
+        transcribedText: transcribedText.trim(),
+      });
+    } catch (error: any) {
+      console.error("[Process Transcribe-URL] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to transcribe audio from URL",
+      });
+    }
+  });
+
+  // Process: Transcribe uploaded audio file
+  app.post("/api/v1/m/transcribe-file", upload.single("audio"), async (req, res) => {
+    try {
+      if (
+        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      if (!req.file) {
+        return res.status(400).json({
+          success: false,
+          error: "No audio file provided",
+        });
+      }
+
+      console.log(`[Process Transcribe-File] File: ${req.file.originalname}, Size: ${req.file.size} bytes, MIME: ${req.file.mimetype}`);
+
+      const transcribedText = await transcribeAudio(req.file.buffer, req.file.mimetype);
+
+      if (!transcribedText || transcribedText.trim() === "") {
+        return res.status(400).json({
+          success: false,
+          error: "Could not transcribe audio. The file may not contain speech.",
+        });
+      }
+
+      console.log(`[Process Transcribe-File] Success: "${transcribedText.substring(0, 100)}..."`);
+
+      res.json({
+        success: true,
+        transcribedText: transcribedText.trim(),
+      });
+    } catch (error: any) {
+      console.error("[Process Transcribe-File] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to transcribe audio file",
+      });
+    }
+  });
+
+  // Process: Transform text with selected tone
+  app.post("/api/v1/m/transform-tone", async (req, res) => {
+    try {
+      if (
+        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      const schema = z.object({
+        text: z.string().min(1, "Text is required"),
+        toneId: z.string().min(1, "Tone selection is required"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { text, toneId } = parseResult.data;
+
+      console.log(`[Process Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`);
+
+      const transformedText = await transformTextWithTone(text, toneId);
+
+      console.log(`[Process Transform-Tone] Success: "${transformedText.substring(0, 100)}..."`);
+
+      res.json({
+        success: true,
+        originalText: text,
+        transformedText,
+        toneId,
+      });
+    } catch (error: any) {
+      console.error("[Process Transform-Tone] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to transform text with tone",
       });
     }
   });

@@ -3,6 +3,8 @@ import session from "express-session";
 import { registerRoutes } from "./routes";
 import { serveStatic } from "./static";
 import { createServer } from "http";
+import { spawn } from "child_process";
+import path from "path";
 
 const app = express();
 const httpServer = createServer(app);
@@ -95,6 +97,31 @@ app.use((req, res, next) => {
     const { setupVite } = await import("./vite");
     await setupVite(httpServer, app);
   }
+
+  const locTrackerDir = path.resolve("mobile_loc/backend");
+  let locProc: ReturnType<typeof spawn> | null = null;
+  const startLocTracker = () => {
+    locProc = spawn("python", ["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8001"], {
+      cwd: locTrackerDir,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    locProc.stdout?.on("data", (d: Buffer) => log(d.toString().trim(), "loc-tracker"));
+    locProc.stderr?.on("data", (d: Buffer) => log(d.toString().trim(), "loc-tracker"));
+    locProc.on("error", (err) => log(`Location Tracker failed to start: ${err.message}`, "loc-tracker"));
+    locProc.on("exit", (code) => {
+      log(`Location Tracker exited with code ${code}, restarting in 3s...`, "loc-tracker");
+      setTimeout(startLocTracker, 3000);
+    });
+    log("Location Tracker API starting on port 8001", "loc-tracker");
+  };
+  try {
+    startLocTracker();
+  } catch (e: any) {
+    log(`Location Tracker spawn error: ${e.message}`, "loc-tracker");
+  }
+  process.on("exit", () => { locProc?.kill(); });
+  process.on("SIGTERM", () => { locProc?.kill(); process.exit(0); });
+  process.on("SIGINT", () => { locProc?.kill(); process.exit(0); });
 
   // ALWAYS serve the app on the port specified in the environment variable PORT
   // Other ports are firewalled. Default to 5000 if not specified.

@@ -13,6 +13,7 @@ import PrivacyPolicy from "@/pages/PrivacyPolicy";
 import TermsOfService from "@/pages/TermsOfService";
 import AffiliateProgram from "@/pages/AffiliateProgram";
 import Dashboard from "@/pages/Dashboard";
+import Process from "@/pages/Process";
 
 function Router() {
   return (
@@ -25,6 +26,7 @@ function Router() {
       <Route path="/terms" component={TermsOfService} />
       <Route path="/affiliate" component={AffiliateProgram} />
       <Route path="/dashboard" component={Dashboard} />
+      <Route path="/process" component={Process} />
       <Route component={NotFound} />
     </Switch>
   );
