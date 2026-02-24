@@ -6872,6 +6872,146 @@ async function detectTextLanguage(text: string): Promise<string> {
   } catch { return "en"; }
 }
 
+const toneCategories: Record<string, { label: string; tones: { id: string; label: string; instruction: string }[] }> = {
+  conversational: {
+    label: "Conversational & Media Tones",
+    tones: [
+      { id: "casual", label: "Casual", instruction: "Use a casual, laid-back conversational tone. Write as if chatting with a friend." },
+      { id: "friendly", label: "Friendly", instruction: "Use a warm, approachable, and friendly tone that makes the reader feel welcome." },
+      { id: "humorous", label: "Humorous", instruction: "Use a witty, humorous tone with light jokes and clever phrasing. Keep it tasteful." },
+      { id: "storytelling", label: "Storytelling", instruction: "Use a narrative, storytelling tone. Structure the content as an engaging story with flow and vivid details." },
+      { id: "podcast", label: "Podcast-style", instruction: "Write in a podcast host style — conversational, engaging, with rhetorical questions and natural flow as if speaking to an audience." },
+      { id: "interview", label: "Interview", instruction: "Format the content as if presenting interview insights. Structured, clear, with key quotes and takeaways." },
+    ],
+  },
+  informational: {
+    label: "Information-Driven Tones",
+    tones: [
+      { id: "professional", label: "Professional", instruction: "Use a polished, professional business tone. Be clear, concise, and authoritative." },
+      { id: "formal", label: "Formal", instruction: "Use a formal, official tone suitable for documents, reports, and official communications." },
+      { id: "academic", label: "Academic", instruction: "Use an academic, scholarly tone with precise language, citations-ready structure, and analytical depth." },
+      { id: "technical", label: "Technical", instruction: "Use a technical tone with precise terminology, structured explanations, and detail-oriented content." },
+      { id: "educational", label: "Educational", instruction: "Use an educational, teaching tone. Explain concepts clearly with examples, making complex ideas accessible." },
+      { id: "instructional", label: "Instructional", instruction: "Use a step-by-step instructional tone. Provide clear directions and actionable guidance." },
+    ],
+  },
+  emotional: {
+    label: "Emotional & Rhetorical Tones",
+    tones: [
+      { id: "persuasive", label: "Persuasive", instruction: "Use a persuasive, compelling tone. Build strong arguments, use rhetorical devices, and drive the reader toward a conclusion." },
+      { id: "inspirational", label: "Inspirational", instruction: "Use an uplifting, inspirational tone. Motivate and encourage the reader with powerful, positive language." },
+      { id: "empathetic", label: "Empathetic", instruction: "Use a compassionate, empathetic tone. Show understanding, validate feelings, and connect emotionally with the reader." },
+      { id: "dramatic", label: "Dramatic", instruction: "Use a dramatic, impactful tone with vivid descriptions, tension, and emotional weight." },
+      { id: "motivational", label: "Motivational", instruction: "Use an energizing, motivational tone. Push the reader to take action with strong calls-to-action and positive reinforcement." },
+      { id: "passionate", label: "Passionate", instruction: "Use a deeply passionate, enthusiastic tone that conveys strong conviction and excitement about the subject." },
+    ],
+  },
+};
+
+function getToneInstruction(toneId: string): string {
+  for (const category of Object.values(toneCategories)) {
+    const tone = category.tones.find(t => t.id === toneId);
+    if (tone) return tone.instruction;
+  }
+  return "Use a polished, professional business tone. Be clear, concise, and authoritative.";
+}
+
+async function transformTextWithTone(text: string, toneId: string): Promise<string> {
+  const toneGuide = getToneInstruction(toneId);
+  const { GoogleGenAI, Type } = await import("@google/genai");
+  const ai = new GoogleGenAI({
+    apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+    httpOptions: {
+      apiVersion: "",
+      baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+    },
+  });
+
+  const response = await ai.models.generateContent({
+    model: "gemini-2.5-flash",
+    contents: `You are an expert writer and content transformer. Rewrite the following text applying the specified tone while preserving the original meaning and key information.
+
+Tone: ${toneGuide}
+
+Important rules:
+- Preserve all factual information and key points from the original text
+- Adapt the writing style, vocabulary, and structure to match the requested tone
+- Make the output feel natural and authentic to the tone
+- Do not add information that wasn't in the original text
+
+Return your response as JSON with this exact format:
+{"transformedText": "the transformed text here"}
+
+Original text:
+${text}`,
+    config: {
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          transformedText: { type: Type.STRING }
+        },
+        required: ["transformedText"]
+      }
+    }
+  });
+
+  try {
+    const result = JSON.parse(response.text || "{}");
+    return result.transformedText || text;
+  } catch {
+    return text;
+  }
+}
+
+app.get("/api/v1/m/tone-categories", (req, res) => {
+  res.json({ success: true, categories: toneCategories });
+});
+
+app.get("/api/v1/p/tone-categories", (req, res) => {
+  res.json({ success: true, categories: toneCategories });
+});
+
+app.post("/api/v1/m/transform-tone", async (req, res) => {
+  try {
+    const schema = z.object({
+      text: z.string().min(1, "Text is required"),
+      toneId: z.string().min(1, "Tone selection is required"),
+    });
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+    }
+    const { text, toneId } = parseResult.data;
+    console.log(`[Process Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`);
+    const transformedText = await transformTextWithTone(text, toneId);
+    res.json({ success: true, originalText: text, transformedText, toneId });
+  } catch (error: any) {
+    console.error("[Process Transform-Tone] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to transform text with tone" });
+  }
+});
+
+app.post("/api/v1/p/transform-tone", async (req, res) => {
+  try {
+    const schema = z.object({
+      text: z.string().min(1, "Text is required"),
+      toneId: z.string().min(1, "Tone selection is required"),
+    });
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+    }
+    const { text, toneId } = parseResult.data;
+    console.log(`[Process Public Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`);
+    const transformedText = await transformTextWithTone(text, toneId);
+    res.json({ success: true, originalText: text, transformedText, toneId });
+  } catch (error: any) {
+    console.error("[Process Public Transform-Tone] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to transform text with tone" });
+  }
+});
+
 app.post("/api/v1/p/process-url", async (req, res) => {
   try {
     const schema = z.object({
