@@ -50,6 +50,35 @@ The mobile application implements a crash-resilient recording system that writes
 
 A battery profile system allows users to select between Power Saver, Balanced (default), and Real-time modes, which adjust polling intervals, background synchronization, and animations to optimize battery usage. A warning is displayed for high battery usage in Real-time mode.
 
+## Location Tracker System (mobile_loc/)
+
+A separate full-stack location tracking system in `mobile_loc/` folder, completely isolated from the main MyVoicePost application.
+
+### Architecture
+- **Backend**: Python FastAPI on port 8001 (spawned from main Express server)
+- **Database**: SQLite (`mobile_loc/backend/tracker.db`) - separate from main app's PostgreSQL
+- **Web Admin UI**: Vanilla HTML/CSS/JS served by FastAPI at `/ui/`
+- **Port mapping**: Internal port 8001 ? External port 3000
+
+### Backend Structure (mobile_loc/backend/)
+- `main.py` - FastAPI app with CORS, static files, API router
+- `db/database.py` - SQLite schema (users, profiles, groups, members, invitations, subscriptions, notifications)
+- `core/config.py` - JWT settings, `core/security.py` - JWT/password utils
+- `api/` - Route modules: auth, profiles, groups, members, invitations, subscriptions, deps
+- `models/schemas.py` - Pydantic request/response models
+
+### API Endpoints (prefix: /api/v1/)
+- Auth: POST `/sendotp/`, POST `/verifyotp/`, POST `/refresh-token/`
+- Profiles: POST/PUT `/profiles/`, GET `/profile-details/`
+- Groups: GET/POST `/groups/`, GET `/groups/{id}`, PUT `/groups/{id}`, DELETE `/groups/{id}`
+- Members: GET `/group-members/{group_id}`, POST `/group-members/location/`, DELETE `/group-members/{group_id}/{user_id}`
+- Invitations: POST `/invitations/`, GET `/invitations/sent/`, GET `/invitations/received/`, POST `/invitations/{id}/accept`, POST `/invitations/{id}/reject`
+- Subscriptions: GET `/packages/`, POST `/subscribe/`, GET `/subscription/`
+
+### Web UI (mobile_loc/ui/)
+- `index.html` - Login with OTP
+- `home.html` - Dashboard with tabs: Profile, Groups, Map (Leaflet), Invitations, Subscriptions
+
 ## External Dependencies
 
 ### Third-Party Services

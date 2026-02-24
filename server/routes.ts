@@ -2369,6 +2369,59 @@ export async function registerRoutes(
     }
   });
 
+  // Public: Get tone categories (also available at /api/v1/p/)
+  app.get("/api/v1/p/tone-categories", (req, res) => {
+    res.json({ success: true, categories: toneCategories });
+  });
+
+  // Public: Transform text with selected tone (also available at /api/v1/p/)
+  app.post("/api/v1/p/transform-tone", async (req, res) => {
+    try {
+      if (
+        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+      ) {
+        return res.status(500).json({
+          success: false,
+          error: "Gemini AI integration not configured",
+        });
+      }
+
+      const schema = z.object({
+        text: z.string().min(1, "Text is required"),
+        toneId: z.string().min(1, "Tone selection is required"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { text, toneId } = parseResult.data;
+
+      console.log(`[Process Public Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`);
+
+      const transformedText = await transformTextWithTone(text, toneId);
+
+      res.json({
+        success: true,
+        originalText: text,
+        transformedText,
+        toneId,
+      });
+    } catch (error: any) {
+      console.error("[Process Public Transform-Tone] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to transform text with tone",
+      });
+    }
+  });
+
   // Mobile: Save text to database
   app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
     try {
