@@ -6919,15 +6919,13 @@ function getToneInstruction(toneId: string): string {
 async function transformTextWithTone(text: string, toneId: string): Promise<string> {
   const toneGuide = getToneInstruction(toneId);
   const { GoogleGenAI, Type } = await import("@google/genai");
-  const ai = new GoogleGenAI({
-    apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-    httpOptions: {
-      apiVersion: "",
-      baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-    },
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
+  if (!geminiKey) throw new Error("No Gemini API key configured");
+  const toneAi = new GoogleGenAI({
+    apiKey: geminiKey,
   });
 
-  const response = await ai.models.generateContent({
+  const response = await toneAi.models.generateContent({
     model: "gemini-2.5-flash",
     contents: `You are an expert writer and content transformer. Rewrite the following text applying the specified tone while preserving the original meaning and key information.
 
