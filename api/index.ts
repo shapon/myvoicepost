@@ -6762,15 +6762,13 @@ function extractYouTubeVideoId(url: string): string | null {
 async function transcribeYouTubeViaGemini(videoId: string): Promise<string> {
   console.log(`[YouTube] Transcribing video via Gemini AI for: ${videoId}`);
   const { GoogleGenAI } = await import("@google/genai");
-  const ai = new GoogleGenAI({
-    apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY,
-    httpOptions: {
-      apiVersion: "",
-      baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-    },
+  const geminiKey = process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
+  if (!geminiKey) throw new Error("No Gemini API key configured for YouTube transcription");
+  const youtubeAi = new GoogleGenAI({
+    apiKey: geminiKey,
   });
 
-  const response = await ai.models.generateContent({
+  const response = await youtubeAi.models.generateContent({
     model: "gemini-2.5-flash",
     contents: [
       {
