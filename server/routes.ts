@@ -26,6 +26,15 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { getUncachableStripeClient, getStripePublishableKey, getStripeSync } from "./stripeClient";
 import { runMigrations } from "stripe-replit-sync";
+import { YoutubeTranscript } from "youtube-transcript";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+import * as cheerio from "cheerio";
+
+const execFileAsync = promisify(execFile);
 
 // Audio hash tracking for duplicate detection (in-memory, clears on restart)
 const recentAudioHashes = new Map<
@@ -2218,6 +2227,233 @@ export async function registerRoutes(
   // Process: Get available tone categories
   app.get("/api/v1/m/tone-categories", (req, res) => {
     res.json({ success: true, categories: toneCategories });
+  });
+
+  // === YouTube + Webpage URL Processing ===
+
+  function extractYouTubeVideoId(url: string): string | null {
+    try {
+      const parsed = new URL(url);
+      if (parsed.hostname === "youtu.be") return parsed.pathname.slice(1).split("/")[0] || null;
+      if (parsed.hostname.includes("youtube.com")) {
+        const v = parsed.searchParams.get("v");
+        if (v) return v;
+        const pathMatch = parsed.pathname.match(/\/(?:embed|v|shorts)\/([^/?]+)/);
+        if (pathMatch) return pathMatch[1];
+      }
+      return null;
+    } catch { return null; }
+  }
+
+  function getYtDlpPath(): string {
+    const localPath = path.join(process.cwd(), ".local/bin/yt-dlp-latest");
+    if (fs.existsSync(localPath)) return localPath;
+    return "yt-dlp";
+  }
+
+  function cleanupYtFiles(tmpDir: string, prefix: string) {
+    try {
+      const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(prefix));
+      files.forEach(f => { try { fs.unlinkSync(path.join(tmpDir, f)); } catch {} });
+    } catch {}
+  }
+
+  async function downloadYouTubeAudio(videoId: string): Promise<Buffer> {
+    const tmpDir = os.tmpdir();
+    const timestamp = Date.now();
+    const filePrefix = `yt-audio-${videoId}-${timestamp}`;
+    const outputPath = path.join(tmpDir, filePrefix);
+    try {
+      const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+      console.log(`[YT-DLP] Downloading audio for video: ${videoId}`);
+      await execFileAsync(getYtDlpPath(), [
+        "--no-playlist", "-x", "--audio-format", "mp3", "--audio-quality", "9",
+        "-o", `${outputPath}.%(ext)s`, "--max-filesize", "25M", "--socket-timeout", "30", ytUrl,
+      ], { timeout: 120000 });
+
+      const mp3Path = `${outputPath}.mp3`;
+      let buffer: Buffer;
+      if (fs.existsSync(mp3Path)) {
+        buffer = fs.readFileSync(mp3Path);
+      } else {
+        const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(filePrefix));
+        if (files.length === 0) throw new Error("yt-dlp did not produce an audio file");
+        buffer = fs.readFileSync(path.join(tmpDir, files[0]));
+      }
+
+      cleanupYtFiles(tmpDir, filePrefix);
+      console.log(`[YT-DLP] Downloaded ${buffer.length} bytes of audio`);
+      if (buffer.length > 25 * 1024 * 1024) throw new Error("YouTube audio is too large (max 25MB)");
+      return buffer;
+    } catch (error: any) {
+      cleanupYtFiles(tmpDir, filePrefix);
+      if (error.message.includes("too large")) throw error;
+      throw new Error(`Failed to download YouTube audio: ${error.message}`);
+    }
+  }
+
+  async function extractYouTubeTranscript(url: string): Promise<{ text: string; detectedLanguage: string }> {
+    const videoId = extractYouTubeVideoId(url);
+    if (!videoId) throw new Error("Invalid YouTube URL");
+
+    try {
+      const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
+      if (!transcriptItems || transcriptItems.length === 0) throw new Error("No transcript available");
+      const text = transcriptItems.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
+      if (!text) throw new Error("Transcript is empty");
+      console.log(`[YouTube] Got transcript via API for video: ${videoId}`);
+      return { text, detectedLanguage: "auto" };
+    } catch (transcriptError: any) {
+      console.log(`[YouTube] Transcript API failed for ${videoId}: ${transcriptError.message}`);
+      console.log(`[YouTube] Falling back to audio download + AI transcription...`);
+      try {
+        const audioBuffer = await downloadYouTubeAudio(videoId);
+        const transcribedText = await transcribeAudio(audioBuffer, "audio/mpeg");
+        if (!transcribedText || transcribedText.trim().length === 0) throw new Error("AI transcription returned empty text");
+        console.log(`[YouTube] Successfully transcribed audio for video: ${videoId} (${transcribedText.length} chars)`);
+        return { text: transcribedText.trim(), detectedLanguage: "auto" };
+      } catch (audioError: any) {
+        console.error(`[YouTube] Audio fallback also failed for ${videoId}:`, audioError.message);
+        throw new Error(`Could not process this YouTube video. Transcript is not available and audio extraction failed: ${audioError.message}`);
+      }
+    }
+  }
+
+  async function extractWebpageText(url: string): Promise<{ text: string; detectedLanguage: string }> {
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0 (compatible; MyVoicePost/1.0)", "Accept": "text/html,application/xhtml+xml" },
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!response.ok) throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+    const html = await response.text();
+    const $ = cheerio.load(html);
+    $("script, style, nav, footer, header, aside, iframe, noscript, .sidebar, .menu, .nav, .footer, .header, .ad, .advertisement, [role='navigation'], [role='banner'], [role='contentinfo']").remove();
+    let mainText = "";
+    const mainSelectors = ["article", "main", '[role="main"]', ".post-content", ".entry-content", ".article-body", ".story-body"];
+    for (const sel of mainSelectors) {
+      const el = $(sel);
+      if (el.length && el.text().trim().length > 100) { mainText = el.text().trim(); break; }
+    }
+    if (!mainText) mainText = $("body").text().trim();
+    mainText = mainText.replace(/\s+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    if (mainText.length > 15000) mainText = mainText.substring(0, 15000);
+    if (!mainText || mainText.length < 20) throw new Error("Could not extract meaningful text from the URL");
+    const htmlLang = $("html").attr("lang") || "";
+    const detectedLanguage = htmlLang ? htmlLang.substring(0, 2).toLowerCase() : "auto";
+    return { text: mainText, detectedLanguage };
+  }
+
+  async function detectTextLanguage(text: string): Promise<string> {
+    if (!process.env.AI_INTEGRATIONS_GEMINI_API_KEY) return "en";
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const genai = new GoogleGenAI({
+        apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+        httpOptions: { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL },
+      });
+      const response = await genai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `Detect the language of this text and return the ISO 639-1 two-letter language code only (e.g. "en", "es", "fr"). Text: "${text.substring(0, 500)}"`,
+        config: { temperature: 0 },
+      });
+      const code = (response.text || "en").trim().toLowerCase().replace(/[^a-z]/g, "").substring(0, 2);
+      return code || "en";
+    } catch { return "en"; }
+  }
+
+  // Process URL (YouTube + Webpage) - Public
+  app.post("/api/v1/p/process-url", async (req, res) => {
+    try {
+      const schema = z.object({
+        url: z.string().url("Valid URL is required"),
+        targetLanguage: z.string().min(1, "Target language is required"),
+      });
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+      }
+      const { url, targetLanguage } = parseResult.data;
+      console.log(`[Process-URL Public] url=${url}, targetLanguage=${targetLanguage}`);
+
+      const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
+      let extracted: { text: string; detectedLanguage: string };
+      if (isYouTube) {
+        extracted = await extractYouTubeTranscript(url);
+      } else {
+        extracted = await extractWebpageText(url);
+      }
+
+      let sourceLanguage = extracted.detectedLanguage;
+      if (sourceLanguage === "auto") {
+        sourceLanguage = await detectTextLanguage(extracted.text);
+      }
+
+      let translatedText = extracted.text;
+      if (sourceLanguage !== targetLanguage) {
+        const result = await translateAndPolish(extracted.text, sourceLanguage, targetLanguage, "professional");
+        translatedText = result.polishedText || result.translatedText || extracted.text;
+      }
+
+      res.json({
+        success: true,
+        sourceText: extracted.text,
+        targetText: translatedText,
+        sourceLanguage,
+        targetLanguage,
+        sourceType: isYouTube ? "youtube" : "webpage",
+      });
+    } catch (error: any) {
+      console.error("[Process-URL Public] Error:", error.message);
+      res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+    }
+  });
+
+  // Process URL (YouTube + Webpage) - Mobile authenticated
+  app.post("/api/v1/m/process-url", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const schema = z.object({
+        url: z.string().url("Valid URL is required"),
+        targetLanguage: z.string().min(1, "Target language is required"),
+      });
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+      }
+      const { url, targetLanguage } = parseResult.data;
+      const userId = req.jwtUser?.userId;
+      console.log(`[Process-URL Mobile] userId=${userId}, url=${url}, targetLanguage=${targetLanguage}`);
+
+      const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
+      let extracted: { text: string; detectedLanguage: string };
+      if (isYouTube) {
+        extracted = await extractYouTubeTranscript(url);
+      } else {
+        extracted = await extractWebpageText(url);
+      }
+
+      let sourceLanguage = extracted.detectedLanguage;
+      if (sourceLanguage === "auto") {
+        sourceLanguage = await detectTextLanguage(extracted.text);
+      }
+
+      let translatedText = extracted.text;
+      if (sourceLanguage !== targetLanguage) {
+        const result = await translateAndPolish(extracted.text, sourceLanguage, targetLanguage, "professional");
+        translatedText = result.polishedText || result.translatedText || extracted.text;
+      }
+
+      res.json({
+        success: true,
+        sourceText: extracted.text,
+        targetText: translatedText,
+        sourceLanguage,
+        targetLanguage,
+        sourceType: isYouTube ? "youtube" : "webpage",
+      });
+    } catch (error: any) {
+      console.error("[Process-URL Mobile] Error:", error.message);
+      res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+    }
   });
 
   // Process: Transcribe audio from URL

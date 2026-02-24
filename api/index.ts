@@ -19,6 +19,13 @@ import Stripe from "stripe";
 import OpenAI from "openai";
 import * as cheerio from "cheerio";
 import { YoutubeTranscript } from "youtube-transcript";
+import { execFile } from "child_process";
+import { promisify } from "util";
+import * as fs from "fs";
+import * as os from "os";
+import * as path from "path";
+
+const execFileAsync = promisify(execFile);
 
 const PROCESS_AUDIO_CFG = {
   PROCESS_AUDIO_MAX_SIZE_MB: 5,
@@ -6755,6 +6762,65 @@ function extractYouTubeVideoId(url: string): string | null {
   return null;
 }
 
+function getYtDlpPath(): string {
+  const localPath = path.join(process.cwd(), ".local/bin/yt-dlp-latest");
+  if (fs.existsSync(localPath)) return localPath;
+  return "yt-dlp";
+}
+
+function cleanupYtFiles(tmpDir: string, prefix: string) {
+  try {
+    const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(prefix));
+    files.forEach(f => { try { fs.unlinkSync(path.join(tmpDir, f)); } catch {} });
+  } catch {}
+}
+
+async function downloadYouTubeAudio(videoId: string): Promise<Buffer> {
+  const tmpDir = os.tmpdir();
+  const timestamp = Date.now();
+  const filePrefix = `yt-audio-${videoId}-${timestamp}`;
+  const outputPath = path.join(tmpDir, filePrefix);
+
+  try {
+    const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
+    console.log(`[YT-DLP] Downloading audio for video: ${videoId}`);
+
+    await execFileAsync(getYtDlpPath(), [
+      "--no-playlist",
+      "-x",
+      "--audio-format", "mp3",
+      "--audio-quality", "9",
+      "-o", `${outputPath}.%(ext)s`,
+      "--max-filesize", "25M",
+      "--socket-timeout", "30",
+      ytUrl,
+    ], { timeout: 120000 });
+
+    const mp3Path = `${outputPath}.mp3`;
+    let buffer: Buffer;
+    if (fs.existsSync(mp3Path)) {
+      buffer = fs.readFileSync(mp3Path);
+    } else {
+      const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(filePrefix));
+      if (files.length === 0) throw new Error("yt-dlp did not produce an audio file");
+      buffer = fs.readFileSync(path.join(tmpDir, files[0]));
+    }
+
+    cleanupYtFiles(tmpDir, filePrefix);
+    console.log(`[YT-DLP] Downloaded ${buffer.length} bytes of audio`);
+
+    if (buffer.length > 25 * 1024 * 1024) {
+      throw new Error("YouTube audio is too large (max 25MB)");
+    }
+
+    return buffer;
+  } catch (error: any) {
+    cleanupYtFiles(tmpDir, filePrefix);
+    if (error.message.includes("too large")) throw error;
+    throw new Error(`Failed to download YouTube audio: ${error.message}`);
+  }
+}
+
 async function extractYouTubeTranscript(url: string): Promise<{ text: string; detectedLanguage: string }> {
   const videoId = extractYouTubeVideoId(url);
   if (!videoId) throw new Error("Invalid YouTube URL");
@@ -6766,10 +6832,28 @@ async function extractYouTubeTranscript(url: string): Promise<{ text: string; de
     }
     const text = transcriptItems.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
     if (!text) throw new Error("Transcript is empty");
+    console.log(`[YouTube] Got transcript via API for video: ${videoId}`);
     return { text, detectedLanguage: "auto" };
-  } catch (error: any) {
-    if (error.message.includes("No transcript")) throw error;
-    throw new Error(`Failed to extract YouTube transcript: ${error.message}`);
+  } catch (transcriptError: any) {
+    console.log(`[YouTube] Transcript API failed for ${videoId}: ${transcriptError.message}`);
+    console.log(`[YouTube] Falling back to audio download + AI transcription...`);
+
+    try {
+      const audioBuffer = await downloadYouTubeAudio(videoId);
+      const transcribedText = await transcribeAudio(audioBuffer, "audio/mpeg");
+
+      if (!transcribedText || transcribedText.trim().length === 0) {
+        throw new Error("AI transcription returned empty text");
+      }
+
+      console.log(`[YouTube] Successfully transcribed audio for video: ${videoId} (${transcribedText.length} chars)`);
+      return { text: transcribedText.trim(), detectedLanguage: "auto" };
+    } catch (audioError: any) {
+      console.error(`[YouTube] Audio fallback also failed for ${videoId}:`, audioError.message);
+      throw new Error(
+        `Could not process this YouTube video. Transcript is not available and audio extraction failed: ${audioError.message}`
+      );
+    }
   }
 }
 
