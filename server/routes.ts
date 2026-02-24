@@ -27,14 +27,11 @@ import crypto from "crypto";
 import { getUncachableStripeClient, getStripePublishableKey, getStripeSync } from "./stripeClient";
 import { runMigrations } from "stripe-replit-sync";
 import { YoutubeTranscript } from "youtube-transcript";
-import { execFile } from "child_process";
 import { promisify } from "util";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as cheerio from "cheerio";
-
-const execFileAsync = promisify(execFile);
 
 // Audio hash tracking for duplicate detection (in-memory, clears on restart)
 const recentAudioHashes = new Map<
@@ -2245,51 +2242,41 @@ export async function registerRoutes(
     } catch { return null; }
   }
 
-  function getYtDlpPath(): string {
-    const localPath = path.join(process.cwd(), ".local/bin/yt-dlp-latest");
-    if (fs.existsSync(localPath)) return localPath;
-    return "yt-dlp";
-  }
+  async function transcribeYouTubeViaGemini(videoId: string): Promise<string> {
+    console.log(`[YouTube] Transcribing video via Gemini AI for: ${videoId}`);
+    const { GoogleGenAI } = await import("@google/genai");
+    const ai = new GoogleGenAI({
+      apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY,
+      httpOptions: {
+        apiVersion: "",
+        baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+      },
+    });
 
-  function cleanupYtFiles(tmpDir: string, prefix: string) {
-    try {
-      const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(prefix));
-      files.forEach(f => { try { fs.unlinkSync(path.join(tmpDir, f)); } catch {} });
-    } catch {}
-  }
+    const response = await ai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              fileData: {
+                fileUri: `https://www.youtube.com/watch?v=${videoId}`,
+                mimeType: "video/mp4",
+              },
+            },
+            {
+              text: "Transcribe ALL the spoken words in this video. Return ONLY the raw transcript text. Do not include timestamps, speaker labels, descriptions of sounds, or any commentary. Just the spoken words.",
+            },
+          ],
+        },
+      ],
+    });
 
-  async function downloadYouTubeAudio(videoId: string): Promise<Buffer> {
-    const tmpDir = os.tmpdir();
-    const timestamp = Date.now();
-    const filePrefix = `yt-audio-${videoId}-${timestamp}`;
-    const outputPath = path.join(tmpDir, filePrefix);
-    try {
-      const ytUrl = `https://www.youtube.com/watch?v=${videoId}`;
-      console.log(`[YT-DLP] Downloading audio for video: ${videoId}`);
-      await execFileAsync(getYtDlpPath(), [
-        "--no-playlist", "-x", "--audio-format", "mp3", "--audio-quality", "9",
-        "-o", `${outputPath}.%(ext)s`, "--max-filesize", "25M", "--socket-timeout", "30", ytUrl,
-      ], { timeout: 120000 });
-
-      const mp3Path = `${outputPath}.mp3`;
-      let buffer: Buffer;
-      if (fs.existsSync(mp3Path)) {
-        buffer = fs.readFileSync(mp3Path);
-      } else {
-        const files = fs.readdirSync(tmpDir).filter(f => f.startsWith(filePrefix));
-        if (files.length === 0) throw new Error("yt-dlp did not produce an audio file");
-        buffer = fs.readFileSync(path.join(tmpDir, files[0]));
-      }
-
-      cleanupYtFiles(tmpDir, filePrefix);
-      console.log(`[YT-DLP] Downloaded ${buffer.length} bytes of audio`);
-      if (buffer.length > 25 * 1024 * 1024) throw new Error("YouTube audio is too large (max 25MB)");
-      return buffer;
-    } catch (error: any) {
-      cleanupYtFiles(tmpDir, filePrefix);
-      if (error.message.includes("too large")) throw error;
-      throw new Error(`Failed to download YouTube audio: ${error.message}`);
-    }
+    const text = response.text?.trim();
+    if (!text) throw new Error("Gemini returned empty transcription");
+    console.log(`[YouTube] Gemini transcribed ${text.length} chars for video: ${videoId}`);
+    return text;
   }
 
   async function extractYouTubeTranscript(url: string): Promise<{ text: string; detectedLanguage: string }> {
@@ -2301,20 +2288,17 @@ export async function registerRoutes(
       if (!transcriptItems || transcriptItems.length === 0) throw new Error("No transcript available");
       const text = transcriptItems.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
       if (!text) throw new Error("Transcript is empty");
-      console.log(`[YouTube] Got transcript via API for video: ${videoId}`);
+      console.log(`[YouTube] Got transcript via caption API for video: ${videoId}`);
       return { text, detectedLanguage: "auto" };
     } catch (transcriptError: any) {
-      console.log(`[YouTube] Transcript API failed for ${videoId}: ${transcriptError.message}`);
-      console.log(`[YouTube] Falling back to audio download + AI transcription...`);
+      console.log(`[YouTube] Caption API failed for ${videoId}: ${transcriptError.message}`);
+      console.log(`[YouTube] Falling back to Gemini AI direct video transcription...`);
       try {
-        const audioBuffer = await downloadYouTubeAudio(videoId);
-        const transcribedText = await transcribeAudio(audioBuffer, "audio/mpeg");
-        if (!transcribedText || transcribedText.trim().length === 0) throw new Error("AI transcription returned empty text");
-        console.log(`[YouTube] Successfully transcribed audio for video: ${videoId} (${transcribedText.length} chars)`);
-        return { text: transcribedText.trim(), detectedLanguage: "auto" };
-      } catch (audioError: any) {
-        console.error(`[YouTube] Audio fallback also failed for ${videoId}:`, audioError.message);
-        throw new Error(`Could not process this YouTube video. Transcript is not available and audio extraction failed: ${audioError.message}`);
+        const transcribedText = await transcribeYouTubeViaGemini(videoId);
+        return { text: transcribedText, detectedLanguage: "auto" };
+      } catch (geminiError: any) {
+        console.error(`[YouTube] Gemini transcription also failed for ${videoId}:`, geminiError.message);
+        throw new Error(`Could not process this YouTube video. Captions are not available and AI transcription failed: ${geminiError.message}`);
       }
     }
   }
