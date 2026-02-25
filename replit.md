@@ -10,9 +10,25 @@ Preferred communication style: Simple, everyday language.
 
 ## System Architecture
 
-### Frontend
+### Frontend (Web)
 
-The frontend is built with React 18 and TypeScript using Vite, featuring `shadcn/ui` components based on Radix UI, styled with Tailwind CSS, and animated with Framer Motion. It follows a "New York" design with neutral colors. State management utilizes TanStack Query for server state and React hooks for local component state, avoiding global state libraries. Wouter handles client-side routing for a single-page application. Key features include voice recording, real-time transcription, language selection, output customization, copy-to-clipboard, and responsive design.
+The web frontend is built with React 18 and TypeScript using Vite, featuring `shadcn/ui` components based on Radix UI, styled with Tailwind CSS, and animated with Framer Motion. Wouter handles client-side routing. The web app mirrors the mobile app's functionality:
+
+**Pages:**
+- `/` — Landing page with hero, features, testimonials
+- `/polish` — Text polishing with voice recording, language/tone/type selection
+- `/translate` — Translation with voice recording, source/target language, tone
+- `/process` — Audio transcription (URL or file upload) with tone transformation and save
+- `/saved` — View, search, edit, and delete saved items (auth required)
+- `/dashboard` — Admin dashboard: users, subscriptions, payments, support, errors (ADMIN role only)
+- `/login` — Login with email or username
+- `/signup` — Registration with email OTP verification
+- `/pricing`, `/privacy`, `/terms`, `/affiliate` — Marketing pages
+
+**Key Components:**
+- `AppLayout` (`client/src/components/AppLayout.tsx`) — Shared nav header for app pages (Polish, Translate, Transcribe, Saved, Dashboard)
+- `WebVoiceRecorder` (`client/src/components/WebVoiceRecorder.tsx`) — Browser-based voice recorder using MediaRecorder API with chunked processing (60s intervals), used in Polish and Translate pages
+- Landing page Header (`client/src/components/landing/Header.tsx`) — Nav for public/marketing pages
 
 ### Backend
 
@@ -25,6 +41,21 @@ PostgreSQL, accessed via Neon serverless driver and Drizzle ORM, is used for dat
 ### Authentication & Authorization
 
 The system uses JWT-based authentication with a session fallback. JWTs have a 7-day expiry. Passwords are hashed with bcryptjs, and email OTP verification is required for registration. Role-Based Access Control (RBAC) defines `GUEST`, `USER`, and `ADMIN` roles, with transitions based on subscription status. `refreshUserRole` and `checkRole` middleware enforce access.
+
+### Unified TextResultCard Component
+
+All text outputs across the mobile app (polished, translated, transcribed, toned text) use a single `TextResultCard` component (`mobile/src/components/TextResultCard.tsx`). Each card provides a consistent set of actions:
+- **Play** — text-to-speech with language detection
+- **Copy** — clipboard with confirmation
+- **Edit** — inline editing (authenticated users)
+- **Share** — smart share (text only, or text/image/both choice when image exists)
+- **Save** — persist to saved items
+- **Image** — AI image generation from text content, with download/share/regenerate
+
+This replaces the old `ResultDisplay` component. Screens using it:
+- Polish (`mobile/app/(tabs)/index.tsx`): Original + Polished cards
+- Translate (`mobile/app/(tabs)/translate.tsx`): Original + Translation + Polished cards
+- Transcribe (`mobile/app/(tabs)/process.tsx`): Source + Translated + Transformed cards
 
 ### AI Processing Pipeline
 

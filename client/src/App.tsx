@@ -14,6 +14,9 @@ import TermsOfService from "@/pages/TermsOfService";
 import AffiliateProgram from "@/pages/AffiliateProgram";
 import Dashboard from "@/pages/Dashboard";
 import Process from "@/pages/Process";
+import Polish from "@/pages/Polish";
+import Translate from "@/pages/Translate";
+import SavedItems from "@/pages/SavedItems";
 
 function Router() {
   return (
@@ -27,6 +30,9 @@ function Router() {
       <Route path="/affiliate" component={AffiliateProgram} />
       <Route path="/dashboard" component={Dashboard} />
       <Route path="/process" component={Process} />
+      <Route path="/polish" component={Polish} />
+      <Route path="/translate" component={Translate} />
+      <Route path="/saved" component={SavedItems} />
       <Route component={NotFound} />
     </Switch>
   );

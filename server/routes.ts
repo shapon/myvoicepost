@@ -194,7 +194,7 @@ function checkRole(...allowedRoles: UserRole[]) {
 
 // Login schema
 const loginSchema = z.object({
-  username: z.string().min(3, "Username must be at least 3 characters"),
+  identifier: z.string().min(3, "Username or email is required"),
   password: z.string().min(6, "Password must be at least 6 characters"),
 });
 
@@ -1275,12 +1275,15 @@ export async function registerRoutes(
         });
       }
 
-      const { username, password } = parseResult.data;
+      const { identifier, password } = parseResult.data;
 
-      // Find user
-      const user = await storage.getUserByUsername(username);
+      // Find user by username or email
+      let user = await storage.getUserByUsername(identifier);
+      if (!user && identifier.includes("@")) {
+        user = await storage.getUserByEmail?.(identifier);
+      }
       if (!user) {
-        return res.status(401).json({ error: "Invalid username or password" });
+        return res.status(401).json({ error: "Invalid credentials" });
       }
 
       // Validate password

@@ -31,10 +31,9 @@ export default function Header() {
   };
 
   const navLinks = [
-    { label: "How it works", href: "#how" },
-    { label: "Features", href: "#features" },
-    { label: "Use Cases", href: "#usecases" },
-    { label: "Reviews", href: "#reviews" },
+    { label: "Polish", href: "/polish", isRoute: true },
+    { label: "Translate", href: "/translate", isRoute: true },
+    { label: "Transcribe", href: "/process", isRoute: true },
     { label: "Pricing", href: "/pricing", isRoute: true },
   ];
 
@@ -104,16 +103,20 @@ export default function Header() {
                     <User className="w-4 h-4" />
                     <span>{user.username}</span>
                   </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <Link href="/saved">
+                    <DropdownMenuItem className="gap-2 cursor-pointer" data-testid="link-saved">
+                      <User className="w-4 h-4" />
+                      <span>Saved Items</span>
+                    </DropdownMenuItem>
+                  </Link>
                   {isAdmin && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <Link href="/dashboard">
-                        <DropdownMenuItem className="gap-2 cursor-pointer" data-testid="link-dashboard">
-                          <BarChart3 className="w-4 h-4" />
-                          <span>Dashboard</span>
-                        </DropdownMenuItem>
-                      </Link>
-                    </>
+                    <Link href="/dashboard">
+                      <DropdownMenuItem className="gap-2 cursor-pointer" data-testid="link-dashboard">
+                        <BarChart3 className="w-4 h-4" />
+                        <span>Dashboard</span>
+                      </DropdownMenuItem>
+                    </Link>
                   )}
                   <DropdownMenuSeparator />
                   <DropdownMenuItem 

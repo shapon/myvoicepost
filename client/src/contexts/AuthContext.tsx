@@ -12,7 +12,7 @@ interface AuthContextType {
   user: User | null;
   isLoading: boolean;
   isAdmin: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
   signup: (username: string, email: string, password: string, confirmPassword: string, otp: string) => Promise<void>;
   sendOtp: (email: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -57,8 +57,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     checkAuth();
   }, [checkAuth]);
 
-  const login = async (username: string, password: string) => {
-    const response = await apiRequest("POST", "/api/auth/login", { username, password });
+  const login = async (email: string, password: string) => {
+    const response = await apiRequest("POST", "/api/auth/login", { identifier: email, password });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || "Login failed");

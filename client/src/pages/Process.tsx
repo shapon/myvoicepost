@@ -1,16 +1,15 @@
 import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { apiRequest } from "@/lib/queryClient";
-import { Link } from "wouter";
+import { apiRequest, getAuthToken } from "@/lib/queryClient";
+import { useAuth } from "@/contexts/AuthContext";
+import AppLayout from "@/components/AppLayout";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
 import {
-  ArrowLeft,
   Upload,
   Link as LinkIcon,
   Loader2,
@@ -18,11 +17,11 @@ import {
   Sparkles,
   Copy,
   Check,
-  X,
   RefreshCw,
   MessageSquare,
   BookOpen,
   Heart,
+  Save,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -45,6 +44,7 @@ const CATEGORY_ICONS: Record<string, typeof MessageSquare> = {
 
 export default function Process() {
   const { toast } = useToast();
+  const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [inputMode, setInputMode] = useState<"url" | "file">("url");
@@ -55,6 +55,7 @@ export default function Process() {
   const [selectedTone, setSelectedTone] = useState<string | null>(null);
   const [resultText, setResultText] = useState("");
   const [copied, setCopied] = useState<"transcribed" | "result" | null>(null);
+  const [isSaving, setIsSaving] = useState(false);
 
   const { data: toneData } = useQuery<{ success: boolean; categories: Record<string, ToneCategory> }>({
     queryKey: ["/api/v1/m/tone-categories"],
@@ -86,8 +87,12 @@ export default function Process() {
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append("audio", file);
+      const token = getAuthToken();
+      const headers: Record<string, string> = {};
+      if (token) headers["Authorization"] = `Bearer ${token}`;
       const res = await fetch("/api/v1/m/transcribe-file", {
         method: "POST",
+        headers,
         body: formData,
       });
       if (!res.ok) {
@@ -153,6 +158,26 @@ export default function Process() {
     transformMutation.mutate({ text: transcribedText, toneId: selectedTone });
   }
 
+  async function handleSave(textToSave: string, type: "transcribed" | "result") {
+    if (!user) return;
+    setIsSaving(true);
+    try {
+      const res = await apiRequest("POST", "/api/saved-texts", {
+        type: "translate",
+        originalText: transcribedText,
+        polishedText: textToSave,
+        sourceLanguage: "en",
+        outputFormat: type === "result" ? getSelectedToneLabel() : "transcription",
+      });
+      if (!res.ok) throw new Error("Failed to save");
+      toast({ title: "Saved", description: "Text has been saved to your collection." });
+    } catch {
+      toast({ title: "Save failed", description: "Could not save the text.", variant: "destructive" });
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
   function handleFileChange(e: { target: { files: FileList | null } }) {
     const file = e.target.files?.[0];
     if (file) {
@@ -194,30 +219,18 @@ export default function Process() {
   const isTransforming = transformMutation.isPending;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      <header className="sticky top-0 z-50 bg-background/80 backdrop-blur-xl border-b border-border">
-        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between gap-2 h-14">
-            <div className="flex items-center gap-3">
-              <Link href="/">
-                <Button size="sm" variant="ghost" data-testid="button-back-home">
-                  <ArrowLeft className="h-4 w-4 mr-1" /> Home
-                </Button>
-              </Link>
-              <Separator orientation="vertical" className="h-6" />
-              <div className="flex items-center gap-2">
-                <Sparkles className="h-5 w-5 text-primary" />
-                <h1 className="text-lg font-semibold">Process Audio</h1>
-              </div>
-            </div>
-            <Button size="sm" variant="outline" onClick={handleReset} data-testid="button-reset">
-              <RefreshCw className="h-4 w-4 mr-1" /> Reset
-            </Button>
+    <AppLayout>
+      <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <FileAudio className="h-5 w-5 text-primary" />
+            <h1 className="text-xl font-semibold" data-testid="text-page-title">Transcribe Audio</h1>
           </div>
+          <Button size="sm" variant="outline" onClick={handleReset} data-testid="button-reset">
+            <RefreshCw className="h-4 w-4 mr-1" /> Reset
+          </Button>
         </div>
-      </header>
 
-      <main className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6 space-y-6">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
@@ -306,15 +319,29 @@ export default function Process() {
                   <FileAudio className="h-5 w-5 text-primary" />
                   Step 2: Transcribed Text
                 </CardTitle>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCopy(transcribedText, "transcribed")}
-                  data-testid="button-copy-transcribed"
-                >
-                  {copied === "transcribed" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                  {copied === "transcribed" ? "Copied" : "Copy"}
-                </Button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {user && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleSave(transcribedText, "transcribed")}
+                      disabled={isSaving}
+                      data-testid="button-save-transcribed"
+                    >
+                      {isSaving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+                      Save
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopy(transcribedText, "transcribed")}
+                    data-testid="button-copy-transcribed"
+                  >
+                    {copied === "transcribed" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                    {copied === "transcribed" ? "Copied" : "Copy"}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -378,9 +405,7 @@ export default function Process() {
                       <Badge
                         key={tone.id}
                         variant={selectedTone === tone.id ? "default" : "outline"}
-                        className={`cursor-pointer text-sm py-1.5 px-3 ${
-                          selectedTone === tone.id ? "" : ""
-                        }`}
+                        className="cursor-pointer text-sm py-1.5 px-3"
                         onClick={() => setSelectedTone(selectedTone === tone.id ? null : tone.id)}
                         data-testid={`badge-tone-${tone.id}`}
                       >
@@ -430,15 +455,29 @@ export default function Process() {
                     <Badge variant="secondary" className="ml-2">{getSelectedToneLabel()}</Badge>
                   )}
                 </CardTitle>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => handleCopy(resultText, "result")}
-                  data-testid="button-copy-result"
-                >
-                  {copied === "result" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                  {copied === "result" ? "Copied" : "Copy"}
-                </Button>
+                <div className="flex items-center gap-2 flex-wrap">
+                  {user && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleSave(resultText, "result")}
+                      disabled={isSaving}
+                      data-testid="button-save-result"
+                    >
+                      {isSaving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
+                      Save
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleCopy(resultText, "result")}
+                    data-testid="button-copy-result"
+                  >
+                    {copied === "result" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
+                    {copied === "result" ? "Copied" : "Copy"}
+                  </Button>
+                </div>
               </div>
             </CardHeader>
             <CardContent>
@@ -451,7 +490,7 @@ export default function Process() {
             </CardContent>
           </Card>
         )}
-      </main>
-    </div>
+      </div>
+    </AppLayout>
   );
 }
