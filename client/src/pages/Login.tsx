@@ -39,7 +39,7 @@ export default function Login() {
         title: "Welcome back!",
         description: "You've successfully logged in.",
       });
-      setLocation("/");
+      setLocation("/polish");
     } catch (error: any) {
       toast({
         title: "Login failed",

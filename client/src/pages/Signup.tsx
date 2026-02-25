@@ -107,7 +107,7 @@ export default function Signup() {
         title: "Account created!",
         description: "Welcome to MyVoicePost. Your email has been verified.",
       });
-      setLocation("/");
+      setLocation("/polish");
     } catch (error: any) {
       toast({
         title: "Signup failed",

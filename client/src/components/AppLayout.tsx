@@ -21,6 +21,7 @@ import {
   Languages,
   FileAudio,
   Bookmark,
+  CreditCard,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -104,19 +105,26 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                       <User className="w-4 h-4" />
                       <span>{user.username}</span>
                     </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <Link href="/pricing">
+                      <DropdownMenuItem
+                        className="gap-2 cursor-pointer"
+                        data-testid="link-pricing"
+                      >
+                        <CreditCard className="w-4 h-4" />
+                        <span>Pricing</span>
+                      </DropdownMenuItem>
+                    </Link>
                     {isAdmin && (
-                      <>
-                        <DropdownMenuSeparator />
-                        <Link href="/dashboard">
-                          <DropdownMenuItem
-                            className="gap-2 cursor-pointer"
-                            data-testid="link-dashboard"
-                          >
-                            <BarChart3 className="w-4 h-4" />
-                            <span>Dashboard</span>
-                          </DropdownMenuItem>
-                        </Link>
-                      </>
+                      <Link href="/dashboard">
+                        <DropdownMenuItem
+                          className="gap-2 cursor-pointer"
+                          data-testid="link-dashboard"
+                        >
+                          <BarChart3 className="w-4 h-4" />
+                          <span>Dashboard</span>
+                        </DropdownMenuItem>
+                      </Link>
                     )}
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -196,6 +204,17 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                         {user.username}
                       </span>
                     </div>
+                    <Link href="/pricing">
+                      <Button
+                        variant="ghost"
+                        className="w-full justify-start gap-2"
+                        onClick={() => setIsMobileMenuOpen(false)}
+                        data-testid="nav-mobile-pricing"
+                      >
+                        <CreditCard className="w-4 h-4" />
+                        Pricing
+                      </Button>
+                    </Link>
                     {isAdmin && (
                       <Link href="/dashboard">
                         <Button

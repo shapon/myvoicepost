@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
-import { Menu, X, Mic, LogOut, User, BarChart3 } from "lucide-react";
+import { Menu, X, Mic, LogOut, User, BarChart3, Sparkles, Languages, FileAudio, Bookmark, CreditCard } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
@@ -12,6 +12,20 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+
+const guestNavLinks = [
+  { label: "Polish", href: "/polish", icon: Sparkles },
+  { label: "Translate", href: "/translate", icon: Languages },
+  { label: "Transcribe", href: "/process", icon: FileAudio },
+  { label: "Pricing", href: "/pricing", icon: CreditCard },
+];
+
+const authNavLinks = [
+  { label: "Polish", href: "/polish", icon: Sparkles },
+  { label: "Translate", href: "/translate", icon: Languages },
+  { label: "Transcribe", href: "/process", icon: FileAudio },
+  { label: "Saved", href: "/saved", icon: Bookmark },
+];
 
 export default function Header() {
   const [isScrolled, setIsScrolled] = useState(false);
@@ -30,12 +44,7 @@ export default function Header() {
     await logout();
   };
 
-  const navLinks = [
-    { label: "Polish", href: "/polish", isRoute: true },
-    { label: "Translate", href: "/translate", isRoute: true },
-    { label: "Transcribe", href: "/process", isRoute: true },
-    { label: "Pricing", href: "/pricing", isRoute: true },
-  ];
+  const navLinks = user ? authNavLinks : guestNavLinks;
 
   return (
     <header
@@ -59,28 +68,22 @@ export default function Header() {
             <span className="font-bold text-xl tracking-tight">MyVoicePost</span>
           </a>
 
-          <nav className="hidden md:flex items-center gap-8">
-            {navLinks.map((link) => (
-              link.isRoute ? (
+          <nav className="hidden md:flex items-center gap-1">
+            {navLinks.map((link) => {
+              const Icon = link.icon;
+              return (
                 <Link
                   key={link.href}
                   href={link.href}
-                  className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
                   data-testid={`link-${link.label.toLowerCase().replace(/\s/g, "-")}`}
                 >
-                  {link.label}
+                  <Button variant="ghost" size="sm" className="gap-1.5 text-muted-foreground">
+                    <Icon className="w-4 h-4" />
+                    {link.label}
+                  </Button>
                 </Link>
-              ) : (
-                <a
-                  key={link.href}
-                  href={link.href}
-                  className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-                  data-testid={`link-${link.label.toLowerCase().replace(/\s/g, "-")}`}
-                >
-                  {link.label}
-                </a>
-              )
-            ))}
+              );
+            })}
           </nav>
 
           <div className="hidden md:flex items-center gap-3">
@@ -104,10 +107,10 @@ export default function Header() {
                     <span>{user.username}</span>
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
-                  <Link href="/saved">
-                    <DropdownMenuItem className="gap-2 cursor-pointer" data-testid="link-saved">
-                      <User className="w-4 h-4" />
-                      <span>Saved Items</span>
+                  <Link href="/pricing">
+                    <DropdownMenuItem className="gap-2 cursor-pointer" data-testid="link-pricing">
+                      <CreditCard className="w-4 h-4" />
+                      <span>Pricing</span>
                     </DropdownMenuItem>
                   </Link>
                   {isAdmin && (
@@ -166,50 +169,50 @@ export default function Header() {
             exit={{ opacity: 0, height: 0 }}
             className="md:hidden bg-background/95 backdrop-blur-xl border-b border-border"
           >
-            <div className="px-4 py-4 space-y-3">
-              {navLinks.map((link) => (
-                link.isRoute ? (
+            <div className="px-4 py-4 space-y-1">
+              {navLinks.map((link) => {
+                const Icon = link.icon;
+                return (
                   <Link
                     key={link.href}
                     href={link.href}
-                    className="block py-2 text-muted-foreground hover:text-foreground transition-colors"
                     onClick={() => setIsMobileMenuOpen(false)}
                   >
-                    {link.label}
+                    <Button variant="ghost" className="w-full justify-start gap-2">
+                      <Icon className="w-4 h-4" />
+                      {link.label}
+                    </Button>
                   </Link>
-                ) : (
-                  <a
-                    key={link.href}
-                    href={link.href}
-                    className="block py-2 text-muted-foreground hover:text-foreground transition-colors"
-                    onClick={() => setIsMobileMenuOpen(false)}
-                  >
-                    {link.label}
-                  </a>
-                )
-              ))}
-              <div className="pt-4 flex flex-col gap-2">
+                );
+              })}
+              <div className="pt-3 mt-3 border-t border-border flex flex-col gap-1">
                 {user ? (
                   <>
-                    <div className="flex items-center gap-2 py-2 px-3 bg-muted rounded-lg">
-                      <Avatar className="w-8 h-8">
+                    <div className="flex items-center gap-2 py-2 px-3">
+                      <Avatar className="w-7 h-7">
                         <AvatarFallback className="bg-primary text-primary-foreground text-xs">
                           {user.username.substring(0, 2).toUpperCase()}
                         </AvatarFallback>
                       </Avatar>
-                      <span className="font-medium">{user.username}</span>
+                      <span className="text-sm font-medium">{user.username}</span>
                     </div>
+                    <Link href="/pricing" onClick={() => setIsMobileMenuOpen(false)}>
+                      <Button variant="ghost" className="w-full justify-start gap-2" data-testid="link-pricing-mobile">
+                        <CreditCard className="w-4 h-4" />
+                        Pricing
+                      </Button>
+                    </Link>
                     {isAdmin && (
                       <Link href="/dashboard" onClick={() => setIsMobileMenuOpen(false)}>
-                        <Button variant="outline" className="w-full gap-2" data-testid="link-dashboard-mobile">
+                        <Button variant="ghost" className="w-full justify-start gap-2" data-testid="link-dashboard-mobile">
                           <BarChart3 className="w-4 h-4" />
                           Dashboard
                         </Button>
                       </Link>
                     )}
                     <Button 
-                      variant="outline" 
-                      className="w-full gap-2" 
+                      variant="ghost" 
+                      className="w-full justify-start gap-2 text-destructive" 
                       onClick={() => {
                         handleLogout();
                         setIsMobileMenuOpen(false);
@@ -221,13 +224,13 @@ export default function Header() {
                     </Button>
                   </>
                 ) : (
-                  <>
-                    <Link href="/login" onClick={() => setIsMobileMenuOpen(false)}>
+                  <div className="flex gap-2">
+                    <Link href="/login" className="flex-1" onClick={() => setIsMobileMenuOpen(false)}>
                       <Button variant="outline" className="w-full" data-testid="button-login-mobile">
                         Log in
                       </Button>
                     </Link>
-                    <Link href="/signup" onClick={() => setIsMobileMenuOpen(false)}>
+                    <Link href="/signup" className="flex-1" onClick={() => setIsMobileMenuOpen(false)}>
                       <Button
                         className="w-full bg-gradient-to-r from-primary to-purple-500"
                         data-testid="button-get-started-mobile"
@@ -235,7 +238,7 @@ export default function Header() {
                         Get Started
                       </Button>
                     </Link>
-                  </>
+                  </div>
                 )}
               </div>
             </div>
