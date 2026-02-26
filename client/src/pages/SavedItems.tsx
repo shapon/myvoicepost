@@ -86,7 +86,7 @@ export default function SavedItems() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const { data: savedData, isLoading } = useQuery<{ success: boolean; savedTexts: SavedText[]; count: number }>({
-    queryKey: ["/api/v1/a/saved-texts"],
+    queryKey: ["/api/v1/m/saved-texts"],
     enabled: !!user,
   });
 
@@ -94,7 +94,7 @@ export default function SavedItems() {
 
   const updateMutation = useMutation({
     mutationFn: async (item: { id: string; originalText: string; polishedText: string }) => {
-      const res = await apiRequest("PUT", `/api/v1/a/saved-texts/${item.id}`, {
+      const res = await apiRequest("PUT", `/api/v1/m/saved-texts/${item.id}`, {
         originalText: item.originalText,
         polishedText: item.polishedText,
       });
@@ -105,7 +105,7 @@ export default function SavedItems() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
       setEditingItem(null);
       toast({ title: "Saved item updated" });
     },
@@ -116,7 +116,7 @@ export default function SavedItems() {
 
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
-      const res = await apiRequest("DELETE", `/api/v1/a/saved-texts/${id}`);
+      const res = await apiRequest("DELETE", `/api/v1/m/saved-texts/${id}`);
       if (!res.ok) {
         const data = await res.json();
         throw new Error(data.error || "Failed to delete");
@@ -124,7 +124,7 @@ export default function SavedItems() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
       setDeletingId(null);
       toast({ title: "Item deleted" });
     },

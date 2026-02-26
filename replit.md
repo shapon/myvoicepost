@@ -75,20 +75,19 @@ Process page includes an output language selector using `supportedLanguages` fro
 
 ### Unified API Endpoints
 
-Web and mobile share the same backend handlers via URL prefix conventions:
-- **Public (shared)**: `/api/v1/p/*` — transcribe, polish, translate, tone-categories, process-url, auth/login, auth/signup, mail_otp, auth/google
-- **Authenticated (mobile)**: `/api/v1/m/*` — all auth features: saved-texts, settings, subscription, payment, admin/*, support, error-log, auth/logout, auth/me
-- **Authenticated (web)**: `/api/v1/a/*` — alias for `/api/v1/m/*`, rewritten by middleware so web and mobile hit the same handlers
+Web and mobile share the exact same backend handlers — no aliases or rewrites:
+- **Public (shared)**: `/api/v1/p/*` — transcribe, polish, translate, tone-categories, process-url, auth/login, auth/signup, mail_otp, auth/google, stripe-config, plans
+- **Authenticated**: `/api/v1/m/*` — used by both web and mobile for auth features: saved-texts, settings, subscription, payment, admin/*, support, error-log, auth/logout, auth/me, transcribe, polish, translate
 - **Web-specific public**: `/api/v1/wp/*` — web-only endpoints (e.g., `/api/v1/wp/auth/google/config` for GSI client ID)
-- **Admin**: `/api/v1/a/admin/*` (web) or `/api/v1/m/admin/*` (mobile) — dashboard stats, users, subscriptions, payments, support, errors (ADMIN role required)
+- **Admin**: `/api/v1/m/admin/*` — dashboard stats, users, subscriptions, payments, support, errors (ADMIN role required)
 - **Stripe**: `/api/v1/m/stripe-webhook`, `/api/v1/m/create-subscription`, etc.
 - **Health**: `GET /api/health` — server health check (only non-v1 endpoint remaining)
-
-The `/api/v1/a/` ? `/api/v1/m/` rewrite middleware is registered early in both `server/routes.ts` (dev) and `api/index.ts` (Vercel prod).
 
 Audio is sent as base64 JSON (`{ audio: base64, mimeType }`) from both web and mobile.
 Public endpoints accept `text` field; auth endpoints accept `originalText` for polish/translate.
 Auth endpoints return `{ success, savedTexts }` wrapper format.
+Web frontend uses JWT Bearer tokens from localStorage (`mvp_auth_token`) for `/api/v1/m/*` endpoints.
+Landing page VoiceRecorder uses two-step flow (transcribe ? polish/translate) via `/api/v1/p/*` public endpoints.
 
 ### Shared Constants & Reusable Utilities
 

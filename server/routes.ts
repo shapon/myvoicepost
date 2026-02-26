@@ -181,15 +181,6 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express,
 ): Promise<Server> {
-  // Rewrite /api/v1/a/* ? /api/v1/m/* so web uses "a" (authenticated) prefix
-  // while mobile keeps "m" (mobile) prefix. Both hit the same handlers.
-  app.use((req, _res, next) => {
-    if (req.url.startsWith("/api/v1/a/")) {
-      req.url = req.url.replace("/api/v1/a/", "/api/v1/m/");
-    }
-    next();
-  });
-
   // Apply JWT middleware to all API routes
   app.use("/api", jwtAuthMiddleware);
 

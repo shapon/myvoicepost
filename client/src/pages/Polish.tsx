@@ -48,7 +48,7 @@ export default function Polish() {
 
   const polishMutation = useMutation({
     mutationFn: async (text: string) => {
-      const endpoint = user ? "/api/v1/a/polish" : "/api/v1/p/polish";
+      const endpoint = user ? "/api/v1/m/polish" : "/api/v1/p/polish";
       const body = user
         ? { originalText: text, language, outputFormat, outputType }
         : { text, language, outputFormat, outputType };

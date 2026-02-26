@@ -34,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const response = await fetch("/api/v1/a/auth/me", {
+      const response = await fetch("/api/v1/m/auth/me", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -109,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await apiRequest("POST", "/api/v1/a/auth/logout", {});
+    await apiRequest("POST", "/api/v1/m/auth/logout", {});
     removeAuthToken();
     setUser(null);
   };

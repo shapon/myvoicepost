@@ -9,7 +9,7 @@ import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, and, desc, gte, lt, lte, sql } from "drizzle-orm";
+import { eq, and, desc, gte, lt, lte, sql, count } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, integer, boolean, numeric } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
@@ -43,7 +43,7 @@ const PROCESS_AUDIO_CFG = {
 };
 
 // Concurrency limiter for AI requests - prevents rate limiting under high load
-const aiRequestLimiter = pLimit(5);
+const aiRequestLimiter = pLimit(50);
 
 // ============ DATABASE SCHEMA ============
 const users = pgTable("mvp_users", {
@@ -51,6 +51,7 @@ const users = pgTable("mvp_users", {
   username: varchar("username", { length: 255 }).notNull().unique(),
   email: varchar("email", { length: 255 }),
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
+  role: varchar("role", { length: 20 }).notNull().default("GUEST"),
   trialStartsAt: timestamp("trial_starts_at"),
   trialEndsAt: timestamp("trial_ends_at"),
   trialUsed: boolean("trial_used").default(false),
@@ -197,6 +198,30 @@ const notificationLog = pgTable("mvp_notification_log", {
   sentAt: timestamp("sent_at").defaultNow(),
   status: varchar("status", { length: 20 }).default("sent"),
   message: text("message"),
+});
+
+const supportRequests = pgTable("mvp_support_requests", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id"),
+  email: varchar("email", { length: 255 }).notNull(),
+  subject: varchar("subject", { length: 500 }).notNull(),
+  message: text("message").notNull(),
+  status: varchar("status", { length: 20 }).notNull().default("open"),
+  platform: varchar("platform", { length: 20 }).notNull().default("web"),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+const errorLogs = pgTable("mvp_error_logs", {
+  id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
+  userId: uuid("user_id"),
+  errorMessage: text("error_message").notNull(),
+  errorStack: text("error_stack"),
+  errorCode: varchar("error_code", { length: 50 }),
+  platform: varchar("platform", { length: 20 }).notNull().default("web"),
+  endpoint: varchar("endpoint", { length: 500 }),
+  metadata: text("metadata"),
+  createdAt: timestamp("created_at").defaultNow(),
 });
 
 type User = typeof users.$inferSelect;
@@ -1252,14 +1277,6 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 
-// Rewrite /api/v1/a/* → /api/v1/m/* so web uses "a" (authenticated) prefix
-// while mobile keeps "m" (mobile) prefix. Both hit the same handlers.
-app.use((req, _res, next) => {
-  if (req.url.startsWith("/api/v1/a/")) {
-    req.url = req.url.replace("/api/v1/a/", "/api/v1/m/");
-  }
-  next();
-});
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -6128,6 +6145,316 @@ app.put("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMid
     res.json({ success: true, adminMail: emails.join(",") });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ==========================================
+// ADMIN DASHBOARD API ENDPOINTS (Web)
+// ==========================================
+
+// GET /api/v1/m/admin/stats - Dashboard summary stats
+app.get("/api/v1/m/admin/stats", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const [userCount] = await db.select({ value: count() }).from(users);
+    const [subCount] = await db.select({ value: count() }).from(userSubscriptions).where(eq(userSubscriptions.status, "active"));
+    const [supportCount] = await db.select({ value: count() }).from(supportRequests).where(eq(supportRequests.status, "open"));
+    const [errorCount] = await db.select({ value: count() }).from(errorLogs);
+
+    res.json({
+      success: true,
+      stats: {
+        totalUsers: userCount.value,
+        activeSubscriptions: subCount.value,
+        openSupportRequests: supportCount.value,
+        totalErrors: errorCount.value,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Admin Stats] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch stats" });
+  }
+});
+
+// GET /api/v1/m/admin/users - List all users
+app.get("/api/v1/m/admin/users", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
+
+    const allUsers = await db.select({
+      id: users.id,
+      username: users.username,
+      email: users.email,
+      role: users.role,
+      trialStartsAt: users.trialStartsAt,
+      trialEndsAt: users.trialEndsAt,
+      trialUsed: users.trialUsed,
+      stripeCustomerId: users.stripeCustomerId,
+      stripeSubscriptionId: users.stripeSubscriptionId,
+      createdAt: users.createdAt,
+      updatedAt: users.updatedAt,
+    }).from(users).orderBy(desc(users.createdAt)).limit(limit).offset(offset);
+
+    const [totalResult] = await db.select({ value: count() }).from(users);
+
+    res.json({
+      success: true,
+      users: allUsers,
+      pagination: { page, limit, total: totalResult.value },
+    });
+  } catch (error: any) {
+    console.error("[Admin Users] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch users" });
+  }
+});
+
+// GET /api/v1/m/admin/subscriptions - List all subscriptions
+app.get("/api/v1/m/admin/subscriptions", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
+
+    const allSubs = await db.select({
+      id: userSubscriptions.id,
+      userId: userSubscriptions.userId,
+      planId: userSubscriptions.planId,
+      validDateUpto: userSubscriptions.validDateUpto,
+      minutesUsed: userSubscriptions.minutesUsed,
+      minutesRemaining: userSubscriptions.minutesRemaining,
+      status: userSubscriptions.status,
+      createdAt: userSubscriptions.createdAt,
+    }).from(userSubscriptions).orderBy(desc(userSubscriptions.createdAt)).limit(limit).offset(offset);
+
+    const [totalResult] = await db.select({ value: count() }).from(userSubscriptions);
+
+    const plans = await db.select().from(subscriptionPlans);
+    const planMap = Object.fromEntries(plans.map((p: any) => [p.id, p]));
+
+    const subsWithUser = await Promise.all(allSubs.map(async (sub: any) => {
+      const userResult = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, sub.userId)).limit(1);
+      return {
+        ...sub,
+        username: userResult[0]?.username || "Unknown",
+        email: userResult[0]?.email || "Unknown",
+        planName: planMap[sub.planId]?.name || "Unknown",
+      };
+    }));
+
+    res.json({
+      success: true,
+      subscriptions: subsWithUser,
+      pagination: { page, limit, total: totalResult.value },
+    });
+  } catch (error: any) {
+    console.error("[Admin Subscriptions] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch subscriptions" });
+  }
+});
+
+// GET /api/v1/m/admin/payments - List Stripe payment history
+app.get("/api/v1/m/admin/payments", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 20;
+    const startingAfter = req.query.starting_after as string | undefined;
+
+    const stripe = await getStripeClient();
+    const params: any = { limit, expand: ["data.customer"] };
+    if (startingAfter) params.starting_after = startingAfter;
+
+    const charges = await stripe.charges.list(params);
+
+    const payments = charges.data.map((charge: any) => ({
+      id: charge.id,
+      amount: charge.amount / 100,
+      currency: charge.currency,
+      status: charge.status,
+      customerEmail: charge.customer?.email || charge.billing_details?.email || "N/A",
+      customerName: charge.customer?.name || charge.billing_details?.name || "N/A",
+      description: charge.description || "Subscription payment",
+      created: new Date(charge.created * 1000).toISOString(),
+      receiptUrl: charge.receipt_url,
+    }));
+
+    res.json({
+      success: true,
+      payments,
+      hasMore: charges.has_more,
+      lastId: charges.data.length > 0 ? charges.data[charges.data.length - 1].id : null,
+    });
+  } catch (error: any) {
+    console.error("[Admin Payments] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch payments" });
+  }
+});
+
+// GET /api/v1/m/admin/support - List support requests
+app.get("/api/v1/m/admin/support", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
+    const status = req.query.status as string | undefined;
+
+    const allRequests = status
+      ? await db.select().from(supportRequests).where(eq(supportRequests.status, status)).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset)
+      : await db.select().from(supportRequests).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset);
+
+    const totalQuery = status
+      ? await db.select({ value: count() }).from(supportRequests).where(eq(supportRequests.status, status))
+      : await db.select({ value: count() }).from(supportRequests);
+
+    res.json({
+      success: true,
+      requests: allRequests,
+      pagination: { page, limit, total: totalQuery[0].value },
+    });
+  } catch (error: any) {
+    console.error("[Admin Support] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch support requests" });
+  }
+});
+
+// PATCH /api/v1/m/admin/support/:id - Update support request status
+app.patch("/api/v1/m/admin/support/:id", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
+      return res.status(400).json({ success: false, error: "Invalid status" });
+    }
+    await db.update(supportRequests).set({ status, updatedAt: new Date() }).where(eq(supportRequests.id, id));
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("[Admin Support Update] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to update support request" });
+  }
+});
+
+// GET /api/v1/m/admin/errors - List error logs
+app.get("/api/v1/m/admin/errors", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+  try {
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 20;
+    const offset = (page - 1) * limit;
+
+    const allErrors = await db.select().from(errorLogs).orderBy(desc(errorLogs.createdAt)).limit(limit).offset(offset);
+    const [totalResult] = await db.select({ value: count() }).from(errorLogs);
+
+    const errorsWithUser = await Promise.all(allErrors.map(async (err: any) => {
+      if (err.userId) {
+        const userResult = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, err.userId)).limit(1);
+        return { ...err, username: userResult[0]?.username, email: userResult[0]?.email };
+      }
+      return { ...err, username: null, email: null };
+    }));
+
+    res.json({
+      success: true,
+      errors: errorsWithUser,
+      pagination: { page, limit, total: totalResult.value },
+    });
+  } catch (error: any) {
+    console.error("[Admin Errors] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch error logs" });
+  }
+});
+
+// POST /api/v1/m/support - Submit a support request (any authenticated user)
+app.post("/api/v1/m/support", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.user?.userId || req.jwtUser?.userId;
+    const { subject, message, email, platform } = req.body;
+    if (!subject || !message || !email) {
+      return res.status(400).json({ success: false, error: "Subject, message, and email are required" });
+    }
+    await db.insert(supportRequests).values({
+      userId: userId || undefined,
+      email,
+      subject,
+      message,
+      platform: platform || "web",
+    });
+    res.json({ success: true, message: "Support request submitted" });
+  } catch (error: any) {
+    console.error("[Support] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to submit support request" });
+  }
+});
+
+// POST /api/v1/m/error-log - Log an error from client (any authenticated user)
+app.post("/api/v1/m/error-log", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.user?.userId || req.jwtUser?.userId;
+    const { errorMessage, errorStack, errorCode, platform, endpoint, metadata } = req.body;
+    if (!errorMessage) {
+      return res.status(400).json({ success: false, error: "errorMessage is required" });
+    }
+    await db.insert(errorLogs).values({
+      userId: userId || undefined,
+      errorMessage,
+      errorStack: errorStack || null,
+      errorCode: errorCode || null,
+      platform: platform || "web",
+      endpoint: endpoint || null,
+      metadata: metadata ? JSON.stringify(metadata) : null,
+    });
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("[Error Log] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to log error" });
+  }
+});
+
+// GET /api/v1/m/user-role - Get the authenticated user's role
+app.get("/api/v1/m/user-role", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.user?.userId || req.jwtUser?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Not authenticated" });
+    }
+    const userResult = await db.select({ role: users.role }).from(users).where(eq(users.id, userId)).limit(1);
+    const role = userResult[0]?.role || "GUEST";
+    res.json({ success: true, role });
+  } catch (error: any) {
+    console.error("[User Role] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch user role" });
+  }
+});
+
+// POST /api/v1/m/transcribe-file - Transcribe uploaded audio file
+app.post("/api/v1/m/transcribe-file", upload.single("audio"), async (req: any, res) => {
+  try {
+    const geminiApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!geminiApiKey) {
+      return res.status(500).json({ success: false, error: "Gemini AI integration not configured" });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ success: false, error: "No audio file provided" });
+    }
+
+    console.log(`[Process Transcribe-File] File: ${req.file.originalname}, Size: ${req.file.size} bytes, MIME: ${req.file.mimetype}`);
+
+    const transcribedText = await transcribeAudio(req.file.buffer, req.file.mimetype);
+
+    if (!transcribedText || transcribedText.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        error: "Could not transcribe audio. The file may not contain speech.",
+      });
+    }
+
+    console.log(`[Process Transcribe-File] Success: "${transcribedText.substring(0, 100)}..."`);
+
+    res.json({
+      success: true,
+      transcribedText: transcribedText.trim(),
+    });
+  } catch (error: any) {
+    console.error("[Process Transcribe-File] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to transcribe audio file" });
   }
 });
 
