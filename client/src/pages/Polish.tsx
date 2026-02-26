@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
-import { supportedLanguages } from "@shared/schema";
+import { OUTPUT_FORMATS, OUTPUT_TYPES, getLanguageName } from "@shared/schema";
+import { useSaveTextMutation } from "@/hooks/use-save-text";
 import AppLayout from "@/components/AppLayout";
 import WebVoiceRecorder from "@/components/WebVoiceRecorder";
 import WebTextResultCard from "@/components/WebTextResultCard";
+import LanguageSelect from "@/components/LanguageSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,21 +29,6 @@ import {
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
-const OUTPUT_FORMATS = [
-  { value: "professional", label: "Professional" },
-  { value: "casual", label: "Casual" },
-  { value: "formal", label: "Formal" },
-  { value: "friendly", label: "Friendly" },
-];
-
-const OUTPUT_TYPES = [
-  { value: "message", label: "Message" },
-  { value: "note", label: "Note" },
-  { value: "email", label: "Email" },
-  { value: "post", label: "Post" },
-  { value: "journal", label: "Journal" },
-];
-
 interface PolishResult {
   id: string;
   originalText: string;
@@ -61,12 +48,11 @@ export default function Polish() {
 
   const polishMutation = useMutation({
     mutationFn: async (text: string) => {
-      const res = await apiRequest("POST", "/api/polish-text", {
-        text,
-        language,
-        outputFormat,
-        outputType,
-      });
+      const endpoint = user ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const body = user
+        ? { originalText: text, language, outputFormat, outputType }
+        : { text, language, outputFormat, outputType };
+      const res = await apiRequest("POST", endpoint, body);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to polish text");
@@ -75,7 +61,7 @@ export default function Polish() {
     },
     onSuccess: (data) => {
       setResult({
-        id: data.id,
+        id: data.id || "",
         originalText: data.originalText,
         polishedText: data.polishedText,
       });
@@ -86,31 +72,7 @@ export default function Polish() {
     },
   });
 
-  const saveMutation = useMutation({
-    mutationFn: async (polishedText: string) => {
-      if (!result) throw new Error("No result to save");
-      const res = await apiRequest("POST", "/api/saved-texts", {
-        type: "polish",
-        originalText: result.originalText,
-        polishedText,
-        sourceLanguage: language,
-        outputFormat,
-        outputType,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to save");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
-      toast({ title: "Saved", description: "Text saved to your collection." });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Save failed", description: err.message, variant: "destructive" });
-    },
-  });
+  const saveMutation = useSaveTextMutation();
 
   function handlePolish() {
     if (!inputText.trim()) {
@@ -148,7 +110,7 @@ export default function Polish() {
     }
   }
 
-  const selectedLangName = supportedLanguages.find((l) => l.code === language)?.name || language;
+  const selectedLangName = getLanguageName(language);
 
   return (
     <AppLayout>
@@ -171,21 +133,12 @@ export default function Polish() {
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="space-y-1.5">
-                <label className="text-sm text-muted-foreground">Language</label>
-                <Select value={language} onValueChange={setLanguage}>
-                  <SelectTrigger data-testid="select-language">
-                    <SelectValue placeholder="Language" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {supportedLanguages.map((lang) => (
-                      <SelectItem key={lang.code} value={lang.code} data-testid={`option-lang-${lang.code}`}>
-                        {lang.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
+              <LanguageSelect
+                value={language}
+                onValueChange={setLanguage}
+                label="Language"
+                testIdPrefix="language"
+              />
               <div className="space-y-1.5">
                 <label className="text-sm text-muted-foreground">Tone</label>
                 <Select value={outputFormat} onValueChange={setOutputFormat}>
@@ -299,7 +252,14 @@ export default function Polish() {
               badge={selectedLangName}
               editable
               saveable={!!user}
-              onSave={() => saveMutation.mutate(result.polishedText)}
+              onSave={() => saveMutation.mutate({
+                type: "polish",
+                originalText: result.originalText,
+                polishedText: result.polishedText,
+                sourceLanguage: language,
+                outputFormat,
+                outputType,
+              })}
               isSaving={saveMutation.isPending}
               onTextChange={handlePolishedTextEdit}
               icon={<Sparkles className="h-4 w-4 text-primary" />}

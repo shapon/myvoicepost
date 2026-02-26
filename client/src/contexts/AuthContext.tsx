@@ -33,7 +33,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const response = await fetch("/api/auth/me", {
+      const response = await fetch("/api/v1/m/auth/me", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -58,7 +58,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [checkAuth]);
 
   const login = async (email: string, password: string) => {
-    const response = await apiRequest("POST", "/api/auth/login", { identifier: email, password });
+    const response = await apiRequest("POST", "/api/v1/p/auth/login", { identifier: email, password });
     const data = await response.json();
     if (!response.ok) {
       throw new Error(data.error || "Login failed");
@@ -78,7 +78,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signup = async (username: string, email: string, password: string, confirmPassword: string, otp: string) => {
-    const response = await apiRequest("POST", "/api/auth/signup", { 
+    const response = await apiRequest("POST", "/api/v1/p/auth/signup", { 
       username, 
       email,
       password, 
@@ -96,7 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await apiRequest("POST", "/api/auth/logout", {});
+    await apiRequest("POST", "/api/v1/m/auth/logout", {});
     removeAuthToken();
     setUser(null);
   };

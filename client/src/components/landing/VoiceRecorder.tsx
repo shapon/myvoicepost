@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
+import { supportedLanguages, OUTPUT_FORMATS, OUTPUT_TYPES, getLanguageName } from "@shared/schema";
 import type { TranslationResult, SavedText } from "@shared/schema";
 
 // Voice Input Button Component for inline voice recording
@@ -76,15 +77,35 @@ function VoiceInputButton({ onTranscription, language = "en", disabled, classNam
     }
   };
 
+  const blobToBase64 = async (blob: Blob): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.split(",")[1] || "";
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  };
+
   const processAudio = async (audioBlob: Blob) => {
     try {
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "recording.webm");
-      formData.append("language", language);
-
-      const response = await fetch("/api/transcribe", {
+      const audio = await blobToBase64(audioBlob);
+      const token = localStorage.getItem("mvp_auth_token");
+      const endpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+      const response = await fetch(endpoint, {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          audio,
+          mimeType: audioBlob.type || "audio/webm",
+          language,
+        }),
       });
 
       if (!response.ok) {
@@ -92,7 +113,7 @@ function VoiceInputButton({ onTranscription, language = "en", disabled, classNam
       }
 
       const data = await response.json();
-      onTranscription(data.text);
+      onTranscription(data.originalText);
     } catch (error) {
       toast({
         title: "Voice input failed",
@@ -124,41 +145,6 @@ function VoiceInputButton({ onTranscription, language = "en", disabled, classNam
   );
 }
 
-const supportedLanguages = [
-  { code: "en", name: "English", flag: "US" },
-  { code: "es", name: "Spanish", flag: "ES" },
-  { code: "fr", name: "French", flag: "FR" },
-  { code: "de", name: "German", flag: "DE" },
-  { code: "it", name: "Italian", flag: "IT" },
-  { code: "pt", name: "Portuguese", flag: "PT" },
-  { code: "nl", name: "Dutch", flag: "NL" },
-  { code: "ru", name: "Russian", flag: "RU" },
-  { code: "zh", name: "Chinese", flag: "CN" },
-  { code: "ja", name: "Japanese", flag: "JP" },
-  { code: "ko", name: "Korean", flag: "KR" },
-  { code: "ar", name: "Arabic", flag: "SA" },
-  { code: "hi", name: "Hindi", flag: "IN" },
-  { code: "tr", name: "Turkish", flag: "TR" },
-  { code: "pl", name: "Polish", flag: "PL" },
-  { code: "vi", name: "Vietnamese", flag: "VN" },
-  { code: "th", name: "Thai", flag: "TH" },
-  { code: "id", name: "Indonesian", flag: "ID" },
-];
-
-const outputFormats = [
-  { value: "professional", label: "Professional" },
-  { value: "casual", label: "Casual" },
-  { value: "formal", label: "Formal" },
-  { value: "friendly", label: "Friendly" },
-];
-
-const outputTypes = [
-  { value: "message", label: "Message" },
-  { value: "note", label: "Note" },
-  { value: "email", label: "Email" },
-  { value: "post", label: "Post" },
-  { value: "journal", label: "Journal" },
-];
 
 const templateOptions = [
   { value: "none", label: "No Template" },
@@ -268,16 +254,17 @@ function PolishRecorder() {
   const queryClient = useQueryClient();
   
   // Fetch saved texts for logged-in users
-  const { data: savedTexts = [] } = useQuery<SavedText[]>({
-    queryKey: ["/api/saved-texts", "polish"],
+  const { data: savedTextsPolishData } = useQuery<{ success: boolean; savedTexts: SavedText[] }>({
+    queryKey: ["/api/v1/m/saved-texts", "polish"],
     enabled: !!user,
   });
+  const savedTexts = savedTextsPolishData?.savedTexts || [];
   
   // Save text mutation
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; polishedText: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch("/api/saved-texts", {
+      const response = await fetch("/api/v1/m/saved-texts", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -297,7 +284,7 @@ function PolishRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
       setIsSaving(false);
       toast({ title: "Saved!", description: "Your text has been saved." });
     },
@@ -311,16 +298,19 @@ function PolishRecorder() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch(`/api/saved-texts/${id}`, {
+      const response = await fetch(`/api/v1/m/saved-texts/${id}`, {
         method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to delete");
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
       toast({ title: "Deleted", description: "Saved text removed." });
     },
   });
@@ -467,23 +457,42 @@ function PolishRecorder() {
 
   const polishMutation = useMutation({
     mutationFn: async (audioBlob: Blob) => {
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "recording.webm");
-      formData.append("language", language);
-      formData.append("outputFormat", outputFormat);
-      formData.append("outputType", outputType);
-
-      const response = await fetch("/api/polish-speech", {
+      const audio = await blobToBase64(audioBlob);
+      const token = localStorage.getItem("mvp_auth_token");
+      const transcribeEndpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+      const transcribeRes = await fetch(transcribeEndpoint, {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ audio, mimeType: audioBlob.type || "audio/webm", language }),
       });
+      if (!transcribeRes.ok) {
+        const err = await transcribeRes.json();
+        throw new Error(err.error || "Transcription failed");
+      }
+      const transcribeData = await transcribeRes.json();
+      const originalText = transcribeData.originalText;
 
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Polishing failed");
+      const polishEndpoint = token ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const polishBody = token
+        ? { originalText, language, outputFormat, outputType }
+        : { text: originalText, language, outputFormat, outputType };
+      const polishRes = await fetch(polishEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(polishBody),
+      });
+      if (!polishRes.ok) {
+        const err = await polishRes.json();
+        throw new Error(err.error || "Polishing failed");
       }
 
-      return response.json() as Promise<TranslationResult>;
+      return polishRes.json() as Promise<TranslationResult>;
     },
     onSuccess: (data) => {
       setResult(data);
@@ -508,17 +517,18 @@ function PolishRecorder() {
 
   const textPolishMutation = useMutation({
     mutationFn: async (text: string) => {
-      const response = await fetch("/api/polish-text", {
+      const token = localStorage.getItem("mvp_auth_token");
+      const endpoint = token ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const body = token
+        ? { originalText: text, language, outputFormat, outputType }
+        : { text, language, outputFormat, outputType };
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          text,
-          language,
-          outputFormat,
-          outputType,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -560,18 +570,18 @@ function PolishRecorder() {
 
   const repolishMutation = useMutation({
     mutationFn: async ({ text, tone, template }: { text: string; tone: string; template: string }) => {
-      const response = await fetch("/api/polish-text", {
+      const token = localStorage.getItem("mvp_auth_token");
+      const endpoint = token ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const body = token
+        ? { originalText: text, language, outputFormat: tone, outputType, template }
+        : { text, language, outputFormat: tone, outputType, template };
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          text,
-          language,
-          outputFormat: tone,
-          outputType,
-          template,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -613,17 +623,18 @@ function PolishRecorder() {
   // Translate polished text to another language
   const translatePolishedMutation = useMutation({
     mutationFn: async ({ text, targetLang }: { text: string; targetLang: string }) => {
-      const response = await fetch("/api/translate-text", {
+      const token = localStorage.getItem("mvp_auth_token");
+      const endpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const body = token
+        ? { originalText: text, sourceLanguage: language, targetLanguage: targetLang, outputFormat }
+        : { text, sourceLanguage: language, targetLanguage: targetLang, outputFormat };
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          text,
-          sourceLanguage: language,
-          targetLanguage: targetLang,
-          outputFormat: outputFormat,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -928,7 +939,7 @@ function PolishRecorder() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {outputTypes.map((type) => (
+                  {OUTPUT_TYPES.map((type) => (
                     <SelectItem key={type.value} value={type.value} data-testid={`option-type-${type.value}`}>
                       {type.label}
                     </SelectItem>
@@ -944,7 +955,7 @@ function PolishRecorder() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {outputFormats.map((format) => (
+                  {OUTPUT_FORMATS.map((format) => (
                     <SelectItem key={format.value} value={format.value} data-testid={`option-polish-format-${format.value}`}>
                       {format.label}
                     </SelectItem>
@@ -1258,7 +1269,7 @@ function PolishRecorder() {
                                 <SelectValue />
                               </SelectTrigger>
                               <SelectContent>
-                                {outputFormats.map((format) => (
+                                {OUTPUT_FORMATS.map((format) => (
                                   <SelectItem key={format.value} value={format.value} data-testid={`option-tone-${format.value}`}>
                                     {format.label}
                                   </SelectItem>
@@ -1481,16 +1492,17 @@ function TranslateRecorder() {
   const queryClient = useQueryClient();
   
   // Fetch saved texts for logged-in users
-  const { data: savedTexts = [] } = useQuery<SavedText[]>({
-    queryKey: ["/api/saved-texts", "translate"],
+  const { data: savedTextsData } = useQuery<{ success: boolean; savedTexts: SavedText[] }>({
+    queryKey: ["/api/v1/m/saved-texts", "translate"],
     enabled: !!user,
   });
+  const savedTexts = savedTextsData?.savedTexts || [];
   
   // Save text mutation
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; translatedText: string; polishedText: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch("/api/saved-texts", {
+      const response = await fetch("/api/v1/m/saved-texts", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -1511,7 +1523,7 @@ function TranslateRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
       setIsSaving(false);
       toast({ title: "Saved!", description: "Your translation has been saved." });
     },
@@ -1525,16 +1537,19 @@ function TranslateRecorder() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch(`/api/saved-texts/${id}`, {
+      const response = await fetch(`/api/v1/m/saved-texts/${id}`, {
         method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         credentials: "include",
       });
       if (!response.ok) throw new Error("Failed to delete");
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
       toast({ title: "Deleted", description: "Saved translation removed." });
     },
   });
@@ -1681,15 +1696,35 @@ function TranslateRecorder() {
 
   const translateMutation = useMutation({
     mutationFn: async (audioBlob: Blob) => {
-      const formData = new FormData();
-      formData.append("audio", audioBlob, "recording.webm");
-      formData.append("sourceLanguage", sourceLanguage);
-      formData.append("targetLanguage", targetLanguage);
-      formData.append("outputFormat", outputFormat);
-
-      const response = await fetch("/api/translate-speech", {
+      const audio = await blobToBase64(audioBlob);
+      const token = localStorage.getItem("mvp_auth_token");
+      const transcribeEndpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+      const transcribeRes = await fetch(transcribeEndpoint, {
         method: "POST",
-        body: formData,
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({ audio, mimeType: audioBlob.type || "audio/webm", language: sourceLanguage }),
+      });
+      if (!transcribeRes.ok) {
+        const err = await transcribeRes.json();
+        throw new Error(err.error || "Transcription failed");
+      }
+      const transcribeData = await transcribeRes.json();
+      const originalText = transcribeData.originalText;
+
+      const translateEndpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const translateBody = token
+        ? { originalText, sourceLanguage, targetLanguage, outputFormat }
+        : { text: originalText, sourceLanguage, targetLanguage, outputFormat };
+      const response = await fetch(translateEndpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(translateBody),
       });
 
       if (!response.ok) {
@@ -1722,17 +1757,18 @@ function TranslateRecorder() {
 
   const textTranslateMutation = useMutation({
     mutationFn: async (text: string) => {
-      const response = await fetch("/api/translate-text", {
+      const token = localStorage.getItem("mvp_auth_token");
+      const endpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const body = token
+        ? { originalText: text, sourceLanguage, targetLanguage, outputFormat }
+        : { text, sourceLanguage, targetLanguage, outputFormat };
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          text,
-          sourceLanguage,
-          targetLanguage,
-          outputFormat,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -1776,17 +1812,18 @@ function TranslateRecorder() {
   // Convert polished text to another language
   const convertLanguageMutation = useMutation({
     mutationFn: async ({ text, toLang }: { text: string; toLang: string }) => {
-      const response = await fetch("/api/translate-text", {
+      const token = localStorage.getItem("mvp_auth_token");
+      const endpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const body = token
+        ? { originalText: text, sourceLanguage: targetLanguage, targetLanguage: toLang, outputFormat }
+        : { text, sourceLanguage: targetLanguage, targetLanguage: toLang, outputFormat };
+      const response = await fetch(endpoint, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
-        body: JSON.stringify({
-          text,
-          sourceLanguage: targetLanguage,
-          targetLanguage: toLang,
-          outputFormat,
-        }),
+        body: JSON.stringify(body),
       });
 
       if (!response.ok) {
@@ -1952,9 +1989,6 @@ function TranslateRecorder() {
     setTargetLanguage(temp);
   };
 
-  const getLanguageName = (code: string) => {
-    return supportedLanguages.find((l) => l.code === code)?.name || code;
-  };
 
   const copyToClipboard = async (text: string, field: string) => {
     await navigator.clipboard.writeText(text);
@@ -2127,7 +2161,7 @@ function TranslateRecorder() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {outputFormats.map((format) => (
+                  {OUTPUT_FORMATS.map((format) => (
                     <SelectItem key={format.value} value={format.value} data-testid={`option-format-${format.value}`}>
                       {format.label}
                     </SelectItem>

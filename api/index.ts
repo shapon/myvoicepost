@@ -1270,94 +1270,6 @@ app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.post("/api/polish-speech", upload.single("audio"), async (req, res) => {
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "Gemini API key not configured." });
-    }
-
-    const parseResult = polishRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: "Invalid request", details: parseResult.error.errors });
-    }
-
-    const { language, outputFormat, outputType } = parseResult.data;
-
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file provided" });
-    }
-
-    const originalText = await transcribeAudio(req.file.buffer, req.file.mimetype);
-    if (!originalText || originalText.trim() === "") {
-      return res.status(400).json({ error: "Could not transcribe audio." });
-    }
-
-    const polishedText = await polishText(originalText, language, outputFormat, outputType);
-
-    const id = randomUUID();
-    const translation = {
-      id,
-      originalText,
-      translatedText: originalText,
-      polishedText,
-      sourceLanguage: language,
-      targetLanguage: language,
-      outputFormat,
-      createdAt: new Date(),
-    };
-    translations.set(id, translation);
-
-    res.json(translation);
-  } catch (error: any) {
-    console.error("Polish error:", error);
-    res.status(500).json({ error: error.message || "Failed to process speech polishing" });
-  }
-});
-
-app.post("/api/translate-speech", upload.single("audio"), async (req, res) => {
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "Gemini API key not configured." });
-    }
-
-    const parseResult = translateRequestSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: "Invalid request", details: parseResult.error.errors });
-    }
-
-    const { sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
-
-    if (!req.file) {
-      return res.status(400).json({ error: "No audio file provided" });
-    }
-
-    const originalText = await transcribeAudio(req.file.buffer, req.file.mimetype);
-    if (!originalText || originalText.trim() === "") {
-      return res.status(400).json({ error: "Could not transcribe audio." });
-    }
-
-    const { translatedText, polishedText } = await translateAndPolish(originalText, sourceLanguage, targetLanguage, outputFormat);
-
-    const id = randomUUID();
-    const translation = {
-      id,
-      originalText,
-      translatedText,
-      polishedText,
-      sourceLanguage,
-      targetLanguage,
-      outputFormat,
-      createdAt: new Date(),
-    };
-    translations.set(id, translation);
-
-    res.json(translation);
-  } catch (error: any) {
-    console.error("Translation error:", error);
-    res.status(500).json({ error: error.message || "Failed to process translation" });
-  }
-});
-
 // Base64 endpoints for mobile app
 const base64PolishSchema = z.object({
   audio: z.string(),
@@ -1375,451 +1287,14 @@ const base64TranslateSchema = z.object({
   mimeType: z.string().default("audio/m4a"),
 });
 
-app.post("/api/polish-speech-base64", async (req, res) => {
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "Gemini API key not configured." });
-    }
-
-    const parseResult = base64PolishSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: "Invalid request", details: parseResult.error.errors });
-    }
-
-    const { audio, language, outputFormat, outputType, mimeType } = parseResult.data;
-
-    const audioBuffer = Buffer.from(audio, "base64");
-    const originalText = await transcribeAudio(audioBuffer, mimeType);
-    if (!originalText || originalText.trim() === "") {
-      return res.status(400).json({ error: "Could not transcribe audio." });
-    }
-
-    const polishedText = await polishText(originalText, language, outputFormat, outputType);
-
-    const id = randomUUID();
-    const translation = {
-      id,
-      originalText,
-      translatedText: originalText,
-      polishedText,
-      sourceLanguage: language,
-      targetLanguage: language,
-      outputFormat,
-      createdAt: new Date(),
-    };
-    translations.set(id, translation);
-
-    res.json(translation);
-  } catch (error: any) {
-    console.error("Polish base64 error:", error);
-    res.status(500).json({ error: error.message || "Failed to process speech polishing" });
-  }
-});
-
-app.post("/api/translate-speech-base64", async (req, res) => {
-  try {
-    if (!process.env.GEMINI_API_KEY) {
-      return res.status(500).json({ error: "Gemini API key not configured." });
-    }
-
-    const parseResult = base64TranslateSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: "Invalid request", details: parseResult.error.errors });
-    }
-
-    const { audio, sourceLanguage, targetLanguage, outputFormat, mimeType } = parseResult.data;
-
-    const audioBuffer = Buffer.from(audio, "base64");
-    const originalText = await transcribeAudio(audioBuffer, mimeType);
-    if (!originalText || originalText.trim() === "") {
-      return res.status(400).json({ error: "Could not transcribe audio." });
-    }
-
-    const { translatedText, polishedText } = await translateAndPolish(originalText, sourceLanguage, targetLanguage, outputFormat);
-
-    const id = randomUUID();
-    const translation = {
-      id,
-      originalText,
-      translatedText,
-      polishedText,
-      sourceLanguage,
-      targetLanguage,
-      outputFormat,
-      createdAt: new Date(),
-    };
-    translations.set(id, translation);
-
-    res.json(translation);
-  } catch (error: any) {
-    console.error("Translation base64 error:", error);
-    res.status(500).json({ error: error.message || "Failed to process translation" });
-  }
-});
-
-app.get("/api/translations", async (req, res) => {
-  try {
-    const limit = parseInt(req.query.limit as string) || 10;
-    const allTranslations = Array.from(translations.values());
-    const sorted = allTranslations.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime()).slice(0, limit);
-    res.json(sorted);
-  } catch (error: any) {
-    res.status(500).json({ error: "Failed to fetch translations" });
-  }
-});
-
-app.get("/api/translations/:id", async (req, res) => {
-  try {
-    const translation = translations.get(req.params.id);
-    if (!translation) return res.status(404).json({ error: "Translation not found" });
-    res.json(translation);
-  } catch (error: any) {
-    res.status(500).json({ error: "Failed to fetch translation" });
-  }
-});
-
-// Auth routes with JWT
-app.post("/api/auth/signup", async (req, res) => {
-  try {
-    const parseResult = signupSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
-    }
-
-    const { username, email, password, otp } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
-    console.log(`[DEBUG /p/register] INPUT: username=${username}, email=${normalizedEmail}`);
-
-    const otpRecords = await db.select().from(emailOtps)
-      .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
-      .limit(1);
-
-    if (otpRecords.length === 0) {
-      return res.status(400).json({ error: "Invalid verification code" });
-    }
-
-    const otpRecord = otpRecords[0];
-    if (new Date() > otpRecord.expiresAt) {
-      return res.status(400).json({ error: "Verification code has expired. Please request a new one." });
-    }
-
-    const existingUser = await db.select().from(users).where(eq(users.username, username)).limit(1);
-    if (existingUser.length > 0) {
-      return res.status(409).json({ error: "Username already exists" });
-    }
-
-    const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
-    if (existingEmail.length > 0) {
-      return res.status(409).json({ error: "Email already exists" });
-    }
-
-    await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    const trialStartsAt = new Date();
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
-
-    const result = await db.insert(users).values({
-      username,
-      email: normalizedEmail,
-      passwordHash: hashedPassword,
-      trialStartsAt,
-      trialEndsAt,
-      trialUsed: false,
-      trialMinutesTotal: 90,
-      trialMinutesUsed: "0",
-    }).returning();
-
-    const user = result[0];
-    const token = generateToken({ userId: user.id, username: user.username });
-
-    res.status(201).json({
-      message: "Account created successfully",
-      token,
-      user: { id: user.id, username: user.username },
-    });
-  } catch (error: any) {
-    console.error("Signup error:", error);
-    res.status(500).json({ error: "Failed to create account" });
-  }
-});
-
-app.post("/api/auth/login", async (req, res) => {
-  try {
-    const parseResult = loginSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({ error: "Validation failed", details: parseResult.error.errors });
-    }
-
-    const { username, password } = parseResult.data;
-
-    const result = await db.select().from(users).where(eq(users.username, username)).limit(1);
-    const user = result[0];
-
-    if (!user) {
-      return res.status(401).json({ error: "Invalid username or password" });
-    }
-
-    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
-    if (!isValidPassword) {
-      return res.status(401).json({ error: "Invalid username or password" });
-    }
-
-    const token = generateToken({ userId: user.id, username: user.username });
-    console.log("[Login] Login successful for:", username, "| Token generated, length:", token.length);
-
-    res.json({
-      message: "Login successful",
-      token,
-      user: { id: user.id, username: user.username },
-    });
-  } catch (error: any) {
-    console.error("Login error:", error);
-    res.status(500).json({ error: "Failed to login" });
-  }
-});
-
-app.post("/api/auth/logout", (req, res) => {
-  res.json({ message: "Logged out successfully" });
-});
-
-app.get("/api/auth/me", (req, res) => {
-  const payload = getUserFromRequest(req);
-  if (payload) {
-    res.json({
-      user: {
-        id: payload.userId,
-        username: payload.username,
-      },
-    });
-  } else {
-    res.status(401).json({ error: "Not authenticated" });
-  }
-});
 
 // ============ WEB FORGOT PASSWORD ENDPOINTS ============
 
 // Forgot Password - Request password reset link (Web)
-app.post("/api/forgot-password", async (req, res) => {
-  try {
-    const schema = z.object({
-      email: z.string().email("Valid email is required"),
-    });
-
-    const parseResult = schema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({
-        error: "Invalid request",
-        details: parseResult.error.errors
-      });
-    }
-
-    const { email } = parseResult.data;
-
-    // Find user by email
-    const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
-    const user = result[0];
-
-    if (!user) {
-      // Return success even if user not found (security best practice - prevents email enumeration)
-      console.log(`[Forgot Password] Email not found: ${email}`);
-      return res.json({
-        message: "If an account with that email exists, a password reset link has been sent."
-      });
-    }
-
-    // Generate secure reset token
-    const resetToken = generateResetToken();
-    const expiresAt = new Date(Date.now() + RESET_TOKEN_EXPIRY_HOURS * 60 * 60 * 1000);
-
-    // Store reset token in database
-    await db.insert(passwordResetTokens).values({
-      userId: user.id,
-      token: resetToken,
-      expiresAt,
-    });
-
-    // Generate web reset link
-    const resetLink = `${WEB_APP_URL}/reset-password?token=${resetToken}`;
-
-    // Send email (mocked)
-    await sendPasswordResetEmail(user.email!, resetLink, false);
-
-    console.log(`[Forgot Password] Reset token generated for user: ${user.username}`);
-
-    res.json({
-      message: "If an account with that email exists, a password reset link has been sent."
-    });
-  } catch (error: any) {
-    console.error("[Forgot Password] Error:", error);
-    res.status(500).json({ error: "Failed to process password reset request" });
-  }
-});
 
 // Reset Password - Set new password using token (Web)
-app.post("/api/reset-password", async (req, res) => {
-  try {
-    const schema = z.object({
-      token: z.string().min(1, "Reset token is required"),
-      newPassword: z.string().min(6, "Password must be at least 6 characters"),
-      confirmPassword: z.string(),
-    }).refine((data) => data.newPassword === data.confirmPassword, {
-      message: "Passwords don't match",
-      path: ["confirmPassword"],
-    });
-
-    const parseResult = schema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({
-        error: "Invalid request",
-        details: parseResult.error.errors
-      });
-    }
-
-    const { token, newPassword } = parseResult.data;
-
-    // Find valid reset token
-    const tokenResult = await db.select().from(passwordResetTokens)
-      .where(eq(passwordResetTokens.token, token))
-      .limit(1);
-
-    const resetTokenRecord = tokenResult[0];
-
-    if (!resetTokenRecord) {
-      return res.status(400).json({ error: "Invalid or expired reset token" });
-    }
-
-    // Check if token is expired
-    if (new Date() > resetTokenRecord.expiresAt) {
-      return res.status(400).json({ error: "Reset token has expired. Please request a new one." });
-    }
-
-    // Check if token was already used
-    if (resetTokenRecord.usedAt) {
-      return res.status(400).json({ error: "This reset token has already been used." });
-    }
-
-    // Hash new password
-    const hashedPassword = await bcrypt.hash(newPassword, 10);
-
-    // Update user's password
-    await db.update(users)
-      .set({
-        passwordHash: hashedPassword,
-        updatedAt: new Date(),
-      })
-      .where(eq(users.id, resetTokenRecord.userId));
-
-    // Mark token as used (invalidate it)
-    await db.update(passwordResetTokens)
-      .set({ usedAt: new Date() })
-      .where(eq(passwordResetTokens.id, resetTokenRecord.id));
-
-    console.log(`[Reset Password] Password successfully reset for userId: ${resetTokenRecord.userId}`);
-
-    res.json({ message: "Password has been reset successfully. You can now login with your new password." });
-  } catch (error: any) {
-    console.error("[Reset Password] Error:", error);
-    res.status(500).json({ error: "Failed to reset password" });
-  }
-});
 
 // ============ SAVED TEXTS ENDPOINTS ============
-app.post("/api/saved-texts", async (req, res) => {
-  try {
-    const payload = getUserFromRequest(req);
-    if (!payload) {
-      return res.status(401).json({ error: "Not authenticated" });
-    }
-
-    const { type, originalText, polishedText, translatedText, sourceLanguage, targetLanguage, outputFormat, outputType } = req.body;
-
-    if (!type || !originalText || !polishedText || !sourceLanguage || !outputFormat) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
-
-    const result = await db.insert(savedTexts).values({
-      userId: payload.userId,
-      type,
-      originalText,
-      polishedText,
-      translatedText: translatedText || null,
-      sourceLanguage,
-      targetLanguage: targetLanguage || null,
-      outputFormat,
-      outputType: outputType || null,
-    }).returning();
-
-    res.json(result[0]);
-  } catch (error: any) {
-    console.error("Save text error:", error);
-    res.status(500).json({ error: "Failed to save text" });
-  }
-});
-
-app.get("/api/saved-texts/:type", async (req, res) => {
-  try {
-    // Disable caching for authenticated endpoints
-    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, private');
-    res.set('Pragma', 'no-cache');
-    res.set('Expires', '0');
-    
-    // Log all headers for debugging
-    console.log("[Debug] GET /api/saved-texts - Authorization:", req.headers.authorization ? 'present' : 'missing');
-    console.log("[Debug] All headers:", JSON.stringify(req.headers));
-    
-    const payload = getUserFromRequest(req);
-    
-    // Allow guest access - return empty array for unauthenticated users
-    if (!payload) {
-      console.log("[Auth] Guest access to saved-texts - returning empty array");
-      return res.json([]);
-    }
-
-    const { type } = req.params;
-    let result;
-    
-    if (type === 'all') {
-      result = await db.select().from(savedTexts)
-        .where(eq(savedTexts.userId, payload.userId))
-        .orderBy(desc(savedTexts.createdAt));
-    } else {
-      result = await db.select().from(savedTexts)
-        .where(and(eq(savedTexts.userId, payload.userId), eq(savedTexts.type, type)))
-        .orderBy(desc(savedTexts.createdAt));
-    }
-
-    res.json(result);
-  } catch (error: any) {
-    console.error("Get saved text error:", error);
-    res.status(500).json({ error: "Failed to get saved text" });
-  }
-});
-
-app.delete("/api/saved-texts/:id", async (req, res) => {
-  try {
-    const payload = getUserFromRequest(req);
-    if (!payload) {
-      return res.status(401).json({ error: "Not authenticated" });
-    }
-
-    const { id } = req.params;
-    const result = await db.select().from(savedTexts)
-      .where(and(eq(savedTexts.id, id), eq(savedTexts.userId, payload.userId)));
-
-    if (result.length === 0) {
-      return res.status(404).json({ error: "Saved text not found" });
-    }
-
-    await db.delete(savedTexts).where(eq(savedTexts.id, id));
-    res.json({ message: "Deleted successfully" });
-  } catch (error: any) {
-    console.error("Delete saved text error:", error);
-    res.status(500).json({ error: "Failed to delete saved text" });
-  }
-});
 
 // ============================================================
 // PUBLIC API ENDPOINTS - /api/v1/p/
@@ -4561,8 +4036,6 @@ async function handleStripeConfig(_req: Request, res: Response) {
     res.status(500).json({ success: false, error: "Failed to get Stripe configuration" });
   }
 }
-
-app.get("/api/stripe-config", handleStripeConfig);
 app.get("/api/v1/p/stripe-config", handleStripeConfig);
 
 // GET /api/subscription-status + /api/v1/m/subscription-status - Get current subscription status
@@ -4790,14 +4263,6 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
   }
 }
 
-app.get("/api/subscription-status", async (req, res) => {
-  const userId = (req.session as any)?.userId;
-  if (!userId) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
-  await handleSubscriptionStatus(req, res, userId);
-});
-
 app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
@@ -4984,12 +4449,6 @@ app.post("/api/v1/m/pre-subscribe-check", mobileAuthMiddleware, async (req: any,
   await handlePreSubscribeCheck(req, res, userId);
 });
 
-app.post("/api/pre-subscribe-check", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
-  await handlePreSubscribeCheck(req, res, userId);
-});
-
 // ============================================
 // TOP-UP: $5 for 60 minutes (one-time purchase via PaymentIntent / Payment Sheet)
 // ============================================
@@ -5097,12 +4556,6 @@ async function handleCreateTopupCheckout(req: Request, res: Response, userId: st
 app.post("/api/v1/m/create-topup-checkout", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
-  await handleCreateTopupCheckout(req, res, userId);
-});
-
-app.post("/api/create-topup-checkout", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
   await handleCreateTopupCheckout(req, res, userId);
 });
 
@@ -5247,12 +4700,6 @@ app.post("/api/v1/m/confirm-topup", mobileAuthMiddleware, async (req: any, res) 
   await handleConfirmTopup(req, res, userId);
 });
 
-app.post("/api/confirm-topup", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
-  await handleConfirmTopup(req, res, userId);
-});
-
 // ============ PAYMENT HISTORY ============
 async function handlePaymentHistory(_req: Request, res: Response, userId: string) {
   try {
@@ -5388,20 +4835,7 @@ app.get("/api/v1/m/payment-history", mobileAuthMiddleware, async (req: any, res)
   await handlePaymentHistory(req, res, userId);
 });
 
-app.get("/api/payment-history", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
-  await handlePaymentHistory(req, res, userId);
-});
-
 // Web endpoint
-app.post("/api/create-subscription", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
-  await handleCreateSubscription(req, res, userId);
-});
 
 // Mobile endpoint
 app.post("/api/v1/m/create-subscription", mobileAuthMiddleware, async (req: any, res) => {
@@ -5463,13 +4897,6 @@ async function handleCancelSubscription(req: Request, res: Response, userId: str
 }
 
 // Web endpoint
-app.post("/api/cancel-subscription", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
-  await handleCancelSubscription(req, res, userId);
-});
 
 // Mobile endpoint
 app.post("/api/v1/m/cancel-subscription", mobileAuthMiddleware, async (req: any, res) => {
@@ -5673,14 +5100,6 @@ async function handleReactivateSubscription(req: Request, res: Response, userId:
   }
 }
 
-app.post("/api/reactivate-subscription", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
-  await handleReactivateSubscription(req, res, userId);
-});
-
 app.post("/api/v1/m/reactivate-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleReactivateSubscription(req, res, userId);
@@ -5740,14 +5159,6 @@ async function handleUpdatePaymentMethod(_req: Request, res: Response, userId: s
     });
   }
 }
-
-app.post("/api/update-payment-method", async (req: any, res) => {
-  const userId = req.session?.userId;
-  if (!userId) {
-    return res.status(401).json({ success: false, error: "Authentication required" });
-  }
-  await handleUpdatePaymentMethod(req, res, userId);
-});
 
 app.post("/api/v1/m/update-payment-method", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
@@ -6217,8 +5628,6 @@ async function handleStripeWebhook(req: Request, res: Response) {
     res.status(400).json({ error: "Webhook processing failed" });
   }
 }
-
-app.post("/api/stripe-webhook", handleStripeWebhook);
 app.post("/api/v1/m/stripe-webhook", handleStripeWebhook);
 
 // ============ PUSH NOTIFICATIONS ============

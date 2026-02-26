@@ -54,23 +54,39 @@ export default function WebVoiceRecorder({
     return cleanup;
   }, [cleanup]);
 
+  async function blobToBase64(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const dataUrl = reader.result as string;
+        const base64 = dataUrl.split(",")[1] || "";
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  }
+
   async function transcribeBlob(blob: Blob): Promise<string> {
-    const formData = new FormData();
-    formData.append("audio", blob, "recording.webm");
+    const audio = await blobToBase64(blob);
     const token = getAuthToken();
-    const headers: Record<string, string> = {};
+    const endpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    const res = await fetch("/api/transcribe", {
+    const res = await fetch(endpoint, {
       method: "POST",
       headers,
-      body: formData,
+      body: JSON.stringify({
+        audio,
+        mimeType: blob.type || "audio/webm",
+      }),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "Transcription failed" }));
       throw new Error(err.error || "Transcription failed");
     }
     const data = await res.json();
-    return data.text || "";
+    return data.originalText || "";
   }
 
   async function processChunk() {

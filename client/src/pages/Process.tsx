@@ -2,21 +2,16 @@ import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
-import { supportedLanguages } from "@shared/schema";
+import { getLanguageName } from "@shared/schema";
+import { useSaveTextMutation } from "@/hooks/use-save-text";
 import AppLayout from "@/components/AppLayout";
 import WebTextResultCard from "@/components/WebTextResultCard";
+import LanguageSelect from "@/components/LanguageSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Input } from "@/components/ui/input";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import {
   Upload,
   Link as LinkIcon,
@@ -61,7 +56,6 @@ export default function Process() {
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedTone, setSelectedTone] = useState<string | null>(null);
   const [resultText, setResultText] = useState("");
-  const [isSaving, setIsSaving] = useState(false);
 
   const toneEndpoint = user ? "/api/v1/m/tone-categories" : "/api/v1/p/tone-categories";
 
@@ -70,6 +64,8 @@ export default function Process() {
   });
 
   const categories = toneData?.categories || {};
+
+  const saveMutation = useSaveTextMutation();
 
   const transcribeUrlMutation = useMutation({
     mutationFn: async (url: string) => {
@@ -95,25 +91,44 @@ export default function Process() {
 
   const transcribeFileMutation = useMutation({
     mutationFn: async (file: File) => {
-      const formData = new FormData();
-      formData.append("audio", file);
       const token = getAuthToken();
-      const headers: Record<string, string> = {};
-      if (token) headers["Authorization"] = `Bearer ${token}`;
-      const endpoint = user ? "/api/v1/m/transcribe-file" : "/api/transcribe";
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers,
-        body: formData,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to transcribe");
+      if (token) {
+        const formData = new FormData();
+        formData.append("audio", file);
+        const res = await fetch("/api/v1/m/transcribe-file", {
+          method: "POST",
+          headers: { Authorization: `Bearer ${token}` },
+          body: formData,
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Failed to transcribe");
+        }
+        return res.json();
+      } else {
+        const base64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const dataUrl = reader.result as string;
+            resolve(dataUrl.split(",")[1] || "");
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const res = await fetch("/api/v1/p/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ audio: base64, mimeType: file.type || "audio/mp4" }),
+        });
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Failed to transcribe");
+        }
+        return res.json();
       }
-      return res.json();
     },
     onSuccess: (data) => {
-      const text = data.transcribedText || data.text || "";
+      const text = data.transcribedText || data.originalText || data.text || "";
       setTranscribedText(text);
       setResultText("");
       setSelectedTone(null);
@@ -171,26 +186,6 @@ export default function Process() {
     transformMutation.mutate({ text: transcribedText, toneId: selectedTone });
   }
 
-  async function handleSave(textToSave: string, type: "transcribed" | "result") {
-    if (!user) return;
-    setIsSaving(true);
-    try {
-      const res = await apiRequest("POST", "/api/saved-texts", {
-        type: "translate",
-        originalText: transcribedText,
-        polishedText: textToSave,
-        sourceLanguage: targetLanguage,
-        outputFormat: type === "result" ? getSelectedToneLabel() : "transcription",
-      });
-      if (!res.ok) throw new Error("Failed to save");
-      toast({ title: "Saved", description: "Text has been saved to your collection." });
-    } catch {
-      toast({ title: "Save failed", description: "Could not save the text.", variant: "destructive" });
-    } finally {
-      setIsSaving(false);
-    }
-  }
-
   function handleFileChange(e: { target: { files: FileList | null } }) {
     const file = e.target.files?.[0];
     if (file) {
@@ -222,13 +217,9 @@ export default function Process() {
     return selectedTone;
   }
 
-  function handleTranscribedTextEdit(newText: string) {
-    setTranscribedText(newText);
-  }
-
   const isTranscribing = transcribeUrlMutation.isPending || transcribeFileMutation.isPending;
   const isTransforming = transformMutation.isPending;
-  const selectedLangName = supportedLanguages.find((l) => l.code === targetLanguage)?.name || targetLanguage;
+  const selectedLangName = getLanguageName(targetLanguage);
 
   return (
     <AppLayout>
@@ -251,22 +242,13 @@ export default function Process() {
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-1.5">
-              <label className="text-sm text-muted-foreground">Output Language</label>
-              <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-                <SelectTrigger data-testid="select-target-language">
-                  <SelectValue placeholder="Select language" />
-                </SelectTrigger>
-                <SelectContent>
-                  {supportedLanguages.map((lang) => (
-                    <SelectItem key={lang.code} value={lang.code} data-testid={`option-lang-${lang.code}`}>
-                      {lang.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-xs text-muted-foreground">Used for URL content extraction and text-to-speech playback. Audio files are transcribed with automatic language detection.</p>
-            </div>
+            <LanguageSelect
+              value={targetLanguage}
+              onValueChange={setTargetLanguage}
+              label="Output Language"
+              testIdPrefix="target-language"
+            />
+            <p className="text-xs text-muted-foreground mt-1.5">Used for URL content extraction and text-to-speech playback. Audio files are transcribed with automatic language detection.</p>
           </CardContent>
         </Card>
 
@@ -358,9 +340,15 @@ export default function Process() {
             badge={selectedLangName}
             editable
             saveable={!!user}
-            onSave={() => handleSave(transcribedText, "transcribed")}
-            isSaving={isSaving}
-            onTextChange={handleTranscribedTextEdit}
+            onSave={() => saveMutation.mutate({
+              type: "translate",
+              originalText: transcribedText,
+              polishedText: transcribedText,
+              sourceLanguage: targetLanguage,
+              outputFormat: "transcription",
+            })}
+            isSaving={saveMutation.isPending}
+            onTextChange={(newText) => setTranscribedText(newText)}
             icon={<FileAudio className="h-4 w-4 text-primary" />}
           />
         )}
@@ -461,8 +449,14 @@ export default function Process() {
             badge={getSelectedToneLabel()}
             editable
             saveable={!!user}
-            onSave={() => handleSave(resultText, "result")}
-            isSaving={isSaving}
+            onSave={() => saveMutation.mutate({
+              type: "translate",
+              originalText: transcribedText,
+              polishedText: resultText,
+              sourceLanguage: targetLanguage,
+              outputFormat: getSelectedToneLabel(),
+            })}
+            isSaving={saveMutation.isPending}
             onTextChange={(newText) => setResultText(newText)}
             icon={<Sparkles className="h-4 w-4 text-primary" />}
           />

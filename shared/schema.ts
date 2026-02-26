@@ -80,6 +80,25 @@ export const supportedLanguages = [
 
 export type LanguageCode = typeof supportedLanguages[number]["code"];
 
+export const OUTPUT_FORMATS = [
+  { value: "professional", label: "Professional" },
+  { value: "casual", label: "Casual" },
+  { value: "formal", label: "Formal" },
+  { value: "friendly", label: "Friendly" },
+] as const;
+
+export const OUTPUT_TYPES = [
+  { value: "message", label: "Message" },
+  { value: "note", label: "Note" },
+  { value: "email", label: "Email" },
+  { value: "post", label: "Post" },
+  { value: "journal", label: "Journal" },
+] as const;
+
+export function getLanguageName(code: string): string {
+  return supportedLanguages.find((l) => l.code === code)?.name || code;
+}
+
 // Translation request schema for API validation
 export const translateRequestSchema = z.object({
   sourceLanguage: z.string().min(2).max(5),

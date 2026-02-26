@@ -88,7 +88,7 @@ function UsersTab() {
   const [page, setPage] = useState(1);
 
   const { data, isLoading, refetch } = useQuery<any>({
-    queryKey: ["/api/admin/users", `?page=${page}&limit=15`],
+    queryKey: ["/api/v1/m/admin/users", `?page=${page}&limit=15`],
   });
 
   return (
@@ -157,7 +157,7 @@ function SubscriptionsTab() {
   const [page, setPage] = useState(1);
 
   const { data, isLoading, refetch } = useQuery<any>({
-    queryKey: ["/api/admin/subscriptions", `?page=${page}&limit=15`],
+    queryKey: ["/api/v1/m/admin/subscriptions", `?page=${page}&limit=15`],
   });
 
   return (
@@ -227,7 +227,7 @@ function PaymentsTab() {
 
   const query = lastId ? `?limit=15&starting_after=${lastId}` : "?limit=15";
   const { data, isLoading, refetch } = useQuery<any>({
-    queryKey: ["/api/admin/payments", query],
+    queryKey: ["/api/v1/m/admin/payments", query],
   });
 
   function nextPage() {
@@ -328,18 +328,18 @@ function SupportTab() {
 
   const filterQuery = statusFilter !== "all" ? `&status=${statusFilter}` : "";
   const { data, isLoading, refetch } = useQuery<any>({
-    queryKey: ["/api/admin/support", `?page=${page}&limit=15${filterQuery}`],
+    queryKey: ["/api/v1/m/admin/support", `?page=${page}&limit=15${filterQuery}`],
   });
 
   const updateStatusMutation = useMutation({
     mutationFn: async ({ id, status }: { id: string; status: string }) => {
-      const res = await apiRequest("PATCH", `/api/admin/support/${id}`, { status });
+      const res = await apiRequest("PATCH", `/api/v1/m/admin/support/${id}`, { status });
       if (!res.ok) throw new Error("Failed to update");
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/support"] });
-      queryClient.invalidateQueries({ queryKey: ["/api/admin/stats"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/admin/support"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/admin/stats"] });
     },
   });
 
@@ -439,7 +439,7 @@ function ErrorsTab() {
   const [page, setPage] = useState(1);
 
   const { data, isLoading, refetch } = useQuery<any>({
-    queryKey: ["/api/admin/errors", `?page=${page}&limit=15`],
+    queryKey: ["/api/v1/m/admin/errors", `?page=${page}&limit=15`],
   });
 
   return (
@@ -543,7 +543,7 @@ export default function Dashboard() {
   const { user, isLoading, isAdmin } = useAuth();
 
   const { data: statsData, isLoading: statsLoading } = useQuery<any>({
-    queryKey: ["/api/admin/stats"],
+    queryKey: ["/api/v1/m/admin/stats"],
     enabled: isAdmin,
   });
 

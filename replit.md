@@ -71,7 +71,44 @@ Used in all web result pages:
 - Translate (`client/src/pages/Translate.tsx`): Original + Translation + Polished cards
 - Process (`client/src/pages/Process.tsx`): Transcribed + Transformed result cards with language selector
 
-Process page includes an output language selector using `supportedLanguages` from shared schema. The selected language is sent as `targetLanguage` to the process-url endpoint and used for TTS playback language. Endpoint routing: authenticated users use `/api/v1/m/*` endpoints, guests use `/api/v1/p/*` (or `/api/transcribe` for file upload).
+Process page includes an output language selector using `supportedLanguages` from shared schema. The selected language is sent as `targetLanguage` to the process-url endpoint and used for TTS playback language.
+
+### Unified API Endpoints
+
+Web and mobile share the same API endpoints:
+- **Guest (public)**: `/api/v1/p/*` — transcribe, polish, translate, tone-categories, process-url, auth/login, auth/signup, mail_otp
+- **Authenticated**: `/api/v1/m/*` — all guest features plus saved-texts, settings, subscription, payment, admin/*, support, error-log, auth/logout, auth/me
+- **Admin**: `/api/v1/m/admin/*` — dashboard stats, users, subscriptions, payments, support, errors (ADMIN role required)
+- **Stripe**: `/api/v1/m/stripe-webhook`, `/api/v1/m/create-subscription`, etc.
+- **Health**: `GET /api/health` — server health check (only non-v1 endpoint remaining)
+
+Audio is sent as base64 JSON (`{ audio: base64, mimeType }`) from both web and mobile.
+Public endpoints accept `text` field; auth endpoints accept `originalText` for polish/translate.
+Auth endpoints return `{ success, savedTexts }` wrapper format.
+
+### Shared Constants & Reusable Utilities
+
+Shared constants and helpers are centralized to avoid duplication across pages:
+
+- **`shared/schema.ts`**: Exports `supportedLanguages`, `OUTPUT_FORMATS`, `OUTPUT_TYPES`, `getLanguageName()` — used by VoiceRecorder, Polish, Translate, and Process pages
+- **`client/src/components/LanguageSelect.tsx`**: Reusable language dropdown component wrapping `supportedLanguages`, used by Polish, Translate, and Process pages
+- **`client/src/hooks/use-save-text.ts`**: `useSaveTextMutation()` hook for saving text results to `/api/v1/m/saved-texts` with JWT auth, cache invalidation and toast feedback, used by Polish, Translate, and Process pages
+
+### Theme Persistence (Mobile)
+
+Color theme is only available to authenticated users. Guests always see the default Indigo theme.
+
+**Storage**: Dual persistence — AsyncStorage (local, fast startup) + `mvp_user_settings` table (DB, cross-device sync via JWT-authenticated `/api/v1/m/settings` endpoint).
+
+**Startup flow** (authenticated users):
+1. Read AsyncStorage for instant theme application
+2. Fetch from DB (source of truth) and overwrite local if DB has a theme
+3. If DB has no theme but local exists, push local to DB (migration from older version)
+
+**On theme change**: Write to both AsyncStorage and DB simultaneously.
+**On logout**: Clear AsyncStorage, reset to default Indigo theme.
+
+**Provider ordering**: `AuthProvider` ? `AuthAwareThemeProvider` ? rest of app (ThemeProvider receives `isAuthenticated` prop from AuthContext).
 
 ### AI Processing Pipeline
 

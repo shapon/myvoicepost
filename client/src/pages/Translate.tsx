@@ -1,12 +1,14 @@
 import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
-import { apiRequest, queryClient } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
-import { supportedLanguages } from "@shared/schema";
+import { OUTPUT_FORMATS, getLanguageName } from "@shared/schema";
+import { useSaveTextMutation } from "@/hooks/use-save-text";
 import AppLayout from "@/components/AppLayout";
 import WebVoiceRecorder from "@/components/WebVoiceRecorder";
 import WebTextResultCard from "@/components/WebTextResultCard";
+import LanguageSelect from "@/components/LanguageSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -27,13 +29,6 @@ import {
   Type,
 } from "lucide-react";
 
-const OUTPUT_FORMATS = [
-  { value: "professional", label: "Professional" },
-  { value: "casual", label: "Casual" },
-  { value: "formal", label: "Formal" },
-  { value: "friendly", label: "Friendly" },
-] as const;
-
 export default function Translate() {
   const { toast } = useToast();
   const { user } = useAuth();
@@ -51,12 +46,11 @@ export default function Translate() {
 
   const translateMutation = useMutation({
     mutationFn: async () => {
-      const res = await apiRequest("POST", "/api/translate-text", {
-        text: text.trim(),
-        sourceLanguage,
-        targetLanguage,
-        outputFormat,
-      });
+      const endpoint = user ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const body = user
+        ? { originalText: text.trim(), sourceLanguage, targetLanguage, outputFormat }
+        : { text: text.trim(), sourceLanguage, targetLanguage, outputFormat };
+      const res = await apiRequest("POST", endpoint, body);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to translate");
@@ -76,32 +70,7 @@ export default function Translate() {
     },
   });
 
-  const saveMutation = useMutation({
-    mutationFn: async (polishedText: string) => {
-      if (!result) throw new Error("No result to save");
-      const res = await apiRequest("POST", "/api/saved-texts", {
-        type: "translate",
-        originalText: result.originalText,
-        polishedText,
-        translatedText: result.translatedText,
-        sourceLanguage,
-        targetLanguage,
-        outputFormat,
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to save");
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/saved-texts"] });
-      toast({ title: "Saved", description: "Translation saved to your collection." });
-    },
-    onError: (err: Error) => {
-      toast({ title: "Save failed", description: err.message, variant: "destructive" });
-    },
-  });
+  const saveMutation = useSaveTextMutation();
 
   function handleTranslate() {
     if (!text.trim()) {
@@ -141,8 +110,8 @@ export default function Translate() {
     }
   }
 
-  const sourceLangName = supportedLanguages.find((l) => l.code === sourceLanguage)?.name || sourceLanguage;
-  const targetLangName = supportedLanguages.find((l) => l.code === targetLanguage)?.name || targetLanguage;
+  const sourceLangName = getLanguageName(sourceLanguage);
+  const targetLangName = getLanguageName(targetLanguage);
 
   return (
     <AppLayout>
@@ -165,40 +134,26 @@ export default function Translate() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="flex flex-col sm:flex-row items-start sm:items-end gap-3">
-              <div className="flex-1 w-full space-y-1.5">
-                <label className="text-sm text-muted-foreground">From</label>
-                <Select value={sourceLanguage} onValueChange={setSourceLanguage}>
-                  <SelectTrigger data-testid="select-source-language">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {supportedLanguages.map((lang) => (
-                      <SelectItem key={lang.code} value={lang.code} data-testid={`option-source-${lang.code}`}>
-                        {lang.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="flex-1 w-full">
+                <LanguageSelect
+                  value={sourceLanguage}
+                  onValueChange={setSourceLanguage}
+                  label="From"
+                  testIdPrefix="source-language"
+                />
               </div>
 
               <Button size="icon" variant="outline" onClick={handleSwapLanguages} data-testid="button-swap-languages">
                 <ArrowRightLeft className="h-4 w-4" />
               </Button>
 
-              <div className="flex-1 w-full space-y-1.5">
-                <label className="text-sm text-muted-foreground">To</label>
-                <Select value={targetLanguage} onValueChange={setTargetLanguage}>
-                  <SelectTrigger data-testid="select-target-language">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {supportedLanguages.map((lang) => (
-                      <SelectItem key={lang.code} value={lang.code} data-testid={`option-target-${lang.code}`}>
-                        {lang.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+              <div className="flex-1 w-full">
+                <LanguageSelect
+                  value={targetLanguage}
+                  onValueChange={setTargetLanguage}
+                  label="To"
+                  testIdPrefix="target-language"
+                />
               </div>
             </div>
 
@@ -305,7 +260,15 @@ export default function Translate() {
               badge={targetLangName}
               editable
               saveable={!!user}
-              onSave={() => saveMutation.mutate(result.polishedText)}
+              onSave={() => saveMutation.mutate({
+                type: "translate",
+                originalText: result.originalText,
+                polishedText: result.polishedText,
+                translatedText: result.translatedText,
+                sourceLanguage,
+                targetLanguage,
+                outputFormat,
+              })}
               isSaving={saveMutation.isPending}
               onTextChange={handlePolishedTextEdit}
               icon={<Languages className="h-4 w-4 text-primary" />}
