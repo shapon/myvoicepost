@@ -70,7 +70,7 @@ export default function WebVoiceRecorder({
   async function transcribeBlob(blob: Blob): Promise<string> {
     const audio = await blobToBase64(blob);
     const token = getAuthToken();
-    const endpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+    const endpoint = token ? "/api/v1/a/transcribe" : "/api/v1/p/transcribe";
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(endpoint, {

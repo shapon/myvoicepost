@@ -8,6 +8,7 @@ import {
   users,
   userSettings,
   emailOtps,
+  userSsoAccounts,
   USER_ROLES,
   supportRequests,
   errorLogs,
@@ -180,6 +181,15 @@ export async function registerRoutes(
   httpServer: Server,
   app: Express,
 ): Promise<Server> {
+  // Rewrite /api/v1/a/* ? /api/v1/m/* so web uses "a" (authenticated) prefix
+  // while mobile keeps "m" (mobile) prefix. Both hit the same handlers.
+  app.use((req, _res, next) => {
+    if (req.url.startsWith("/api/v1/a/")) {
+      req.url = req.url.replace("/api/v1/a/", "/api/v1/m/");
+    }
+    next();
+  });
+
   // Apply JWT middleware to all API routes
   app.use("/api", jwtAuthMiddleware);
 
@@ -187,8 +197,6 @@ export async function registerRoutes(
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
-
-  // Legacy web-only endpoints removed — all clients now use unified /api/v1/p/ and /api/v1/m/ endpoints
 
 
 
@@ -750,9 +758,196 @@ export async function registerRoutes(
     }
   });
 
+  // GET /api/v1/wp/auth/google/config - Web-specific: Get Google Client ID for frontend GSI
+  app.get("/api/v1/wp/auth/google/config", (req, res) => {
+    const clientId = process.env.GOOGLE_CLIENT_ID || "";
+    res.json({ success: true, clientId });
+  });
+
   // ============================================================
-  // MOBILE API ENDPOINTS - /api/v1/m/
-  // All mobile endpoints require JWT authentication
+  // GOOGLE SSO ENDPOINT - /api/v1/p/auth/google
+  // Accepts Google ID token, verifies it, creates/links user, returns JWT
+  // ============================================================
+
+  app.post("/api/v1/p/auth/google", async (req, res) => {
+    try {
+      const schema = z.object({
+        idToken: z.string().min(1, "Google ID token is required"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
+      }
+
+      const { idToken } = parseResult.data;
+
+      const googleResponse = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`
+      );
+
+      if (!googleResponse.ok) {
+        console.error("[Google SSO] Token verification failed:", googleResponse.status);
+        return res.status(401).json({
+          success: false,
+          error: "Invalid Google token. Please try again.",
+        });
+      }
+
+      const googleUser = await googleResponse.json() as {
+        sub: string;
+        email: string;
+        email_verified: string;
+        name: string;
+        picture: string;
+      };
+
+      if (!googleUser.email || googleUser.email_verified !== "true") {
+        return res.status(401).json({
+          success: false,
+          error: "Google account email is not verified.",
+        });
+      }
+
+      const normalizedEmail = googleUser.email.toLowerCase().trim();
+      const googleId = googleUser.sub;
+
+      console.log(`[Google SSO] Verified Google user: email=${normalizedEmail}, googleId=${googleId}`);
+
+      const existingSso = await db.select().from(userSsoAccounts)
+        .where(and(eq(userSsoAccounts.provider, "google"), eq(userSsoAccounts.providerUserId, googleId)))
+        .limit(1);
+
+      if (existingSso.length > 0) {
+        const sso = existingSso[0];
+        const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
+        if (userRows.length > 0) {
+          const user = userRows[0];
+          const currentRole = await refreshUserRole(user.id);
+          const token = generateToken(user.id, user.username, currentRole);
+
+          await db.update(userSsoAccounts)
+            .set({ providerEmail: normalizedEmail, providerName: googleUser.name, providerAvatar: googleUser.picture, updatedAt: new Date() })
+            .where(eq(userSsoAccounts.id, sso.id));
+
+          return res.json({
+            success: true,
+            token,
+            expiresIn: 7 * 24 * 60 * 60,
+            user: { id: user.id, email: user.email, username: user.username, role: currentRole },
+            isNewUser: false,
+          });
+        }
+      }
+
+      const existingEmailUser = await db.select().from(users)
+        .where(eq(users.email, normalizedEmail))
+        .limit(1);
+
+      if (existingEmailUser.length > 0) {
+        const user = existingEmailUser[0];
+
+        await db.insert(userSsoAccounts).values({
+          userId: user.id,
+          provider: "google",
+          providerUserId: googleId,
+          providerEmail: normalizedEmail,
+          providerName: googleUser.name,
+          providerAvatar: googleUser.picture,
+        }).onConflictDoNothing();
+
+        const currentRole = await refreshUserRole(user.id);
+        const token = generateToken(user.id, user.username, currentRole);
+
+        return res.json({
+          success: true,
+          token,
+          expiresIn: 7 * 24 * 60 * 60,
+          user: { id: user.id, email: user.email, username: user.username, role: currentRole },
+          isNewUser: false,
+        });
+      }
+
+      const googleName = googleUser.name || normalizedEmail.split("@")[0];
+      let baseUsername = googleName.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20);
+      if (baseUsername.length < 3) baseUsername = "user" + baseUsername;
+
+      let finalUsername = baseUsername;
+      let suffix = 1;
+      while (true) {
+        const existing = await db.select().from(users)
+          .where(eq(users.username, finalUsername))
+          .limit(1);
+        if (existing.length === 0) break;
+        finalUsername = `${baseUsername}${suffix}`;
+        suffix++;
+        if (suffix > 100) {
+          finalUsername = `user_${crypto.randomUUID().substring(0, 8)}`;
+          break;
+        }
+      }
+
+      const user = await storage.createUser({ username: finalUsername, email: normalizedEmail, password: crypto.randomUUID() });
+
+      const trialStartsAt = new Date();
+      const trialEndsAt = new Date();
+      trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
+      await db
+        .update(users)
+        .set({
+          trialStartsAt,
+          trialEndsAt,
+          trialUsed: false,
+          trialMinutesTotal: 90,
+          trialMinutesUsed: "0",
+          role: "GUEST",
+        })
+        .where(eq(users.id, user.id));
+
+      await db.insert(userSsoAccounts).values({
+        userId: user.id,
+        provider: "google",
+        providerUserId: googleId,
+        providerEmail: normalizedEmail,
+        providerName: googleUser.name,
+        providerAvatar: googleUser.picture,
+      });
+
+      const token = generateToken(user.id, user.username, "GUEST");
+
+      console.log(`[Google SSO] New user created: userId=${user.id}, username=${user.username}`);
+
+      res.status(201).json({
+        success: true,
+        token,
+        expiresIn: 7 * 24 * 60 * 60,
+        user: { id: user.id, email: user.email, username: user.username, role: "GUEST" },
+        isNewUser: true,
+        trial: {
+          starts_at: trialStartsAt.toISOString(),
+          ends_at: trialEndsAt.toISOString(),
+          minutes_total: 90,
+          minutes_used: 0,
+          minutes_remaining: 90,
+        },
+      });
+    } catch (error: any) {
+      console.error("[Google SSO] Error:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to authenticate with Google",
+      });
+    }
+  });
+
+  // ============================================================
+  // AUTHENTICATED API ENDPOINTS - /api/v1/m/
+  // All endpoints require JWT authentication
   // ============================================================
 
   // Mobile JWT middleware - validates token and checks expiry (used for all mobile endpoints except login)

@@ -1252,6 +1252,15 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 
+// Rewrite /api/v1/a/* → /api/v1/m/* so web uses "a" (authenticated) prefix
+// while mobile keeps "m" (mobile) prefix. Both hit the same handlers.
+app.use((req, _res, next) => {
+  if (req.url.startsWith("/api/v1/a/")) {
+    req.url = req.url.replace("/api/v1/a/", "/api/v1/m/");
+  }
+  next();
+});
+
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 25 * 1024 * 1024 },
@@ -1876,6 +1885,28 @@ app.post("/api/v1/p/register", async (req, res) => {
   }
 });
 
+// Alias routes for unified web/mobile auth paths
+app.post("/api/v1/p/auth/login", async (req, res) => {
+  req.url = "/api/v1/p/login";
+  app.handle(req, res);
+});
+
+app.post("/api/v1/p/auth/signup", async (req, res) => {
+  req.url = "/api/v1/p/register";
+  app.handle(req, res);
+});
+
+app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
+  const jwtUser = (req as any).jwtUser;
+  console.log(`[DEBUG /m/auth/logout] userId=${jwtUser?.userId || jwtUser?.id}`);
+  res.json({ success: true, message: "Logged out successfully" });
+});
+
+app.get("/api/v1/m/auth/me", mobileAuthMiddleware, async (req, res) => {
+  req.url = "/api/v1/m/me";
+  app.handle(req, res);
+});
+
 // ============================================================
 // GOOGLE SSO ENDPOINTS - /api/v1/p/auth/google
 // Aggregator approach: Backend handles full OAuth flow
@@ -1888,6 +1919,11 @@ const GOOGLE_SSO_CONFIG = {
   redirectUri: "https://www.myvoicepost.com/api/v1/p/auth/google/callback",
   appScheme: "myvoicepost",
 };
+
+app.get("/api/v1/wp/auth/google/config", (req, res) => {
+  const clientId = process.env.GOOGLE_CLIENT_ID || "";
+  res.json({ success: true, clientId });
+});
 
 app.get("/api/v1/p/auth/google/start", (req, res) => {
   const { clientId, redirectUri } = GOOGLE_SSO_CONFIG;

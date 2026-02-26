@@ -46,7 +46,7 @@ export default function Translate() {
 
   const translateMutation = useMutation({
     mutationFn: async () => {
-      const endpoint = user ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const endpoint = user ? "/api/v1/a/translate" : "/api/v1/p/translate";
       const body = user
         ? { originalText: text.trim(), sourceLanguage, targetLanguage, outputFormat }
         : { text: text.trim(), sourceLanguage, targetLanguage, outputFormat };

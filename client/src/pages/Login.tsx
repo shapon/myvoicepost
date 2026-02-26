@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
@@ -9,14 +9,95 @@ import { useToast } from "@/hooks/use-toast";
 import { Mic, Loader2, ArrowLeft } from "lucide-react";
 import { Link } from "wouter";
 
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: any) => void;
+          renderButton: (element: HTMLElement, config: any) => void;
+        };
+      };
+    };
+  }
+}
+
 export default function Login() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [emailError, setEmailError] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const { login } = useAuth();
+  const [googleLoading, setGoogleLoading] = useState(false);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const { login, googleLogin } = useAuth();
   const [, setLocation] = useLocation();
   const { toast } = useToast();
+  const googleBtnRef = useRef<HTMLDivElement>(null);
+
+  const handleGoogleResponse = useCallback(async (response: any) => {
+    if (!response?.credential) return;
+    setGoogleLoading(true);
+    try {
+      await googleLogin(response.credential);
+      toast({
+        title: "Welcome!",
+        description: "You've signed in with Google.",
+      });
+      setLocation("/polish");
+    } catch (error: any) {
+      toast({
+        title: "Google sign-in failed",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setGoogleLoading(false);
+    }
+  }, [googleLogin, toast, setLocation]);
+
+  useEffect(() => {
+    fetch("/api/v1/wp/auth/google/config")
+      .then(res => res.json())
+      .then(data => {
+        if (data.clientId) {
+          setGoogleClientId(data.clientId);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!googleClientId || !googleBtnRef.current) return;
+
+    const existingScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    
+    const initGoogle = () => {
+      if (window.google?.accounts?.id && googleBtnRef.current) {
+        window.google.accounts.id.initialize({
+          client_id: googleClientId,
+          callback: handleGoogleResponse,
+        });
+        window.google.accounts.id.renderButton(googleBtnRef.current, {
+          theme: "outline",
+          size: "large",
+          width: googleBtnRef.current.offsetWidth,
+          text: "signin_with",
+          shape: "rectangular",
+        });
+      }
+    };
+
+    if (existingScript && window.google?.accounts?.id) {
+      initGoogle();
+    } else if (!existingScript) {
+      const script = document.createElement("script");
+      script.src = "https://accounts.google.com/gsi/client";
+      script.async = true;
+      script.defer = true;
+      script.onload = initGoogle;
+      document.head.appendChild(script);
+    }
+  }, [googleClientId, handleGoogleResponse]);
 
   const validateEmail = (value: string): boolean => {
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -107,7 +188,7 @@ export default function Login() {
             <Button 
               type="submit" 
               className="w-full" 
-              disabled={isLoading}
+              disabled={isLoading || googleLoading}
               data-testid="button-login"
             >
               {isLoading ? (
@@ -119,6 +200,29 @@ export default function Login() {
                 "Sign in"
               )}
             </Button>
+
+            {googleClientId && (
+              <>
+                <div className="relative w-full">
+                  <div className="absolute inset-0 flex items-center">
+                    <span className="w-full border-t" />
+                  </div>
+                  <div className="relative flex justify-center text-xs uppercase">
+                    <span className="bg-card px-2 text-muted-foreground">or</span>
+                  </div>
+                </div>
+
+                {googleLoading ? (
+                  <div className="flex items-center justify-center py-2">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground mr-2" />
+                    <span className="text-sm text-muted-foreground">Signing in with Google...</span>
+                  </div>
+                ) : (
+                  <div ref={googleBtnRef} className="w-full" data-testid="button-google-login" />
+                )}
+              </>
+            )}
+
             <p className="text-sm text-muted-foreground text-center">
               Don't have an account?{" "}
               <Link href="/signup" className="text-primary hover:underline" data-testid="link-signup">

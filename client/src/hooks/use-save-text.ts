@@ -18,7 +18,7 @@ export function useSaveTextMutation() {
 
   return useMutation({
     mutationFn: async (params: SaveTextParams) => {
-      const res = await apiRequest("POST", "/api/v1/m/saved-texts", params);
+      const res = await apiRequest("POST", "/api/v1/a/saved-texts", params);
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to save");
@@ -26,7 +26,7 @@ export function useSaveTextMutation() {
       return res.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       toast({ title: "Saved", description: "Text saved to your collection." });
     },
     onError: (err: Error) => {

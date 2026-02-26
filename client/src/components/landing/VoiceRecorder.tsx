@@ -94,7 +94,7 @@ function VoiceInputButton({ onTranscription, language = "en", disabled, classNam
     try {
       const audio = await blobToBase64(audioBlob);
       const token = localStorage.getItem("mvp_auth_token");
-      const endpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+      const endpoint = token ? "/api/v1/a/transcribe" : "/api/v1/p/transcribe";
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
@@ -255,7 +255,7 @@ function PolishRecorder() {
   
   // Fetch saved texts for logged-in users
   const { data: savedTextsPolishData } = useQuery<{ success: boolean; savedTexts: SavedText[] }>({
-    queryKey: ["/api/v1/m/saved-texts", "polish"],
+    queryKey: ["/api/v1/a/saved-texts", "polish"],
     enabled: !!user,
   });
   const savedTexts = savedTextsPolishData?.savedTexts || [];
@@ -264,7 +264,7 @@ function PolishRecorder() {
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; polishedText: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch("/api/v1/m/saved-texts", {
+      const response = await fetch("/api/v1/a/saved-texts", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -284,7 +284,7 @@ function PolishRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       setIsSaving(false);
       toast({ title: "Saved!", description: "Your text has been saved." });
     },
@@ -298,7 +298,7 @@ function PolishRecorder() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch(`/api/v1/m/saved-texts/${id}`, {
+      const response = await fetch(`/api/v1/a/saved-texts/${id}`, {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
@@ -310,7 +310,7 @@ function PolishRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       toast({ title: "Deleted", description: "Saved text removed." });
     },
   });
@@ -459,7 +459,7 @@ function PolishRecorder() {
     mutationFn: async (audioBlob: Blob) => {
       const audio = await blobToBase64(audioBlob);
       const token = localStorage.getItem("mvp_auth_token");
-      const transcribeEndpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+      const transcribeEndpoint = token ? "/api/v1/a/transcribe" : "/api/v1/p/transcribe";
       const transcribeRes = await fetch(transcribeEndpoint, {
         method: "POST",
         headers: {
@@ -475,7 +475,7 @@ function PolishRecorder() {
       const transcribeData = await transcribeRes.json();
       const originalText = transcribeData.originalText;
 
-      const polishEndpoint = token ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const polishEndpoint = token ? "/api/v1/a/polish" : "/api/v1/p/polish";
       const polishBody = token
         ? { originalText, language, outputFormat, outputType }
         : { text: originalText, language, outputFormat, outputType };
@@ -518,7 +518,7 @@ function PolishRecorder() {
   const textPolishMutation = useMutation({
     mutationFn: async (text: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const endpoint = token ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const endpoint = token ? "/api/v1/a/polish" : "/api/v1/p/polish";
       const body = token
         ? { originalText: text, language, outputFormat, outputType }
         : { text, language, outputFormat, outputType };
@@ -571,7 +571,7 @@ function PolishRecorder() {
   const repolishMutation = useMutation({
     mutationFn: async ({ text, tone, template }: { text: string; tone: string; template: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const endpoint = token ? "/api/v1/m/polish" : "/api/v1/p/polish";
+      const endpoint = token ? "/api/v1/a/polish" : "/api/v1/p/polish";
       const body = token
         ? { originalText: text, language, outputFormat: tone, outputType, template }
         : { text, language, outputFormat: tone, outputType, template };
@@ -624,7 +624,7 @@ function PolishRecorder() {
   const translatePolishedMutation = useMutation({
     mutationFn: async ({ text, targetLang }: { text: string; targetLang: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const endpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const endpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
       const body = token
         ? { originalText: text, sourceLanguage: language, targetLanguage: targetLang, outputFormat }
         : { text, sourceLanguage: language, targetLanguage: targetLang, outputFormat };
@@ -1493,7 +1493,7 @@ function TranslateRecorder() {
   
   // Fetch saved texts for logged-in users
   const { data: savedTextsData } = useQuery<{ success: boolean; savedTexts: SavedText[] }>({
-    queryKey: ["/api/v1/m/saved-texts", "translate"],
+    queryKey: ["/api/v1/a/saved-texts", "translate"],
     enabled: !!user,
   });
   const savedTexts = savedTextsData?.savedTexts || [];
@@ -1502,7 +1502,7 @@ function TranslateRecorder() {
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; translatedText: string; polishedText: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch("/api/v1/m/saved-texts", {
+      const response = await fetch("/api/v1/a/saved-texts", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -1523,7 +1523,7 @@ function TranslateRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       setIsSaving(false);
       toast({ title: "Saved!", description: "Your translation has been saved." });
     },
@@ -1537,7 +1537,7 @@ function TranslateRecorder() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch(`/api/v1/m/saved-texts/${id}`, {
+      const response = await fetch(`/api/v1/a/saved-texts/${id}`, {
         method: "DELETE",
         headers: {
           "Content-Type": "application/json",
@@ -1549,7 +1549,7 @@ function TranslateRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       toast({ title: "Deleted", description: "Saved translation removed." });
     },
   });
@@ -1698,7 +1698,7 @@ function TranslateRecorder() {
     mutationFn: async (audioBlob: Blob) => {
       const audio = await blobToBase64(audioBlob);
       const token = localStorage.getItem("mvp_auth_token");
-      const transcribeEndpoint = token ? "/api/v1/m/transcribe" : "/api/v1/p/transcribe";
+      const transcribeEndpoint = token ? "/api/v1/a/transcribe" : "/api/v1/p/transcribe";
       const transcribeRes = await fetch(transcribeEndpoint, {
         method: "POST",
         headers: {
@@ -1714,7 +1714,7 @@ function TranslateRecorder() {
       const transcribeData = await transcribeRes.json();
       const originalText = transcribeData.originalText;
 
-      const translateEndpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const translateEndpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
       const translateBody = token
         ? { originalText, sourceLanguage, targetLanguage, outputFormat }
         : { text: originalText, sourceLanguage, targetLanguage, outputFormat };
@@ -1758,7 +1758,7 @@ function TranslateRecorder() {
   const textTranslateMutation = useMutation({
     mutationFn: async (text: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const endpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const endpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
       const body = token
         ? { originalText: text, sourceLanguage, targetLanguage, outputFormat }
         : { text, sourceLanguage, targetLanguage, outputFormat };
@@ -1813,7 +1813,7 @@ function TranslateRecorder() {
   const convertLanguageMutation = useMutation({
     mutationFn: async ({ text, toLang }: { text: string; toLang: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const endpoint = token ? "/api/v1/m/translate" : "/api/v1/p/translate";
+      const endpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
       const body = token
         ? { originalText: text, sourceLanguage: targetLanguage, targetLanguage: toLang, outputFormat }
         : { text, sourceLanguage: targetLanguage, targetLanguage: toLang, outputFormat };

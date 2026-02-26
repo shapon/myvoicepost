@@ -13,6 +13,7 @@ interface AuthContextType {
   isLoading: boolean;
   isAdmin: boolean;
   login: (email: string, password: string) => Promise<void>;
+  googleLogin: (idToken: string) => Promise<void>;
   signup: (username: string, email: string, password: string, confirmPassword: string, otp: string) => Promise<void>;
   sendOtp: (email: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -33,7 +34,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const response = await fetch("/api/v1/m/auth/me", {
+      const response = await fetch("/api/v1/a/auth/me", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -69,6 +70,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(data.user);
   };
 
+  const googleLogin = async (idToken: string) => {
+    const response = await apiRequest("POST", "/api/v1/p/auth/google", { idToken });
+    const data = await response.json();
+    if (!response.ok) {
+      throw new Error(data.error || "Google login failed");
+    }
+    if (data.token) {
+      setAuthToken(data.token);
+    }
+    setUser(data.user);
+  };
+
   const sendOtp = async (email: string) => {
     const response = await apiRequest("POST", "/api/v1/p/mail_otp", { email });
     const data = await response.json();
@@ -96,7 +109,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await apiRequest("POST", "/api/v1/m/auth/logout", {});
+    await apiRequest("POST", "/api/v1/a/auth/logout", {});
     removeAuthToken();
     setUser(null);
   };
@@ -104,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isAdmin = user?.role === "ADMIN";
 
   return (
-    <AuthContext.Provider value={{ user, isLoading, isAdmin, login, signup, sendOtp, logout }}>
+    <AuthContext.Provider value={{ user, isLoading, isAdmin, login, googleLogin, signup, sendOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );
