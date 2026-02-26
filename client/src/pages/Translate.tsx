@@ -6,10 +6,10 @@ import { useToast } from "@/hooks/use-toast";
 import { supportedLanguages } from "@shared/schema";
 import AppLayout from "@/components/AppLayout";
 import WebVoiceRecorder from "@/components/WebVoiceRecorder";
+import WebTextResultCard from "@/components/WebTextResultCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -22,9 +22,6 @@ import {
   Languages,
   ArrowRightLeft,
   Loader2,
-  Copy,
-  Check,
-  Bookmark,
   RefreshCw,
   Mic,
   Type,
@@ -51,7 +48,6 @@ export default function Translate() {
     translatedText: string;
     polishedText: string;
   } | null>(null);
-  const [copied, setCopied] = useState<"original" | "translated" | "polished" | null>(null);
 
   const translateMutation = useMutation({
     mutationFn: async () => {
@@ -81,12 +77,12 @@ export default function Translate() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (polishedText: string) => {
       if (!result) throw new Error("No result to save");
       const res = await apiRequest("POST", "/api/saved-texts", {
         type: "translate",
         originalText: result.originalText,
-        polishedText: result.polishedText,
+        polishedText,
         translatedText: result.translatedText,
         sourceLanguage,
         targetLanguage,
@@ -124,16 +120,9 @@ export default function Translate() {
     setTargetLanguage(sourceLanguage);
   }
 
-  function handleCopy(content: string, type: "original" | "translated" | "polished") {
-    navigator.clipboard.writeText(content);
-    setCopied(type);
-    setTimeout(() => setCopied(null), 2000);
-  }
-
   function handleReset() {
     setText("");
     setResult(null);
-    setCopied(null);
   }
 
   function handleTranscriptionComplete(transcribedText: string) {
@@ -144,6 +133,12 @@ export default function Translate() {
 
   function handlePartialTranscription(transcribedText: string) {
     setText(transcribedText);
+  }
+
+  function handlePolishedTextEdit(newText: string) {
+    if (result) {
+      setResult({ ...result, polishedText: newText });
+    }
   }
 
   const sourceLangName = supportedLanguages.find((l) => l.code === sourceLanguage)?.name || sourceLanguage;
@@ -290,97 +285,32 @@ export default function Translate() {
         </Card>
 
         {result && (
-          <>
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    Original ({sourceLangName})
-                  </CardTitle>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleCopy(result.originalText, "original")}
-                    data-testid="button-copy-original"
-                  >
-                    {copied === "original" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                    {copied === "original" ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-original">
-                  {result.originalText}
-                </div>
-              </CardContent>
-            </Card>
+          <div className="space-y-4">
+            <WebTextResultCard
+              title={`Original (${sourceLangName})`}
+              text={result.originalText}
+              language={sourceLanguage}
+            />
 
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <CardTitle className="text-base">Translation ({targetLangName})</CardTitle>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleCopy(result.translatedText, "translated")}
-                    data-testid="button-copy-translated"
-                  >
-                    {copied === "translated" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                    {copied === "translated" ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-translated">
-                  {result.translatedText}
-                </div>
-              </CardContent>
-            </Card>
+            <WebTextResultCard
+              title={`Translation (${targetLangName})`}
+              text={result.translatedText}
+              language={targetLanguage}
+            />
 
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Languages className="h-4 w-4 text-primary" />
-                    Polished Translation
-                    <Badge variant="secondary">{targetLangName}</Badge>
-                  </CardTitle>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleCopy(result.polishedText, "polished")}
-                      data-testid="button-copy-polished"
-                    >
-                      {copied === "polished" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                      {copied === "polished" ? "Copied" : "Copy"}
-                    </Button>
-                    {user && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => saveMutation.mutate()}
-                        disabled={saveMutation.isPending}
-                        data-testid="button-save"
-                      >
-                        {saveMutation.isPending ? (
-                          <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                        ) : (
-                          <Bookmark className="h-4 w-4 mr-1" />
-                        )}
-                        Save
-                      </Button>
-                    )}
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-polished">
-                  {result.polishedText}
-                </div>
-              </CardContent>
-            </Card>
-          </>
+            <WebTextResultCard
+              title="Polished Translation"
+              text={result.polishedText}
+              language={targetLanguage}
+              badge={targetLangName}
+              editable
+              saveable={!!user}
+              onSave={() => saveMutation.mutate(result.polishedText)}
+              isSaving={saveMutation.isPending}
+              onTextChange={handlePolishedTextEdit}
+              icon={<Languages className="h-4 w-4 text-primary" />}
+            />
+          </div>
         )}
       </div>
     </AppLayout>

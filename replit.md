@@ -57,6 +57,22 @@ This replaces the old `ResultDisplay` component. Screens using it:
 - Translate (`mobile/app/(tabs)/translate.tsx`): Original + Translation + Polished cards
 - Transcribe (`mobile/app/(tabs)/process.tsx`): Source + Translated + Transformed cards
 
+### Web TextResultCard Component
+
+The web app has full feature parity with mobile via `WebTextResultCard` (`client/src/components/WebTextResultCard.tsx`). Each card provides:
+- **Play** — TTS via Web SpeechSynthesis API with language mapping for 30+ languages
+- **Copy** — Clipboard with visual confirmation
+- **Share** — Web Share API with clipboard fallback
+- **Edit** — Inline editing toggle with save/cancel
+- **Save** — Persist to saved items (authenticated users only)
+
+Used in all web result pages:
+- Polish (`client/src/pages/Polish.tsx`): Original + Polished cards
+- Translate (`client/src/pages/Translate.tsx`): Original + Translation + Polished cards
+- Process (`client/src/pages/Process.tsx`): Transcribed + Transformed result cards with language selector
+
+Process page includes an output language selector using `supportedLanguages` from shared schema. The selected language is sent as `targetLanguage` to the process-url endpoint and used for TTS playback language. Endpoint routing: authenticated users use `/api/v1/m/*` endpoints, guests use `/api/v1/p/*` (or `/api/transcribe` for file upload).
+
 ### AI Processing Pipeline
 
 The Transcription flow involves client-side audio recording, upload to the backend, validation, and AI-powered transcription. The Translation & Polishing flow takes transcribed text and applies user-specified parameters (languages, format, tone) using AI to generate polished output. The pipeline includes retry mechanisms with `p-retry` and concurrency control with `p-limit`.

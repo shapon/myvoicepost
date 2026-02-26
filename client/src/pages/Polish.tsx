@@ -5,10 +5,10 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supportedLanguages } from "@shared/schema";
 import AppLayout from "@/components/AppLayout";
 import WebVoiceRecorder from "@/components/WebVoiceRecorder";
+import WebTextResultCard from "@/components/WebTextResultCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Select,
@@ -20,9 +20,6 @@ import {
 import {
   Sparkles,
   Loader2,
-  Copy,
-  Check,
-  Save,
   RefreshCw,
   RotateCcw,
   Mic,
@@ -61,7 +58,6 @@ export default function Polish() {
   const [outputFormat, setOutputFormat] = useState("professional");
   const [outputType, setOutputType] = useState("message");
   const [result, setResult] = useState<PolishResult | null>(null);
-  const [copied, setCopied] = useState<"original" | "polished" | null>(null);
 
   const polishMutation = useMutation({
     mutationFn: async (text: string) => {
@@ -91,12 +87,12 @@ export default function Polish() {
   });
 
   const saveMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (polishedText: string) => {
       if (!result) throw new Error("No result to save");
       const res = await apiRequest("POST", "/api/saved-texts", {
         type: "polish",
         originalText: result.originalText,
-        polishedText: result.polishedText,
+        polishedText,
         sourceLanguage: language,
         outputFormat,
         outputType,
@@ -131,12 +127,6 @@ export default function Polish() {
     polishMutation.mutate(result.polishedText);
   }
 
-  function handleCopy(text: string, type: "original" | "polished") {
-    navigator.clipboard.writeText(text);
-    setCopied(type);
-    setTimeout(() => setCopied(null), 2000);
-  }
-
   function handleReset() {
     setInputText("");
     setResult(null);
@@ -150,6 +140,12 @@ export default function Polish() {
 
   function handlePartialTranscription(text: string) {
     setInputText(text);
+  }
+
+  function handlePolishedTextEdit(newText: string) {
+    if (result) {
+      setResult({ ...result, polishedText: newText });
+    }
   }
 
   const selectedLangName = supportedLanguages.find((l) => l.code === language)?.name || language;
@@ -289,83 +285,38 @@ export default function Polish() {
         </Card>
 
         {result && (
-          <>
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <CardTitle className="flex items-center gap-2 text-base">Original Text</CardTitle>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleCopy(result.originalText, "original")}
-                    data-testid="button-copy-original"
-                  >
-                    {copied === "original" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                    {copied === "original" ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-original">
-                  {result.originalText}
-                </div>
-              </CardContent>
-            </Card>
+          <div className="space-y-4">
+            <WebTextResultCard
+              title="Original Text"
+              text={result.originalText}
+              language={language}
+            />
 
-            <Card>
-              <CardHeader>
-                <div className="flex items-center justify-between gap-2 flex-wrap">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Sparkles className="h-4 w-4 text-primary" />
-                    Polished Text
-                    <Badge variant="secondary">{selectedLangName}</Badge>
-                  </CardTitle>
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleCopy(result.polishedText, "polished")}
-                      data-testid="button-copy-polished"
-                    >
-                      {copied === "polished" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                      {copied === "polished" ? "Copied" : "Copy"}
-                    </Button>
-                    {user && (
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => saveMutation.mutate()}
-                        disabled={saveMutation.isPending}
-                        data-testid="button-save"
-                      >
-                        {saveMutation.isPending ? (
-                          <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                        ) : (
-                          <Save className="h-4 w-4 mr-1" />
-                        )}
-                        Save
-                      </Button>
-                    )}
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={handleRePolish}
-                      disabled={polishMutation.isPending}
-                      data-testid="button-repolish"
-                    >
-                      <RefreshCw className="h-4 w-4 mr-1" />
-                      Re-polish
-                    </Button>
-                  </div>
-                </div>
-              </CardHeader>
-              <CardContent>
-                <div className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap" data-testid="text-polished">
-                  {result.polishedText}
-                </div>
-              </CardContent>
-            </Card>
-          </>
+            <WebTextResultCard
+              title="Polished Text"
+              text={result.polishedText}
+              language={language}
+              badge={selectedLangName}
+              editable
+              saveable={!!user}
+              onSave={() => saveMutation.mutate(result.polishedText)}
+              isSaving={saveMutation.isPending}
+              onTextChange={handlePolishedTextEdit}
+              icon={<Sparkles className="h-4 w-4 text-primary" />}
+            />
+
+            <div className="flex justify-center">
+              <Button
+                variant="outline"
+                onClick={handleRePolish}
+                disabled={polishMutation.isPending}
+                data-testid="button-repolish"
+              >
+                <RefreshCw className="h-4 w-4 mr-1" />
+                Re-polish
+              </Button>
+            </div>
+          </div>
         )}
       </div>
     </AppLayout>

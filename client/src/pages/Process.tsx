@@ -2,26 +2,32 @@ import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
+import { supportedLanguages } from "@shared/schema";
 import AppLayout from "@/components/AppLayout";
+import WebTextResultCard from "@/components/WebTextResultCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Upload,
   Link as LinkIcon,
   Loader2,
   FileAudio,
   Sparkles,
-  Copy,
-  Check,
   RefreshCw,
   MessageSquare,
   BookOpen,
   Heart,
-  Save,
+  Globe,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 
@@ -50,22 +56,25 @@ export default function Process() {
   const [inputMode, setInputMode] = useState<"url" | "file">("url");
   const [audioUrl, setAudioUrl] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [targetLanguage, setTargetLanguage] = useState("en");
   const [transcribedText, setTranscribedText] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [selectedTone, setSelectedTone] = useState<string | null>(null);
   const [resultText, setResultText] = useState("");
-  const [copied, setCopied] = useState<"transcribed" | "result" | null>(null);
   const [isSaving, setIsSaving] = useState(false);
 
+  const toneEndpoint = user ? "/api/v1/m/tone-categories" : "/api/v1/p/tone-categories";
+
   const { data: toneData } = useQuery<{ success: boolean; categories: Record<string, ToneCategory> }>({
-    queryKey: ["/api/v1/m/tone-categories"],
+    queryKey: [toneEndpoint],
   });
 
   const categories = toneData?.categories || {};
 
   const transcribeUrlMutation = useMutation({
     mutationFn: async (url: string) => {
-      const res = await apiRequest("POST", "/api/v1/m/transcribe-url", { url });
+      const endpoint = user ? "/api/v1/m/process-url" : "/api/v1/p/process-url";
+      const res = await apiRequest("POST", endpoint, { url, targetLanguage });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to transcribe");
@@ -73,13 +82,14 @@ export default function Process() {
       return res.json();
     },
     onSuccess: (data) => {
-      setTranscribedText(data.transcribedText);
+      const text = data.transcribedText || data.text || data.content || "";
+      setTranscribedText(text);
       setResultText("");
       setSelectedTone(null);
-      toast({ title: "Transcription complete", description: "Audio has been transcribed successfully." });
+      toast({ title: "Processing complete", description: "Content has been extracted successfully." });
     },
     onError: (err: Error) => {
-      toast({ title: "Transcription failed", description: err.message, variant: "destructive" });
+      toast({ title: "Processing failed", description: err.message, variant: "destructive" });
     },
   });
 
@@ -90,7 +100,8 @@ export default function Process() {
       const token = getAuthToken();
       const headers: Record<string, string> = {};
       if (token) headers["Authorization"] = `Bearer ${token}`;
-      const res = await fetch("/api/v1/m/transcribe-file", {
+      const endpoint = user ? "/api/v1/m/transcribe-file" : "/api/transcribe";
+      const res = await fetch(endpoint, {
         method: "POST",
         headers,
         body: formData,
@@ -102,7 +113,8 @@ export default function Process() {
       return res.json();
     },
     onSuccess: (data) => {
-      setTranscribedText(data.transcribedText);
+      const text = data.transcribedText || data.text || "";
+      setTranscribedText(text);
       setResultText("");
       setSelectedTone(null);
       toast({ title: "Transcription complete", description: "Audio file has been transcribed successfully." });
@@ -114,7 +126,8 @@ export default function Process() {
 
   const transformMutation = useMutation({
     mutationFn: async ({ text, toneId }: { text: string; toneId: string }) => {
-      const res = await apiRequest("POST", "/api/v1/m/transform-tone", { text, toneId });
+      const endpoint = user ? "/api/v1/m/transform-tone" : "/api/v1/p/transform-tone";
+      const res = await apiRequest("POST", endpoint, { text, toneId });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to transform");
@@ -133,7 +146,7 @@ export default function Process() {
   function handleTranscribe() {
     if (inputMode === "url") {
       if (!audioUrl.trim()) {
-        toast({ title: "Enter a URL", description: "Please provide an audio URL to transcribe.", variant: "destructive" });
+        toast({ title: "Enter a URL", description: "Please provide a URL to process.", variant: "destructive" });
         return;
       }
       transcribeUrlMutation.mutate(audioUrl.trim());
@@ -166,7 +179,7 @@ export default function Process() {
         type: "translate",
         originalText: transcribedText,
         polishedText: textToSave,
-        sourceLanguage: "en",
+        sourceLanguage: targetLanguage,
         outputFormat: type === "result" ? getSelectedToneLabel() : "transcription",
       });
       if (!res.ok) throw new Error("Failed to save");
@@ -189,12 +202,6 @@ export default function Process() {
     }
   }
 
-  function handleCopy(text: string, type: "transcribed" | "result") {
-    navigator.clipboard.writeText(text);
-    setCopied(type);
-    setTimeout(() => setCopied(null), 2000);
-  }
-
   function handleReset() {
     setInputMode("url");
     setAudioUrl("");
@@ -215,8 +222,13 @@ export default function Process() {
     return selectedTone;
   }
 
+  function handleTranscribedTextEdit(newText: string) {
+    setTranscribedText(newText);
+  }
+
   const isTranscribing = transcribeUrlMutation.isPending || transcribeFileMutation.isPending;
   const isTransforming = transformMutation.isPending;
+  const selectedLangName = supportedLanguages.find((l) => l.code === targetLanguage)?.name || targetLanguage;
 
   return (
     <AppLayout>
@@ -234,6 +246,33 @@ export default function Process() {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
+              <Globe className="h-5 w-5 text-primary" />
+              Language
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-1.5">
+              <label className="text-sm text-muted-foreground">Output Language</label>
+              <Select value={targetLanguage} onValueChange={setTargetLanguage}>
+                <SelectTrigger data-testid="select-target-language">
+                  <SelectValue placeholder="Select language" />
+                </SelectTrigger>
+                <SelectContent>
+                  {supportedLanguages.map((lang) => (
+                    <SelectItem key={lang.code} value={lang.code} data-testid={`option-lang-${lang.code}`}>
+                      {lang.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">Used for URL content extraction and text-to-speech playback. Audio files are transcribed with automatic language detection.</p>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
               <FileAudio className="h-5 w-5 text-primary" />
               Step 1: Provide Audio Input
             </CardTitle>
@@ -242,7 +281,7 @@ export default function Process() {
             <Tabs value={inputMode} onValueChange={(v) => setInputMode(v as "url" | "file")}>
               <TabsList className="w-full" data-testid="tabs-input-mode">
                 <TabsTrigger value="url" className="flex-1" data-testid="tab-url">
-                  <LinkIcon className="h-4 w-4 mr-1" /> Audio URL
+                  <LinkIcon className="h-4 w-4 mr-1" /> URL / YouTube
                 </TabsTrigger>
                 <TabsTrigger value="file" className="flex-1" data-testid="tab-file">
                   <Upload className="h-4 w-4 mr-1" /> Upload File
@@ -251,7 +290,7 @@ export default function Process() {
 
               <TabsContent value="url" className="space-y-3 mt-4">
                 <Input
-                  placeholder="Enter audio file URL (e.g., https://example.com/audio.mp3)"
+                  placeholder="Enter URL (YouTube, webpage, or audio file link)"
                   value={audioUrl}
                   onChange={(e) => setAudioUrl(e.target.value)}
                   data-testid="input-audio-url"
@@ -299,12 +338,12 @@ export default function Process() {
               {isTranscribing ? (
                 <>
                   <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                  Transcribing...
+                  Processing...
                 </>
               ) : (
                 <>
                   <Sparkles className="h-4 w-4 mr-2" />
-                  Transcribe Audio
+                  Process Content
                 </>
               )}
             </Button>
@@ -312,48 +351,18 @@ export default function Process() {
         </Card>
 
         {transcribedText && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <FileAudio className="h-5 w-5 text-primary" />
-                  Step 2: Transcribed Text
-                </CardTitle>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {user && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleSave(transcribedText, "transcribed")}
-                      disabled={isSaving}
-                      data-testid="button-save-transcribed"
-                    >
-                      {isSaving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-                      Save
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleCopy(transcribedText, "transcribed")}
-                    data-testid="button-copy-transcribed"
-                  >
-                    {copied === "transcribed" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                    {copied === "transcribed" ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <Textarea
-                value={transcribedText}
-                onChange={(e) => setTranscribedText(e.target.value)}
-                rows={6}
-                className="resize-y"
-                data-testid="textarea-transcribed"
-              />
-            </CardContent>
-          </Card>
+          <WebTextResultCard
+            title="Step 2: Transcribed Text"
+            text={transcribedText}
+            language={targetLanguage}
+            badge={selectedLangName}
+            editable
+            saveable={!!user}
+            onSave={() => handleSave(transcribedText, "transcribed")}
+            isSaving={isSaving}
+            onTextChange={handleTranscribedTextEdit}
+            icon={<FileAudio className="h-4 w-4 text-primary" />}
+          />
         )}
 
         {transcribedText && (
@@ -445,50 +454,18 @@ export default function Process() {
         )}
 
         {resultText && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center justify-between gap-2 flex-wrap">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <Check className="h-5 w-5 text-primary" />
-                  Result
-                  {selectedTone && (
-                    <Badge variant="secondary" className="ml-2">{getSelectedToneLabel()}</Badge>
-                  )}
-                </CardTitle>
-                <div className="flex items-center gap-2 flex-wrap">
-                  {user && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => handleSave(resultText, "result")}
-                      disabled={isSaving}
-                      data-testid="button-save-result"
-                    >
-                      {isSaving ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Save className="h-4 w-4 mr-1" />}
-                      Save
-                    </Button>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => handleCopy(resultText, "result")}
-                    data-testid="button-copy-result"
-                  >
-                    {copied === "result" ? <Check className="h-4 w-4 mr-1" /> : <Copy className="h-4 w-4 mr-1" />}
-                    {copied === "result" ? "Copied" : "Copy"}
-                  </Button>
-                </div>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div
-                className="p-4 rounded-md bg-muted/50 text-sm leading-relaxed whitespace-pre-wrap"
-                data-testid="text-result"
-              >
-                {resultText}
-              </div>
-            </CardContent>
-          </Card>
+          <WebTextResultCard
+            title="Result"
+            text={resultText}
+            language={targetLanguage}
+            badge={getSelectedToneLabel()}
+            editable
+            saveable={!!user}
+            onSave={() => handleSave(resultText, "result")}
+            isSaving={isSaving}
+            onTextChange={(newText) => setResultText(newText)}
+            icon={<Sparkles className="h-4 w-4 text-primary" />}
+          />
         )}
       </div>
     </AppLayout>
