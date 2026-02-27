@@ -84,7 +84,7 @@ Web and mobile share the exact same backend handlers — no aliases or rewrites:
 - **Health**: `GET /api/health` — server health check (only non-v1 endpoint remaining)
 
 Audio is sent as base64 JSON (`{ audio: base64, mimeType }`) from both web and mobile.
-Public endpoints accept `text` field; auth endpoints accept `originalText` for polish/translate.
+Public endpoints accept `text` field; auth endpoints accept both `originalText` and `text` for polish/translate (backward compatible).
 Auth endpoints return `{ success, savedTexts }` wrapper format.
 Web frontend uses JWT Bearer tokens from localStorage (`mvp_auth_token`) for `/api/v1/m/*` endpoints.
 Landing page VoiceRecorder uses two-step flow (transcribe ? polish/translate) via `/api/v1/p/*` public endpoints.

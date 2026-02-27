@@ -534,11 +534,28 @@ ${text}`,
 }
 
 // Transcribe audio from a URL by downloading it first
+function isPrivateOrReservedHost(hostname: string): boolean {
+  if (['localhost', '127.0.0.1', '0.0.0.0', '::1', ''].includes(hostname)) return true;
+  if (hostname.endsWith('.local') || hostname.endsWith('.internal')) return true;
+  const parts = hostname.split('.').map(Number);
+  if (parts.length === 4 && parts.every(p => !isNaN(p))) {
+    if (parts[0] === 10) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 169 && parts[1] === 254) return true;
+    if (parts[0] === 0) return true;
+  }
+  return false;
+}
+
 export async function transcribeAudioFromUrl(url: string): Promise<string> {
-  // Basic URL validation - only allow http/https
   const parsed = new URL(url);
   if (!['http:', 'https:'].includes(parsed.protocol)) {
     throw new Error("Only HTTP and HTTPS URLs are supported");
+  }
+
+  if (isPrivateOrReservedHost(parsed.hostname)) {
+    throw new Error("URLs pointing to private or internal addresses are not allowed");
   }
 
   console.log(`[Gemini] Fetching audio from URL: ${url}`);

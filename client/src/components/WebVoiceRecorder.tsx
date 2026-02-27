@@ -219,11 +219,11 @@ export default function WebVoiceRecorder({
               <Button
                 onClick={startRecording}
                 disabled={disabled}
-                className="gap-2"
+                size="icon"
+                className="w-16 h-16 rounded-full bg-gradient-to-br from-primary to-purple-500 text-white shadow-lg no-default-hover-elevate no-default-active-elevate transition-shadow duration-200"
                 data-testid="button-start-recording"
               >
-                <Mic className="h-4 w-4" />
-                Record
+                <Mic className="h-6 w-6" />
               </Button>
             )}
 
@@ -231,18 +231,23 @@ export default function WebVoiceRecorder({
               <Button
                 onClick={stopRecording}
                 variant="destructive"
-                className="gap-2"
+                size="icon"
+                className="w-16 h-16 rounded-full shadow-lg no-default-hover-elevate no-default-active-elevate transition-shadow duration-200"
                 data-testid="button-stop-recording"
               >
-                <Square className="h-4 w-4" />
-                Stop Recording
+                <Square className="h-6 w-6" />
               </Button>
             )}
 
             {isProcessing && (
-              <Button disabled className="gap-2">
-                <Loader2 className="h-4 w-4 animate-spin" />
-                Processing...
+              <Button
+                disabled
+                size="icon"
+                variant="secondary"
+                className="w-16 h-16 rounded-full shadow-lg"
+                data-testid="button-processing"
+              >
+                <Loader2 className="h-6 w-6 animate-spin" />
               </Button>
             )}
           </div>

@@ -1543,6 +1543,109 @@ export async function registerRoutes(
     }
   });
 
+  // Image Generation: Generate image from text content
+  app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      if (!geminiKey) {
+        return res.status(500).json({ success: false, error: "Gemini API key not configured" });
+      }
+
+      const schema = z.object({
+        prompt: z.string().min(1, "Image description is required").max(4000, "Description too long"),
+        size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional().default("1024x1024"),
+        quality: z.enum(["standard", "hd"]).optional().default("standard"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+      }
+
+      const { prompt, size, quality } = parseResult.data;
+      const userId = req.jwtUser?.userId;
+      console.log(`[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`);
+
+      const UNSAFE_KEYWORDS = [
+        "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
+        "sex", "sexual", "erotic", "hentai", "xxx",
+        "kill", "killing", "murder", "stab", "stabbing", "shoot", "shooting", "decapitate",
+        "gore", "gory", "bloody", "blood", "dismember", "mutilate", "torture", "beheading",
+        "gun", "rifle", "pistol", "shotgun", "firearm", "assault rifle", "machine gun",
+        "bomb", "grenade", "explosive", "missile", "knife attack",
+        "drug", "drugs", "cocaine", "heroin", "meth", "marijuana", "cannabis", "weed",
+        "smoking", "cigarette", "vaping", "alcohol", "drunk", "beer", "wine", "whiskey",
+        "horror", "scary", "terrifying", "nightmare", "demon", "demonic", "satan", "satanic",
+        "zombie", "undead", "corpse", "dead body", "skull", "skeleton",
+        "racist", "racism", "hate", "nazi", "swastika", "terrorist", "terrorism",
+        "suicide", "self-harm", "cutting", "hanging",
+        "child abuse", "abuse", "assault", "kidnap", "trafficking",
+        "bikini", "lingerie", "underwear", "bra", "panties", "thong",
+        "strip", "stripper", "prostitute", "escort",
+      ];
+
+      const promptLower = prompt.toLowerCase();
+      const detectedUnsafe = UNSAFE_KEYWORDS.filter(keyword => {
+        const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        return regex.test(promptLower);
+      });
+
+      if (detectedUnsafe.length > 0) {
+        console.log(`[IMAGE GEN] BLOCKED - unsafe keywords for user ${userId}: ${detectedUnsafe.join(', ')}`);
+        return res.status(400).json({
+          success: false,
+          error: "Your image description contains content that is not allowed. Please keep it family-friendly.",
+        });
+      }
+
+      const SAFETY_PREFIX = "IMPORTANT: This image must be completely safe, family-friendly, and appropriate for all ages including children. " +
+        "Do not include any violence, gore, weapons, nudity, sexual content, drugs, alcohol, tobacco, " +
+        "scary or disturbing imagery, hateful symbols, or any content inappropriate for minors. " +
+        "The image should be clean, wholesome, and suitable for a general audience. " +
+        "Now generate the following: ";
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
+
+      const response = await geminiAi.models.generateContent({
+        model: "gemini-2.0-flash-exp-image-generation",
+        contents: [SAFETY_PREFIX + prompt],
+        config: { responseModalities: ["TEXT", "IMAGE"] },
+      });
+
+      let imageBase64 = "";
+      let responseText = "";
+
+      if (response.candidates && response.candidates[0]?.content?.parts) {
+        for (const part of response.candidates[0].content.parts) {
+          if (part.inlineData && part.inlineData.data) {
+            imageBase64 = part.inlineData.data;
+          }
+          if (part.text) {
+            responseText = part.text;
+          }
+        }
+      }
+
+      if (!imageBase64) {
+        throw new Error("No image data received from Gemini");
+      }
+
+      console.log(`[IMAGE GEN] Success for user ${userId}`);
+      res.json({ success: true, imageBase64, revisedPrompt: responseText || prompt });
+    } catch (error: any) {
+      console.error("[IMAGE GEN] Error:", error.message);
+      const errorMsg = (error.message || "").toLowerCase();
+      if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
+        return res.status(400).json({ success: false, error: "Image rejected by safety filter. Please modify your description." });
+      }
+      if (errorMsg.includes("quota") || errorMsg.includes("rate") || error?.status === 429) {
+        return res.status(429).json({ success: false, error: "Too many requests. Please try again later." });
+      }
+      res.status(500).json({ success: false, error: error.message || "Failed to generate image" });
+    }
+  });
+
   // Process: Transform text with selected tone
   app.post("/api/v1/m/transform-tone", async (req, res) => {
     try {

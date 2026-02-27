@@ -1074,6 +1074,57 @@ This is a transcription task, NOT a creative writing task. Output ONLY the spoke
   }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
 }
 
+function isPrivateOrReservedHost(hostname: string): boolean {
+  if (['localhost', '127.0.0.1', '0.0.0.0', '::1', ''].includes(hostname)) return true;
+  if (hostname.endsWith('.local') || hostname.endsWith('.internal')) return true;
+  const parts = hostname.split('.').map(Number);
+  if (parts.length === 4 && parts.every(p => !isNaN(p))) {
+    if (parts[0] === 10) return true;
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true;
+    if (parts[0] === 192 && parts[1] === 168) return true;
+    if (parts[0] === 169 && parts[1] === 254) return true;
+    if (parts[0] === 0) return true;
+  }
+  return false;
+}
+
+async function transcribeAudioFromUrl(url: string): Promise<string> {
+  const parsed = new URL(url);
+  if (!['http:', 'https:'].includes(parsed.protocol)) {
+    throw new Error("Only HTTP and HTTPS URLs are supported");
+  }
+
+  if (isPrivateOrReservedHost(parsed.hostname)) {
+    throw new Error("URLs pointing to private or internal addresses are not allowed");
+  }
+
+  console.log(`[Gemini] Fetching audio from URL: ${url}`);
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch audio from URL: ${response.status} ${response.statusText}`);
+  }
+
+  const contentLength = response.headers.get("content-length");
+  if (contentLength && parseInt(contentLength) > 25 * 1024 * 1024) {
+    throw new Error("Audio file is too large (max 25MB)");
+  }
+
+  const contentType = response.headers.get("content-type") || "audio/mpeg";
+  const arrayBuffer = await response.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+  console.log(`[Gemini] Downloaded ${buffer.length} bytes, content-type: ${contentType}`);
+
+  if (buffer.length > 25 * 1024 * 1024) {
+    throw new Error("Audio file is too large (max 25MB)");
+  }
+
+  if (buffer.length < 1000) {
+    throw new Error("Downloaded file is too small to be valid audio");
+  }
+
+  return transcribeAudio(buffer, contentType);
+}
+
 async function transcribeAudioLanguageOnly(audioBuffer: Buffer, mimeType: string, language: string): Promise<string> {
   if (!audioBuffer || audioBuffer.length < 1000) {
     console.error('[TranscribeLang] Invalid audio: buffer too small', audioBuffer?.length);
@@ -3033,10 +3084,13 @@ app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
     }
 
     const schema = z.object({
-      text: z.string().min(1, "Text is required"),
+      originalText: z.string().min(1, "Original text is required").optional(),
+      text: z.string().min(1, "Text is required").optional(),
       language: z.string().optional().default("en"),
       outputFormat: z.string().optional().default("professional"),
       outputType: z.string().optional().default("message"),
+    }).refine(data => data.originalText || data.text, {
+      message: "Either originalText or text is required",
     });
 
     const parseResult = schema.safeParse(req.body);
@@ -3048,17 +3102,18 @@ app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const { text, language, outputFormat, outputType } = parseResult.data;
+    const { language, outputFormat, outputType } = parseResult.data;
+    const originalText = parseResult.data.originalText || parseResult.data.text!;
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
-    console.log(`[DEBUG /m/polish] INPUT: userId=${userId}, language=${language}, outputFormat=${outputFormat}, outputType=${outputType}, textLength=${text.length}, text="${text.substring(0, 100)}..."`);
+    console.log(`[DEBUG /m/polish] INPUT: userId=${userId}, language=${language}, outputFormat=${outputFormat}, outputType=${outputType}, textLength=${originalText.length}, text="${originalText.substring(0, 100)}..."`);
 
-    const polishedText = await polishText(text, language, outputFormat, outputType);
+    const polishedText = await polishText(originalText, language, outputFormat, outputType);
 
     console.log(`[DEBUG /m/polish] OUTPUT: success=true, polishedTextLength=${polishedText?.length || 0}, polishedText="${polishedText?.substring(0, 100)}..."`);
     res.json({
       success: true,
-      originalText: text,
+      originalText,
       polishedText,
       language,
       outputFormat,
@@ -3084,10 +3139,13 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
     }
 
     const schema = z.object({
-      text: z.string().min(1, "Text is required"),
-      sourceLanguage: z.string().min(1, "Source language is required"),
+      originalText: z.string().min(1, "Original text is required").optional(),
+      text: z.string().min(1, "Text is required").optional(),
+      sourceLanguage: z.string().optional().default("en"),
       targetLanguage: z.string().min(1, "Target language is required"),
       outputFormat: z.string().optional().default("professional"),
+    }).refine(data => data.originalText || data.text, {
+      message: "Either originalText or text is required",
     });
 
     const parseResult = schema.safeParse(req.body);
@@ -3099,17 +3157,18 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const { text, sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+    const { sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
+    const originalText = parseResult.data.originalText || parseResult.data.text!;
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
-    console.log(`[DEBUG /m/translate] INPUT: userId=${userId}, sourceLanguage=${sourceLanguage}, targetLanguage=${targetLanguage}, outputFormat=${outputFormat}, textLength=${text.length}, text="${text.substring(0, 100)}..."`);
+    console.log(`[DEBUG /m/translate] INPUT: userId=${userId}, sourceLanguage=${sourceLanguage}, targetLanguage=${targetLanguage}, outputFormat=${outputFormat}, textLength=${originalText.length}, text="${originalText.substring(0, 100)}..."`);
 
-    const result = await translateAndPolish(text, sourceLanguage, targetLanguage, outputFormat);
+    const result = await translateAndPolish(originalText, sourceLanguage, targetLanguage, outputFormat);
 
     console.log(`[DEBUG /m/translate] OUTPUT: success=true, translatedLength=${result.translatedText?.length || 0}, polishedLength=${result.polishedText?.length || 0}`);
     res.json({
       success: true,
-      originalText: text,
+      originalText,
       translatedText: result.translatedText,
       polishedText: result.polishedText,
       sourceLanguage,
@@ -6877,6 +6936,46 @@ app.post("/api/v1/m/process-url", mobileAuthMiddleware, async (req, res) => {
   } catch (error: any) {
     console.error("[DEBUG /m/process-url] ERROR:", error);
     res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+  }
+});
+
+app.post("/api/v1/m/transcribe-url", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      return res.status(500).json({ success: false, error: "Gemini AI integration not configured" });
+    }
+
+    const schema = z.object({
+      url: z.string().url("Please provide a valid URL"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+    }
+
+    const { url } = parseResult.data;
+    console.log(`[Process Transcribe-URL] Fetching audio from: ${url}`);
+
+    const transcribedText = await transcribeAudioFromUrl(url);
+
+    if (!transcribedText || transcribedText.trim() === "") {
+      return res.status(400).json({
+        success: false,
+        error: "Could not transcribe audio from the provided URL. The file may not contain speech.",
+      });
+    }
+
+    console.log(`[Process Transcribe-URL] Success: "${transcribedText.substring(0, 100)}..."`);
+
+    res.json({
+      success: true,
+      transcribedText: transcribedText.trim(),
+    });
+  } catch (error: any) {
+    console.error("[Process Transcribe-URL] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to transcribe audio from URL" });
   }
 });
 
