@@ -78,11 +78,15 @@ export default function Process() {
       return res.json();
     },
     onSuccess: (data) => {
-      const text = data.transcribedText || data.text || data.content || "";
+      const text = data.targetText || data.sourceText || data.transcribedText || data.text || data.content || "";
       setTranscribedText(text);
       setResultText("");
       setSelectedTone(null);
-      toast({ title: "Processing complete", description: "Content has been extracted successfully." });
+      if (!text) {
+        toast({ title: "Processing complete", description: "No text could be extracted from this URL.", variant: "destructive" });
+      } else {
+        toast({ title: "Processing complete", description: "Content has been extracted successfully." });
+      }
     },
     onError: (err: Error) => {
       toast({ title: "Processing failed", description: err.message, variant: "destructive" });

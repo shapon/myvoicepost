@@ -281,9 +281,17 @@ function PolishRecorder() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   
-  // Fetch saved texts for logged-in users
   const { data: savedTexts = [] } = useQuery<SavedText[]>({
     queryKey: ["/api/v1/m/saved-texts", "polish"],
+    queryFn: async () => {
+      const token = localStorage.getItem("mvp_auth_token");
+      const res = await fetch("/api/v1/m/saved-texts?type=polish", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed to fetch saved texts");
+      const data = await res.json();
+      return data.savedTexts || [];
+    },
     enabled: !!user,
   });
   
@@ -1539,9 +1547,17 @@ function TranslateRecorder() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   
-  // Fetch saved texts for logged-in users
   const { data: savedTexts = [] } = useQuery<SavedText[]>({
     queryKey: ["/api/v1/m/saved-texts", "translate"],
+    queryFn: async () => {
+      const token = localStorage.getItem("mvp_auth_token");
+      const res = await fetch("/api/v1/m/saved-texts?type=translate", {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) throw new Error("Failed to fetch saved texts");
+      const data = await res.json();
+      return data.savedTexts || [];
+    },
     enabled: !!user,
   });
   
