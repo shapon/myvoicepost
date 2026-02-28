@@ -4,6 +4,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Mic, Square, Loader2 } from "lucide-react";
 import { apiRequest, getAuthToken } from "@/lib/queryClient";
+import { useAuth } from "@/contexts/AuthContext";
+import { useToast } from "@/hooks/use-toast";
+import { useLocation } from "wouter";
 
 interface WebVoiceRecorderProps {
   onTranscriptionComplete: (text: string) => void;
@@ -20,6 +23,9 @@ export default function WebVoiceRecorder({
   chunkDuration = 60,
   disabled = false,
 }: WebVoiceRecorderProps) {
+  const { user } = useAuth();
+  const { toast } = useToast();
+  const [, navigate] = useLocation();
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -112,6 +118,16 @@ export default function WebVoiceRecorder({
   }
 
   async function startRecording() {
+    if (!user) {
+      toast({
+        title: "Registration Required",
+        description: "Please register to use 7 days trial",
+        variant: "destructive",
+      });
+      navigate("/signup");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;

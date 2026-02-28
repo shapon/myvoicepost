@@ -2,6 +2,7 @@ import { useState, useRef } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { apiRequest, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLocation } from "wouter";
 import { getLanguageName } from "@shared/schema";
 import { useSaveTextMutation } from "@/hooks/use-save-text";
 import AppLayout from "@/components/AppLayout";
@@ -46,6 +47,7 @@ const CATEGORY_ICONS: Record<string, typeof MessageSquare> = {
 export default function Process() {
   const { toast } = useToast();
   const { user } = useAuth();
+  const [, navigate] = useLocation();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [inputMode, setInputMode] = useState<"url" | "file">("url");
@@ -163,6 +165,16 @@ export default function Process() {
   });
 
   function handleTranscribe() {
+    if (!user) {
+      toast({
+        title: "Registration Required",
+        description: "Please register to use 7 days trial",
+        variant: "destructive",
+      });
+      navigate("/signup");
+      return;
+    }
+
     if (inputMode === "url") {
       if (!audioUrl.trim()) {
         toast({ title: "Enter a URL", description: "Please provide a URL to process.", variant: "destructive" });

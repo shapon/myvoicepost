@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
+import { useLocation } from "wouter";
 import type { TranslationResult, SavedText } from "@shared/schema";
 
 // Voice Input Button Component for inline voice recording
@@ -35,8 +36,20 @@ function VoiceInputButton({ onTranscription, language = "en", disabled, classNam
   const audioChunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
   const { toast } = useToast();
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
 
   const startRecording = async () => {
+    if (!user) {
+      toast({
+        title: "Registration Required",
+        description: "Please register to use 7 days trial",
+        variant: "destructive",
+      });
+      navigate("/signup");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -279,6 +292,7 @@ function PolishRecorder() {
   
   const { toast } = useToast();
   const { user } = useAuth();
+  const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   
   const { data: savedTexts = [] } = useQuery<SavedText[]>({
@@ -733,6 +747,16 @@ function PolishRecorder() {
   };
 
   const startRecording = async () => {
+    if (!user) {
+      toast({
+        title: "Registration Required",
+        description: "Please register to use 7 days trial",
+        variant: "destructive",
+      });
+      navigate("/signup");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -1545,6 +1569,7 @@ function TranslateRecorder() {
   
   const { toast } = useToast();
   const { user } = useAuth();
+  const [, navigate] = useLocation();
   const queryClient = useQueryClient();
   
   const { data: savedTexts = [] } = useQuery<SavedText[]>({
@@ -1949,6 +1974,16 @@ function TranslateRecorder() {
   };
 
   const startRecording = async () => {
+    if (!user) {
+      toast({
+        title: "Registration Required",
+        description: "Please register to use 7 days trial",
+        variant: "destructive",
+      });
+      navigate("/signup");
+      return;
+    }
+
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
