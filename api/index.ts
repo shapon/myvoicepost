@@ -60,6 +60,7 @@ const users = pgTable("mvp_users", {
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
   subscriptionId: uuid("subscription_id"),
+  activeSessionId: varchar("active_session_id", { length: 64 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -338,6 +339,11 @@ const JWT_EXPIRES_IN = "7d";
 interface JwtPayload {
   userId: string;
   username: string;
+  sessionId?: string;
+}
+
+function generateSessionId(): string {
+  return crypto.randomBytes(32).toString("hex");
 }
 
 function generateToken(payload: JwtPayload): string {
@@ -350,6 +356,17 @@ function verifyToken(token: string): JwtPayload | null {
   } catch {
     return null;
   }
+}
+
+async function storeSessionId(userId: string, sessionId: string): Promise<void> {
+  await db.update(users).set({ activeSessionId: sessionId }).where(eq(users.id, userId));
+}
+
+async function validateSessionId(userId: string, sessionId?: string): Promise<boolean> {
+  if (!sessionId) return true;
+  const result = await db.select({ activeSessionId: users.activeSessionId }).from(users).where(eq(users.id, userId)).limit(1);
+  if (result.length === 0) return false;
+  return result[0].activeSessionId === sessionId;
 }
 
 // ============ SUBSCRIPTION PLAN DEFINITIONS ============
@@ -1341,6 +1358,14 @@ const upload = multer({
 // In-memory translations storage (for serverless)
 const translations = new Map<string, any>();
 
+// Backward-compatible redirect: /api/v1/m/* → /api/v1/a/* (for mobile app transition)
+app.use((req, res, next) => {
+  if (req.path.startsWith("/api/v1/m/")) {
+    req.url = req.url.replace("/api/v1/m/", "/api/v1/a/");
+  }
+  next();
+});
+
 // ============ ROUTES ============
 
 app.get("/api/health", (req, res) => {
@@ -1798,8 +1823,11 @@ app.post("/api/v1/p/login", async (req, res) => {
       });
     }
 
+    const sessionId = generateSessionId();
+    await storeSessionId(user.id, sessionId);
+
     const token = jwt.sign(
-      { userId: user.id, email: user.email, username: user.username },
+      { userId: user.id, email: user.email, username: user.username, sessionId },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -1919,8 +1947,11 @@ app.post("/api/v1/p/register", async (req, res) => {
     }).returning();
 
     const user = result[0];
+    const sessionId = generateSessionId();
+    await storeSessionId(user.id, sessionId);
+
     const token = jwt.sign(
-      { userId: user.id, email: user.email, username: user.username },
+      { userId: user.id, email: user.email, username: user.username, sessionId },
       JWT_SECRET,
       { expiresIn: "3d" }
     );
@@ -1964,14 +1995,21 @@ app.post("/api/v1/p/auth/signup", async (req, res) => {
   app.handle(req, res);
 });
 
-app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
+app.post("/api/v1/a/auth/logout", mobileAuthMiddleware, async (req, res) => {
   const jwtUser = (req as any).jwtUser;
   console.log(`[DEBUG /m/auth/logout] userId=${jwtUser?.userId || jwtUser?.id}`);
+  try {
+    if (jwtUser?.userId) {
+      await db.update(users).set({ activeSessionId: null }).where(eq(users.id, jwtUser.userId));
+    }
+  } catch (err) {
+    console.error("[Logout] Error clearing session:", err);
+  }
   res.json({ success: true, message: "Logged out successfully" });
 });
 
-app.get("/api/v1/m/auth/me", mobileAuthMiddleware, async (req, res) => {
-  req.url = "/api/v1/m/me";
+app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
+  req.url = "/api/v1/a/me";
   app.handle(req, res);
 });
 
@@ -2087,8 +2125,10 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
       const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
       if (userRows.length > 0) {
         const user = userRows[0];
+        const cbSessionId1 = generateSessionId();
+        await storeSessionId(user.id, cbSessionId1);
         const appToken = jwt.sign(
-          { userId: user.id, email: user.email, username: user.username },
+          { userId: user.id, email: user.email, username: user.username, sessionId: cbSessionId1 },
           JWT_SECRET,
           { expiresIn: "7d" }
         );
@@ -2119,8 +2159,10 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
         providerAvatar: googleUser.picture,
       }).onConflictDoNothing();
 
+      const cbSessionId2 = generateSessionId();
+      await storeSessionId(user.id, cbSessionId2);
       const appToken = jwt.sign(
-        { userId: user.id, email: user.email, username: user.username },
+        { userId: user.id, email: user.email, username: user.username, sessionId: cbSessionId2 },
         JWT_SECRET,
         { expiresIn: "7d" }
       );
@@ -2178,8 +2220,10 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
       providerAvatar: googleUser.picture,
     });
 
+    const cbSessionId3 = generateSessionId();
+    await storeSessionId(newUser.id, cbSessionId3);
     const appToken = jwt.sign(
-      { userId: newUser.id, email: newUser.email, username: newUser.username },
+      { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId: cbSessionId3 },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -2252,8 +2296,10 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
       const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
       if (userRows.length > 0) {
         const user = userRows[0];
+        const ssoSessionId = generateSessionId();
+        await storeSessionId(user.id, ssoSessionId);
         const token = jwt.sign(
-          { userId: user.id, email: user.email, username: user.username },
+          { userId: user.id, email: user.email, username: user.username, sessionId: ssoSessionId },
           JWT_SECRET,
           { expiresIn: "7d" }
         );
@@ -2287,8 +2333,10 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
         providerName: googleUser.name,
       }).onConflictDoNothing();
 
+      const emailSsoSessionId = generateSessionId();
+      await storeSessionId(user.id, emailSsoSessionId);
       const token = jwt.sign(
-        { userId: user.id, email: user.email, username: user.username },
+        { userId: user.id, email: user.email, username: user.username, sessionId: emailSsoSessionId },
         JWT_SECRET,
         { expiresIn: "7d" }
       );
@@ -2349,8 +2397,10 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
       providerName: googleUser.name,
     });
 
+    const newUserSessionId = generateSessionId();
+    await storeSessionId(newUser.id, newUserSessionId);
     const token = jwt.sign(
-      { userId: newUser.id, email: newUser.email, username: newUser.username },
+      { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId: newUserSessionId },
       JWT_SECRET,
       { expiresIn: "7d" }
     );
@@ -2742,11 +2792,11 @@ function generateErrorPage(title: string, message: string): string {
 }
 
 // ============================================================
-// MOBILE API ENDPOINTS - /api/v1/m/
+// MOBILE API ENDPOINTS - /api/v1/a/
 // ============================================================
 
 // Mobile JWT middleware
-function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
+async function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
@@ -2767,6 +2817,17 @@ function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
         error: "Token has expired. Please login again.",
       });
     }
+
+    if (decoded.sessionId && decoded.userId) {
+      const isValidSession = await validateSessionId(decoded.userId, decoded.sessionId);
+      if (!isValidSession) {
+        return res.status(401).json({
+          success: false,
+          error: "SESSION_REPLACED",
+          message: "Your account has been logged in on another device. You have been logged out from this device.",
+        });
+      }
+    }
     
     next();
   } catch (err: any) {
@@ -2784,9 +2845,16 @@ function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
 }
 
 // Mobile Auth: Logout (use /api/v1/p/login and /api/v1/p/register for login/signup)
-app.post("/api/v1/m/logout", mobileAuthMiddleware, (req, res) => {
+app.post("/api/v1/a/logout", mobileAuthMiddleware, async (req, res) => {
   const jwtUser = (req as any).jwtUser;
   console.log(`[DEBUG /m/logout] userId=${jwtUser?.userId || jwtUser?.id}`);
+  try {
+    if (jwtUser?.userId) {
+      await db.update(users).set({ activeSessionId: null }).where(eq(users.id, jwtUser.userId));
+    }
+  } catch (err) {
+    console.error("[Logout] Error clearing session:", err);
+  }
   res.json({
     success: true,
     message: "Logged out successfully",
@@ -2794,7 +2862,7 @@ app.post("/api/v1/m/logout", mobileAuthMiddleware, (req, res) => {
 });
 
 // Mobile Auth: Get current user
-app.get("/api/v1/m/me", mobileAuthMiddleware, async (req, res) => {
+app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
@@ -2847,7 +2915,7 @@ app.get("/api/v1/m/me", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Transcribe audio
-app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -2962,7 +3030,7 @@ app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Transcribe audio - language-specific (extracts only the specified language)
-app.post("/api/v1/m/transcribe-language", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/transcribe-language", mobileAuthMiddleware, async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -3074,7 +3142,7 @@ app.post("/api/v1/m/transcribe-language", mobileAuthMiddleware, async (req, res)
 });
 
 // Mobile: Polish text
-app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/polish", mobileAuthMiddleware, async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -3129,7 +3197,7 @@ app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Translate text
-app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/translate", mobileAuthMiddleware, async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -3185,7 +3253,7 @@ app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Generate image from text description using Gemini
-app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
   try {
     const geminiKey = process.env.GEMINI_API_KEY;
     if (!geminiKey) {
@@ -3317,7 +3385,7 @@ app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Save text
-app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/saved-texts", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
@@ -3371,7 +3439,7 @@ app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Get saved texts
-app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
+app.get("/api/v1/a/saved-texts", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
@@ -3405,7 +3473,7 @@ app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Get single saved text
-app.get("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
+app.get("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
@@ -3435,7 +3503,7 @@ app.get("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Update saved text
-app.put("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
+app.put("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
@@ -3501,7 +3569,7 @@ app.put("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Delete saved text
-app.delete("/api/v1/m/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
+app.delete("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId;
@@ -3658,8 +3726,8 @@ app.get("/api/v1/p/plans", async (req, res) => {
   }
 });
 
-// POST /api/v1/m/subscribe - Handle subscription purchase (requires auth)
-app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
+// POST /api/v1/a/subscribe - Handle subscription purchase (requires auth)
+app.post("/api/v1/a/subscribe", mobileAuthMiddleware, async (req, res) => {
   try {
     const schema = z.object({
       plan_id: z.string().uuid("Invalid plan ID"),
@@ -3788,8 +3856,8 @@ app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/v1/m/check-access - Check user access (trial + subscription)
-app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
+// POST /api/v1/a/check-access - Check user access (trial + subscription)
+app.post("/api/v1/a/check-access", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
@@ -3818,8 +3886,8 @@ app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/v1/m/subscription - Get active subscription for logged-in user
-app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
+// GET /api/v1/a/subscription - Get active subscription for logged-in user
+app.get("/api/v1/a/subscription", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
@@ -3907,8 +3975,8 @@ app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// GET /api/v1/m/settings - Get all settings for logged-in user
-app.get("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
+// GET /api/v1/a/settings - Get all settings for logged-in user
+app.get("/api/v1/a/settings", mobileAuthMiddleware, async (req, res) => {
   try {
     const userId = (req as any).jwtUser?.userId;
     if (!userId) {
@@ -3935,8 +4003,8 @@ app.get("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// PUT /api/v1/m/settings - Upsert settings for logged-in user (accepts array of settings)
-app.put("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
+// PUT /api/v1/a/settings - Upsert settings for logged-in user (accepts array of settings)
+app.put("/api/v1/a/settings", mobileAuthMiddleware, async (req, res) => {
   try {
     const userId = (req as any).jwtUser?.userId;
     if (!userId) {
@@ -4015,8 +4083,8 @@ app.put("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// DELETE /api/v1/m/settings/:key - Delete a specific setting
-app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => {
+// DELETE /api/v1/a/settings/:key - Delete a specific setting
+app.delete("/api/v1/a/settings/:key", mobileAuthMiddleware, async (req, res) => {
   try {
     const userId = (req as any).jwtUser?.userId;
     if (!userId) {
@@ -4051,7 +4119,7 @@ app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => 
 // USAGE STATS & AUDIO LOG ENDPOINTS (Mobile)
 // ============================================================
 
-app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
+app.get("/api/v1/a/usage-stats", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
@@ -4097,7 +4165,7 @@ app.get("/api/v1/m/usage-stats", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-app.get("/api/v1/m/audio-logs", mobileAuthMiddleware, async (req, res) => {
+app.get("/api/v1/a/audio-logs", mobileAuthMiddleware, async (req, res) => {
   try {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
@@ -4150,7 +4218,7 @@ async function handleStripeConfig(_req: Request, res: Response) {
 }
 app.get("/api/v1/p/stripe-config", handleStripeConfig);
 
-// GET /api/subscription-status + /api/v1/m/subscription-status - Get current subscription status
+// GET /api/subscription-status + /api/v1/a/subscription-status - Get current subscription status
 async function recoverPendingTopups(userId: string, stripeCustomerId: string | null) {
   if (!stripeCustomerId) return;
   try {
@@ -4375,7 +4443,7 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
   }
 }
 
-app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) => {
+app.get("/api/v1/a/subscription-status", mobileAuthMiddleware, async (req, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   await handleSubscriptionStatus(req, res, userId);
@@ -4555,7 +4623,7 @@ async function handlePreSubscribeCheck(req: Request, res: Response, userId: stri
   }
 }
 
-app.post("/api/v1/m/pre-subscribe-check", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/pre-subscribe-check", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   await handlePreSubscribeCheck(req, res, userId);
@@ -4665,7 +4733,7 @@ async function handleCreateTopupCheckout(req: Request, res: Response, userId: st
   }
 }
 
-app.post("/api/v1/m/create-topup-checkout", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/create-topup-checkout", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   await handleCreateTopupCheckout(req, res, userId);
@@ -4806,7 +4874,7 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
   }
 }
 
-app.post("/api/v1/m/confirm-topup", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/confirm-topup", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   await handleConfirmTopup(req, res, userId);
@@ -4940,7 +5008,7 @@ async function handlePaymentHistory(_req: Request, res: Response, userId: string
   }
 }
 
-app.get("/api/v1/m/payment-history", mobileAuthMiddleware, async (req: any, res) => {
+app.get("/api/v1/a/payment-history", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
@@ -4950,12 +5018,12 @@ app.get("/api/v1/m/payment-history", mobileAuthMiddleware, async (req: any, res)
 // Web endpoint
 
 // Mobile endpoint
-app.post("/api/v1/m/create-subscription", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/create-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleCreateSubscription(req, res, userId);
 });
 
-// POST /api/cancel-subscription + /api/v1/m/cancel-subscription
+// POST /api/cancel-subscription + /api/v1/a/cancel-subscription
 async function handleCancelSubscription(req: Request, res: Response, userId: string) {
   try {
     const schema = z.object({
@@ -5011,13 +5079,13 @@ async function handleCancelSubscription(req: Request, res: Response, userId: str
 // Web endpoint
 
 // Mobile endpoint
-app.post("/api/v1/m/cancel-subscription", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/cancel-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleCancelSubscription(req, res, userId);
 });
 
-// POST /api/v1/m/confirm-subscription - Confirm subscription after mobile PaymentSheet
-app.post("/api/v1/m/confirm-subscription", mobileAuthMiddleware, async (req: any, res) => {
+// POST /api/v1/a/confirm-subscription - Confirm subscription after mobile PaymentSheet
+app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   try {
     const { subscriptionId } = req.body;
@@ -5161,7 +5229,7 @@ app.post("/api/v1/m/confirm-subscription", mobileAuthMiddleware, async (req: any
   }
 });
 
-// POST /api/reactivate-subscription + /api/v1/m/reactivate-subscription
+// POST /api/reactivate-subscription + /api/v1/a/reactivate-subscription
 async function handleReactivateSubscription(req: Request, res: Response, userId: string) {
   try {
     const schema = z.object({
@@ -5212,12 +5280,12 @@ async function handleReactivateSubscription(req: Request, res: Response, userId:
   }
 }
 
-app.post("/api/v1/m/reactivate-subscription", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/reactivate-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleReactivateSubscription(req, res, userId);
 });
 
-// POST /api/update-payment-method + /api/v1/m/update-payment-method
+// POST /api/update-payment-method + /api/v1/a/update-payment-method
 async function handleUpdatePaymentMethod(_req: Request, res: Response, userId: string) {
   try {
     console.log(`[DEBUG /update-payment-method] INPUT: userId=${userId}`);
@@ -5272,12 +5340,12 @@ async function handleUpdatePaymentMethod(_req: Request, res: Response, userId: s
   }
 }
 
-app.post("/api/v1/m/update-payment-method", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/update-payment-method", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleUpdatePaymentMethod(req, res, userId);
 });
 
-// POST /api/stripe-webhook + /api/v1/m/stripe-webhook
+// POST /api/stripe-webhook + /api/v1/a/stripe-webhook
 async function handleStripeWebhook(req: Request, res: Response) {
   try {
     const stripe = await getStripeClient();
@@ -5740,7 +5808,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
     res.status(400).json({ error: "Webhook processing failed" });
   }
 }
-app.post("/api/v1/m/stripe-webhook", handleStripeWebhook);
+app.post("/api/v1/a/stripe-webhook", handleStripeWebhook);
 
 // ============ PUSH NOTIFICATIONS ============
 
@@ -5798,14 +5866,14 @@ async function handleUnregisterPushToken(req: Request, res: Response, userId: st
   }
 }
 
-app.post("/api/v1/m/push-token", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/push-token", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
   await handleRegisterPushToken(req, res, userId);
 });
 
-app.delete("/api/v1/m/push-token", mobileAuthMiddleware, async (req: any, res) => {
+app.delete("/api/v1/a/push-token", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = (req as any).jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
@@ -6157,8 +6225,8 @@ async function adminCheckMiddleware(req: any, res: any, next: any) {
   }
 }
 
-// GET /api/v1/m/app-settings/admin-mail - Get admin email addresses (admin only)
-app.get("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/app-settings/admin-mail - Get admin email addresses (admin only)
+app.get("/api/v1/a/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const result = await db.select().from(appSettings)
       .where(eq(appSettings.settingKey, "admin_mail"))
@@ -6170,8 +6238,8 @@ app.get("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMid
   }
 });
 
-// PUT /api/v1/m/app-settings/admin-mail - Update admin email addresses (admin only)
-app.put("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// PUT /api/v1/a/app-settings/admin-mail - Update admin email addresses (admin only)
+app.put("/api/v1/a/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const { adminMail } = req.body;
     if (typeof adminMail !== "string") {
@@ -6211,8 +6279,8 @@ app.put("/api/v1/m/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMid
 // ADMIN DASHBOARD API ENDPOINTS (Web)
 // ==========================================
 
-// GET /api/v1/m/admin/stats - Dashboard summary stats
-app.get("/api/v1/m/admin/stats", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/admin/stats - Dashboard summary stats
+app.get("/api/v1/a/admin/stats", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const [userCount] = await db.select({ value: count() }).from(users);
     const [subCount] = await db.select({ value: count() }).from(userSubscriptions).where(eq(userSubscriptions.status, "active"));
@@ -6234,8 +6302,8 @@ app.get("/api/v1/m/admin/stats", mobileAuthMiddleware, adminCheckMiddleware, asy
   }
 });
 
-// GET /api/v1/m/admin/users - List all users
-app.get("/api/v1/m/admin/users", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/admin/users - List all users
+app.get("/api/v1/a/admin/users", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
@@ -6268,8 +6336,8 @@ app.get("/api/v1/m/admin/users", mobileAuthMiddleware, adminCheckMiddleware, asy
   }
 });
 
-// GET /api/v1/m/admin/subscriptions - List all subscriptions
-app.get("/api/v1/m/admin/subscriptions", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/admin/subscriptions - List all subscriptions
+app.get("/api/v1/a/admin/subscriptions", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
@@ -6312,8 +6380,8 @@ app.get("/api/v1/m/admin/subscriptions", mobileAuthMiddleware, adminCheckMiddlew
   }
 });
 
-// GET /api/v1/m/admin/payments - List Stripe payment history
-app.get("/api/v1/m/admin/payments", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/admin/payments - List Stripe payment history
+app.get("/api/v1/a/admin/payments", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const limit = parseInt(req.query.limit as string) || 20;
     const startingAfter = req.query.starting_after as string | undefined;
@@ -6348,8 +6416,8 @@ app.get("/api/v1/m/admin/payments", mobileAuthMiddleware, adminCheckMiddleware, 
   }
 });
 
-// GET /api/v1/m/admin/support - List support requests
-app.get("/api/v1/m/admin/support", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/admin/support - List support requests
+app.get("/api/v1/a/admin/support", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
@@ -6375,8 +6443,8 @@ app.get("/api/v1/m/admin/support", mobileAuthMiddleware, adminCheckMiddleware, a
   }
 });
 
-// PATCH /api/v1/m/admin/support/:id - Update support request status
-app.patch("/api/v1/m/admin/support/:id", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// PATCH /api/v1/a/admin/support/:id - Update support request status
+app.patch("/api/v1/a/admin/support/:id", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const { id } = req.params;
     const { status } = req.body;
@@ -6391,8 +6459,8 @@ app.patch("/api/v1/m/admin/support/:id", mobileAuthMiddleware, adminCheckMiddlew
   }
 });
 
-// GET /api/v1/m/admin/errors - List error logs
-app.get("/api/v1/m/admin/errors", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/admin/errors - List error logs
+app.get("/api/v1/a/admin/errors", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 20;
@@ -6420,8 +6488,8 @@ app.get("/api/v1/m/admin/errors", mobileAuthMiddleware, adminCheckMiddleware, as
   }
 });
 
-// POST /api/v1/m/support - Submit a support request (any authenticated user)
-app.post("/api/v1/m/support", mobileAuthMiddleware, async (req: any, res) => {
+// POST /api/v1/a/support - Submit a support request (any authenticated user)
+app.post("/api/v1/a/support", mobileAuthMiddleware, async (req: any, res) => {
   try {
     const userId = req.user?.userId || req.jwtUser?.userId;
     const { subject, message, email, platform } = req.body;
@@ -6442,8 +6510,8 @@ app.post("/api/v1/m/support", mobileAuthMiddleware, async (req: any, res) => {
   }
 });
 
-// POST /api/v1/m/error-log - Log an error from client (any authenticated user)
-app.post("/api/v1/m/error-log", mobileAuthMiddleware, async (req: any, res) => {
+// POST /api/v1/a/error-log - Log an error from client (any authenticated user)
+app.post("/api/v1/a/error-log", mobileAuthMiddleware, async (req: any, res) => {
   try {
     const userId = req.user?.userId || req.jwtUser?.userId;
     const { errorMessage, errorStack, errorCode, platform, endpoint, metadata } = req.body;
@@ -6466,8 +6534,8 @@ app.post("/api/v1/m/error-log", mobileAuthMiddleware, async (req: any, res) => {
   }
 });
 
-// GET /api/v1/m/user-role - Get the authenticated user's role
-app.get("/api/v1/m/user-role", mobileAuthMiddleware, async (req: any, res) => {
+// GET /api/v1/a/user-role - Get the authenticated user's role
+app.get("/api/v1/a/user-role", mobileAuthMiddleware, async (req: any, res) => {
   try {
     const userId = req.user?.userId || req.jwtUser?.userId;
     if (!userId) {
@@ -6482,8 +6550,8 @@ app.get("/api/v1/m/user-role", mobileAuthMiddleware, async (req: any, res) => {
   }
 });
 
-// POST /api/v1/m/transcribe-file - Transcribe uploaded audio file
-app.post("/api/v1/m/transcribe-file", upload.single("audio"), async (req: any, res) => {
+// POST /api/v1/a/transcribe-file - Transcribe uploaded audio file
+app.post("/api/v1/a/transcribe-file", upload.single("audio"), async (req: any, res) => {
   try {
     const geminiApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     if (!geminiApiKey) {
@@ -6517,12 +6585,12 @@ app.post("/api/v1/m/transcribe-file", upload.single("audio"), async (req: any, r
   }
 });
 
-// POST /api/v1/m/crash-report - Mobile app crash/error reporting (rate limited)
+// POST /api/v1/a/crash-report - Mobile app crash/error reporting (rate limited)
 const crashReportRateLimit: Record<string, { count: number; resetAt: number }> = {};
 const CRASH_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const CRASH_RATE_LIMIT_MAX = 5;
 
-app.post("/api/v1/m/crash-report", async (req: any, res) => {
+app.post("/api/v1/a/crash-report", async (req: any, res) => {
   try {
     const clientIp = req.headers["x-forwarded-for"] || req.ip || "unknown";
     const now = Date.now();
@@ -6561,8 +6629,8 @@ app.post("/api/v1/m/crash-report", async (req: any, res) => {
   }
 });
 
-// GET /api/v1/m/crash-reports - Get recent crash reports (admin only)
-app.get("/api/v1/m/crash-reports", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
+// GET /api/v1/a/crash-reports - Get recent crash reports (admin only)
+app.get("/api/v1/a/crash-reports", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
   try {
     const reports = await db.select().from(crashReports)
       .orderBy(desc(crashReports.createdAt))
@@ -6793,7 +6861,7 @@ ${text}`,
   }
 }
 
-app.get("/api/v1/m/tone-categories", (req, res) => {
+app.get("/api/v1/a/tone-categories", (req, res) => {
   res.json({ success: true, categories: toneCategories });
 });
 
@@ -6801,7 +6869,7 @@ app.get("/api/v1/p/tone-categories", (req, res) => {
   res.json({ success: true, categories: toneCategories });
 });
 
-app.post("/api/v1/m/transform-tone", async (req, res) => {
+app.post("/api/v1/a/transform-tone", async (req, res) => {
   try {
     const schema = z.object({
       text: z.string().min(1, "Text is required"),
@@ -6889,7 +6957,7 @@ app.post("/api/v1/p/process-url", async (req, res) => {
   }
 });
 
-app.post("/api/v1/m/process-url", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/process-url", mobileAuthMiddleware, async (req, res) => {
   try {
     const schema = z.object({
       url: z.string().url("Valid URL is required"),
@@ -6939,7 +7007,7 @@ app.post("/api/v1/m/process-url", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/v1/m/transcribe-url", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/transcribe-url", mobileAuthMiddleware, async (req, res) => {
   try {
     const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     if (!geminiKey) {
@@ -6979,7 +7047,7 @@ app.post("/api/v1/m/transcribe-url", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/v1/m/process-audio", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/process-audio", mobileAuthMiddleware, async (req, res) => {
   try {
     const { audioBase64, mimeType, targetLanguage } = req.body || {};
     if (!targetLanguage) {

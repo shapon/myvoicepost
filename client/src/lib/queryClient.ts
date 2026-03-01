@@ -22,6 +22,22 @@ function getAuthHeaders(): Record<string, string> {
   return {};
 }
 
+async function checkSessionReplaced(res: Response): Promise<boolean> {
+  if (res.status === 401) {
+    try {
+      const cloned = res.clone();
+      const data = await cloned.json();
+      if (data.error === "SESSION_REPLACED") {
+        removeAuthToken();
+        window.dispatchEvent(new CustomEvent("session-replaced", { detail: data.message }));
+        return true;
+      }
+    } catch {
+    }
+  }
+  return false;
+}
+
 async function throwIfResNotOk(res: Response) {
   if (!res.ok) {
     const text = (await res.text()) || res.statusText;
@@ -49,6 +65,8 @@ export async function apiRequest(
     credentials: "include",
   });
 
+  await checkSessionReplaced(res);
+
   return res;
 }
 
@@ -62,6 +80,11 @@ export const getQueryFn: <T>(options: {
       credentials: "include",
       headers: getAuthHeaders(),
     });
+
+    const replaced = await checkSessionReplaced(res);
+    if (replaced) {
+      return null as T;
+    }
 
     if (unauthorizedBehavior === "returnNull" && res.status === 401) {
       return null;

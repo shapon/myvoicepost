@@ -51,6 +51,7 @@ declare global {
         username: string;
         email?: string;
         role?: UserRole;
+        sessionId?: string;
       };
     }
   }
@@ -68,6 +69,7 @@ function jwtAuthMiddleware(req: Request, res: Response, next: NextFunction) {
         username: string;
         email?: string;
         role?: UserRole;
+        sessionId?: string;
       };
       req.jwtUser = decoded;
     } catch (err) {
@@ -87,11 +89,26 @@ function getUserId(req: Request): string | null {
   return null;
 }
 
-// Helper to generate JWT token
-function generateToken(userId: string, username: string, role: UserRole = "GUEST"): string {
-  return jwt.sign({ userId, username, role }, JWT_SECRET, {
+function generateSessionId(): string {
+  return crypto.randomBytes(32).toString("hex");
+}
+
+// Helper to generate JWT token with sessionId for single-device enforcement
+function generateToken(userId: string, username: string, role: UserRole = "GUEST", sessionId?: string): string {
+  return jwt.sign({ userId, username, role, sessionId }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
+}
+
+async function storeSessionId(userId: string, sessionId: string): Promise<void> {
+  await db.update(users).set({ activeSessionId: sessionId }).where(eq(users.id, userId));
+}
+
+async function validateSessionId(userId: string, sessionId?: string): Promise<boolean> {
+  if (!sessionId) return true;
+  const userRows = await db.select({ activeSessionId: users.activeSessionId }).from(users).where(eq(users.id, userId)).limit(1);
+  if (userRows.length === 0) return false;
+  return userRows[0].activeSessionId === sessionId;
 }
 
 // Use supabase storage for database operations
@@ -183,6 +200,14 @@ export async function registerRoutes(
 ): Promise<Server> {
   // Apply JWT middleware to all API routes
   app.use("/api", jwtAuthMiddleware);
+
+  // Backward-compatible redirect: /api/v1/m/* ? /api/v1/a/* (for mobile app transition)
+  app.use((req, res, next) => {
+    if (req.path.startsWith("/api/v1/m/")) {
+      req.url = req.url.replace("/api/v1/m/", "/api/v1/a/");
+    }
+    next();
+  });
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {
@@ -546,9 +571,13 @@ export async function registerRoutes(
         });
       }
 
+      // Generate session ID for single-device enforcement
+      const sessionId = generateSessionId();
+      await storeSessionId(user.id, sessionId);
+
       // Generate JWT token (valid for 7 days)
       const token = jwt.sign(
-        { userId: user.id, email: user.email, username: user.username },
+        { userId: user.id, email: user.email, username: user.username, sessionId },
         JWT_SECRET,
         { expiresIn: "7d" },
       );
@@ -713,9 +742,13 @@ export async function registerRoutes(
         })
         .where(eq(users.id, user.id));
 
+      // Generate session ID for single-device enforcement
+      const sessionId = generateSessionId();
+      await storeSessionId(user.id, sessionId);
+
       // Generate JWT token (valid for 3 days)
       const token = jwt.sign(
-        { userId: user.id, email: user.email, username: user.username },
+        { userId: user.id, email: user.email, username: user.username, sessionId },
         JWT_SECRET,
         { expiresIn: "3d" },
       );
@@ -819,7 +852,9 @@ export async function registerRoutes(
         if (userRows.length > 0) {
           const user = userRows[0];
           const currentRole = await refreshUserRole(user.id);
-          const token = generateToken(user.id, user.username, currentRole);
+          const ssoSessionId = generateSessionId();
+          await storeSessionId(user.id, ssoSessionId);
+          const token = generateToken(user.id, user.username, currentRole, ssoSessionId);
 
           await db.update(userSsoAccounts)
             .set({ providerEmail: normalizedEmail, providerName: googleUser.name, providerAvatar: googleUser.picture, updatedAt: new Date() })
@@ -852,7 +887,9 @@ export async function registerRoutes(
         }).onConflictDoNothing();
 
         const currentRole = await refreshUserRole(user.id);
-        const token = generateToken(user.id, user.username, currentRole);
+        const emailSsoSessionId = generateSessionId();
+        await storeSessionId(user.id, emailSsoSessionId);
+        const token = generateToken(user.id, user.username, currentRole, emailSsoSessionId);
 
         return res.json({
           success: true,
@@ -909,7 +946,9 @@ export async function registerRoutes(
         providerAvatar: googleUser.picture,
       });
 
-      const token = generateToken(user.id, user.username, "GUEST");
+      const newUserSessionId = generateSessionId();
+      await storeSessionId(user.id, newUserSessionId);
+      const token = generateToken(user.id, user.username, "GUEST", newUserSessionId);
 
       console.log(`[Google SSO] New user created: userId=${user.id}, username=${user.username}`);
 
@@ -937,12 +976,12 @@ export async function registerRoutes(
   });
 
   // ============================================================
-  // AUTHENTICATED API ENDPOINTS - /api/v1/m/
+  // AUTHENTICATED API ENDPOINTS - /api/v1/a/
   // All endpoints require JWT authentication
   // ============================================================
 
   // Mobile JWT middleware - validates token and checks expiry (used for all mobile endpoints except login)
-  function mobileAuthMiddleware(
+  async function mobileAuthMiddleware(
     req: Request,
     res: Response,
     next: NextFunction,
@@ -963,16 +1002,27 @@ export async function registerRoutes(
         username: string;
         email?: string;
         role?: UserRole;
+        sessionId?: string;
         exp?: number;
       };
       req.jwtUser = decoded;
 
-      // Check if token is expired (jwt.verify already does this, but we log it)
       if (decoded.exp && decoded.exp * 1000 < Date.now()) {
         return res.status(401).json({
           success: false,
           error: "Token has expired. Please login again.",
         });
+      }
+
+      if (decoded.sessionId && decoded.userId) {
+        const isValidSession = await validateSessionId(decoded.userId, decoded.sessionId);
+        if (!isValidSession) {
+          return res.status(401).json({
+            success: false,
+            error: "SESSION_REPLACED",
+            message: "Your account has been logged in on another device. You have been logged out from this device.",
+          });
+        }
       }
 
       next();
@@ -991,7 +1041,15 @@ export async function registerRoutes(
   }
 
   // Mobile Auth: Logout (client-side token removal, server just acknowledges)
-  app.post("/api/v1/m/auth/logout", mobileAuthMiddleware, (req, res) => {
+  app.post("/api/v1/a/auth/logout", mobileAuthMiddleware, async (req, res) => {
+    try {
+      const userId = req.jwtUser?.userId;
+      if (userId) {
+        await db.update(users).set({ activeSessionId: null }).where(eq(users.id, userId));
+      }
+    } catch (err) {
+      console.error("[Logout] Error clearing session:", err);
+    }
     res.json({
       success: true,
       message: "Logged out successfully",
@@ -999,7 +1057,7 @@ export async function registerRoutes(
   });
 
   // Mobile Auth: Verify token and get user info (with live role refresh)
-  app.get("/api/v1/m/auth/me", mobileAuthMiddleware, async (req, res) => {
+  app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
@@ -1030,7 +1088,7 @@ export async function registerRoutes(
   });
 
   // Mobile: Transcribe audio to text (get original text)
-  app.post("/api/v1/m/transcribe", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
 
@@ -1095,7 +1153,7 @@ export async function registerRoutes(
   });
 
   // Mobile: Polish text
-  app.post("/api/v1/m/polish", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/polish", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
 
@@ -1161,7 +1219,7 @@ export async function registerRoutes(
   });
 
   // Mobile: Translate text
-  app.post("/api/v1/m/translate", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/translate", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
 
@@ -1228,7 +1286,7 @@ export async function registerRoutes(
   });
 
   // Process: Get available tone categories
-  app.get("/api/v1/m/tone-categories", (req, res) => {
+  app.get("/api/v1/a/tone-categories", (req, res) => {
     res.json({ success: true, categories: toneCategories });
   });
 
@@ -1397,7 +1455,7 @@ export async function registerRoutes(
   });
 
   // Process URL (YouTube + Webpage) - Mobile authenticated
-  app.post("/api/v1/m/process-url", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/process-url", mobileAuthMiddleware, async (req, res) => {
     try {
       const schema = z.object({
         url: z.string().url("Valid URL is required"),
@@ -1445,7 +1503,7 @@ export async function registerRoutes(
   });
 
   // Process: Transcribe audio from URL
-  app.post("/api/v1/m/transcribe-url", async (req, res) => {
+  app.post("/api/v1/a/transcribe-url", async (req, res) => {
     try {
       if (
         !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
@@ -1498,7 +1556,7 @@ export async function registerRoutes(
   });
 
   // Process: Transcribe uploaded audio file
-  app.post("/api/v1/m/transcribe-file", upload.single("audio"), async (req, res) => {
+  app.post("/api/v1/a/transcribe-file", upload.single("audio"), async (req, res) => {
     try {
       if (
         !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
@@ -1544,7 +1602,7 @@ export async function registerRoutes(
   });
 
   // Image Generation: Generate image from text content
-  app.post("/api/v1/m/generate-image", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     try {
       const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
       if (!geminiKey) {
@@ -1647,7 +1705,7 @@ export async function registerRoutes(
   });
 
   // Process: Transform text with selected tone
-  app.post("/api/v1/m/transform-tone", async (req, res) => {
+  app.post("/api/v1/a/transform-tone", async (req, res) => {
     try {
       if (
         !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
@@ -1750,7 +1808,7 @@ export async function registerRoutes(
   });
 
   // Mobile: Save text to database
-  app.post("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/saved-texts", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId!;
 
@@ -1797,7 +1855,7 @@ export async function registerRoutes(
   });
 
   // Mobile: Get saved texts for logged user
-  app.get("/api/v1/m/saved-texts", mobileAuthMiddleware, async (req, res) => {
+  app.get("/api/v1/a/saved-texts", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId!;
 
@@ -1820,7 +1878,7 @@ export async function registerRoutes(
 
   // Mobile: Get single saved text by ID
   app.get(
-    "/api/v1/m/saved-texts/:id",
+    "/api/v1/a/saved-texts/:id",
     mobileAuthMiddleware,
     async (req, res) => {
       try {
@@ -1851,7 +1909,7 @@ export async function registerRoutes(
 
   // Mobile: Update saved text by ID
   app.put(
-    "/api/v1/m/saved-texts/:id",
+    "/api/v1/a/saved-texts/:id",
     mobileAuthMiddleware,
     async (req, res) => {
       try {
@@ -1911,7 +1969,7 @@ export async function registerRoutes(
 
   // Mobile: Delete saved text by ID
   app.delete(
-    "/api/v1/m/saved-texts/:id",
+    "/api/v1/a/saved-texts/:id",
     mobileAuthMiddleware,
     async (req, res) => {
       try {
@@ -1987,8 +2045,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/v1/m/subscribe - Handle subscription purchase (requires auth)
-  app.post("/api/v1/m/subscribe", mobileAuthMiddleware, async (req, res) => {
+  // POST /api/v1/a/subscribe - Handle subscription purchase (requires auth)
+  app.post("/api/v1/a/subscribe", mobileAuthMiddleware, async (req, res) => {
     try {
       const schema = z.object({
         plan_id: z.string().uuid("Invalid plan ID"),
@@ -2247,8 +2305,8 @@ export async function registerRoutes(
     };
   }
 
-  // POST /api/v1/m/check-access - Check if user has recording access
-  app.post("/api/v1/m/check-access", mobileAuthMiddleware, async (req, res) => {
+  // POST /api/v1/a/check-access - Check if user has recording access
+  app.post("/api/v1/a/check-access", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId!;
       const accessInfo = await checkUserAccess(userId);
@@ -2266,8 +2324,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/subscription - Get active subscription for logged-in user (with trial info)
-  app.get("/api/v1/m/subscription", mobileAuthMiddleware, async (req, res) => {
+  // GET /api/v1/a/subscription - Get active subscription for logged-in user (with trial info)
+  app.get("/api/v1/a/subscription", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId!;
       const trial = await getTrialInfo(userId);
@@ -2371,8 +2429,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/settings - Get all settings for logged-in user
-  app.get("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
+  // GET /api/v1/a/settings - Get all settings for logged-in user
+  app.get("/api/v1/a/settings", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
@@ -2398,8 +2456,8 @@ export async function registerRoutes(
     }
   });
 
-  // PUT /api/v1/m/settings - Upsert settings for logged-in user (accepts array of settings)
-  app.put("/api/v1/m/settings", mobileAuthMiddleware, async (req, res) => {
+  // PUT /api/v1/a/settings - Upsert settings for logged-in user (accepts array of settings)
+  app.put("/api/v1/a/settings", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
@@ -2477,8 +2535,8 @@ export async function registerRoutes(
     }
   });
 
-  // DELETE /api/v1/m/settings/:key - Delete a specific setting
-  app.delete("/api/v1/m/settings/:key", mobileAuthMiddleware, async (req, res) => {
+  // DELETE /api/v1/a/settings/:key - Delete a specific setting
+  app.delete("/api/v1/a/settings/:key", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
@@ -2525,7 +2583,7 @@ export async function registerRoutes(
 
   app.get("/api/v1/p/stripe-config", handleStripeConfig);
 
-  // GET /api/subscription-status + /api/v1/m/subscription-status - Get current subscription status
+  // GET /api/subscription-status + /api/v1/a/subscription-status - Get current subscription status
   async function handleSubscriptionStatus(_req: Request, res: Response, userId: string) {
     try {
       const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
@@ -2602,12 +2660,12 @@ export async function registerRoutes(
     }
   }
 
-  app.get("/api/v1/m/subscription-status", mobileAuthMiddleware, async (req, res) => {
+  app.get("/api/v1/a/subscription-status", mobileAuthMiddleware, async (req, res) => {
     const userId = req.jwtUser?.userId!;
     await handleSubscriptionStatus(req, res, userId);
   });
 
-  // POST /api/create-subscription (Web) + POST /api/v1/m/create-subscription (Mobile)
+  // POST /api/create-subscription (Web) + POST /api/v1/a/create-subscription (Mobile)
   async function handleCreateSubscription(req: Request, res: Response, userId: string, userEmail: string) {
     try {
       console.log("[Stripe Create Subscription] Raw body:", JSON.stringify(req.body));
@@ -2711,13 +2769,13 @@ export async function registerRoutes(
     }
   }
 
-  app.post("/api/v1/m/create-subscription", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/create-subscription", mobileAuthMiddleware, async (req, res) => {
     const userId = req.jwtUser?.userId!;
     const email = req.body.email;
     await handleCreateSubscription(req, res, userId, email);
   });
 
-  // POST /api/cancel-subscription (Web) + POST /api/v1/m/cancel-subscription (Mobile)
+  // POST /api/cancel-subscription (Web) + POST /api/v1/a/cancel-subscription (Mobile)
   async function handleCancelSubscription(req: Request, res: Response, userId: string) {
     try {
       const schema = z.object({
@@ -2769,12 +2827,12 @@ export async function registerRoutes(
     }
   }
 
-  app.post("/api/v1/m/cancel-subscription", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/cancel-subscription", mobileAuthMiddleware, async (req, res) => {
     const userId = req.jwtUser?.userId!;
     await handleCancelSubscription(req, res, userId);
   });
 
-  // POST /api/stripe-webhook + /api/v1/m/stripe-webhook - Stripe webhook handler
+  // POST /api/stripe-webhook + /api/v1/a/stripe-webhook - Stripe webhook handler
   async function handleStripeWebhook(req: Request, res: Response) {
     try {
       const stripe = await getUncachableStripeClient();
@@ -3055,7 +3113,7 @@ export async function registerRoutes(
     }
   }
 
-  app.post("/api/v1/m/stripe-webhook", handleStripeWebhook);
+  app.post("/api/v1/a/stripe-webhook", handleStripeWebhook);
 
   // Stripe Sync: Initialize Stripe schema and sync data
   async function initStripeSync() {
@@ -3120,8 +3178,8 @@ export async function registerRoutes(
 
   bootstrapAdminRoles();
 
-  // GET /api/v1/m/user-role - Get current user role (refreshed from DB)
-  app.get("/api/v1/m/user-role", mobileAuthMiddleware, async (req, res) => {
+  // GET /api/v1/a/user-role - Get current user role (refreshed from DB)
+  app.get("/api/v1/a/user-role", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
@@ -3139,8 +3197,8 @@ export async function registerRoutes(
   // ADMIN DASHBOARD API ENDPOINTS
   // ==========================================
 
-  // GET /api/v1/m/admin/stats - Dashboard summary stats
-  app.get("/api/v1/m/admin/stats", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // GET /api/v1/a/admin/stats - Dashboard summary stats
+  app.get("/api/v1/a/admin/stats", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const [userCount] = await db.select({ value: count() }).from(users);
       const [subCount] = await db.select({ value: count() }).from(userSubscriptions).where(eq(userSubscriptions.status, "active"));
@@ -3162,8 +3220,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/admin/users - List all users
-  app.get("/api/v1/m/admin/users", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // GET /api/v1/a/admin/users - List all users
+  app.get("/api/v1/a/admin/users", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
@@ -3196,8 +3254,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/admin/subscriptions - List all subscriptions
-  app.get("/api/v1/m/admin/subscriptions", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // GET /api/v1/a/admin/subscriptions - List all subscriptions
+  app.get("/api/v1/a/admin/subscriptions", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
@@ -3240,8 +3298,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/admin/payments - List Stripe payment history
-  app.get("/api/v1/m/admin/payments", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // GET /api/v1/a/admin/payments - List Stripe payment history
+  app.get("/api/v1/a/admin/payments", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const limit = parseInt(req.query.limit as string) || 20;
       const startingAfter = req.query.starting_after as string | undefined;
@@ -3276,8 +3334,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/admin/support - List support requests
-  app.get("/api/v1/m/admin/support", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // GET /api/v1/a/admin/support - List support requests
+  app.get("/api/v1/a/admin/support", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
@@ -3305,8 +3363,8 @@ export async function registerRoutes(
     }
   });
 
-  // PATCH /api/v1/m/admin/support/:id - Update support request status
-  app.patch("/api/v1/m/admin/support/:id", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // PATCH /api/v1/a/admin/support/:id - Update support request status
+  app.patch("/api/v1/a/admin/support/:id", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const { id } = req.params;
       const { status } = req.body;
@@ -3321,8 +3379,8 @@ export async function registerRoutes(
     }
   });
 
-  // GET /api/v1/m/admin/errors - List error logs
-  app.get("/api/v1/m/admin/errors", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
+  // GET /api/v1/a/admin/errors - List error logs
+  app.get("/api/v1/a/admin/errors", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
     try {
       const page = parseInt(req.query.page as string) || 1;
       const limit = parseInt(req.query.limit as string) || 20;
@@ -3350,8 +3408,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/v1/m/support - Submit a support request (any authenticated user)
-  app.post("/api/v1/m/support", jwtAuthMiddleware, async (req, res) => {
+  // POST /api/v1/a/support - Submit a support request (any authenticated user)
+  app.post("/api/v1/a/support", jwtAuthMiddleware, async (req, res) => {
     try {
       const userId = getUserId(req);
       const { subject, message, email, platform } = req.body;
@@ -3372,8 +3430,8 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/v1/m/error-log - Log an error from client (any authenticated user)
-  app.post("/api/v1/m/error-log", jwtAuthMiddleware, async (req, res) => {
+  // POST /api/v1/a/error-log - Log an error from client (any authenticated user)
+  app.post("/api/v1/a/error-log", jwtAuthMiddleware, async (req, res) => {
     try {
       const userId = getUserId(req);
       const { errorMessage, errorStack, errorCode, platform, endpoint, metadata } = req.body;

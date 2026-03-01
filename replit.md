@@ -75,18 +75,19 @@ Process page includes an output language selector using `supportedLanguages` fro
 
 ### Unified API Endpoints
 
-Web and mobile share the exact same backend handlers — no aliases or rewrites:
+Web and mobile share the exact same backend handlers:
 - **Public (shared)**: `/api/v1/p/*` — transcribe, polish, translate, tone-categories, process-url, auth/login, auth/signup, mail_otp, auth/google, stripe-config, plans
-- **Authenticated**: `/api/v1/m/*` — used by both web and mobile for auth features: saved-texts, settings, subscription, payment, admin/*, support, error-log, auth/logout, auth/me, transcribe, polish, translate
+- **Authenticated**: `/api/v1/a/*` — used by both web and mobile for auth features: saved-texts, settings, subscription, payment, admin/*, support, error-log, auth/logout, auth/me, transcribe, polish, translate
 - **Web-specific public**: `/api/v1/wp/*` — web-only endpoints (e.g., `/api/v1/wp/auth/google/config` for GSI client ID)
-- **Admin**: `/api/v1/m/admin/*` — dashboard stats, users, subscriptions, payments, support, errors (ADMIN role required)
-- **Stripe**: `/api/v1/m/stripe-webhook`, `/api/v1/m/create-subscription`, etc.
+- **Admin**: `/api/v1/a/admin/*` — dashboard stats, users, subscriptions, payments, support, errors (ADMIN role required)
+- **Stripe**: `/api/v1/a/stripe-webhook`, `/api/v1/a/create-subscription`, etc.
 - **Health**: `GET /api/health` — server health check (only non-v1 endpoint remaining)
+- **Backward compat**: `/api/v1/m/*` requests are URL-rewritten to `/api/v1/a/*` via middleware (temporary, for mobile app transition)
 
 Audio is sent as base64 JSON (`{ audio: base64, mimeType }`) from both web and mobile.
 Public endpoints accept `text` field; auth endpoints accept both `originalText` and `text` for polish/translate (backward compatible).
 Auth endpoints return `{ success, savedTexts }` wrapper format.
-Web frontend uses JWT Bearer tokens from localStorage (`mvp_auth_token`) for `/api/v1/m/*` endpoints.
+Web frontend uses JWT Bearer tokens from localStorage (`mvp_auth_token`) for `/api/v1/a/*` endpoints.
 Landing page VoiceRecorder uses two-step flow (transcribe ? polish/translate) via `/api/v1/p/*` public endpoints.
 
 ### Shared Constants & Reusable Utilities
@@ -95,13 +96,13 @@ Shared constants and helpers are centralized to avoid duplication across pages:
 
 - **`shared/schema.ts`**: Exports `supportedLanguages`, `OUTPUT_FORMATS`, `OUTPUT_TYPES`, `getLanguageName()` — used by VoiceRecorder, Polish, Translate, and Process pages
 - **`client/src/components/LanguageSelect.tsx`**: Reusable language dropdown component wrapping `supportedLanguages`, used by Polish, Translate, and Process pages
-- **`client/src/hooks/use-save-text.ts`**: `useSaveTextMutation()` hook for saving text results to `/api/v1/m/saved-texts` with JWT auth, cache invalidation and toast feedback, used by Polish, Translate, and Process pages
+- **`client/src/hooks/use-save-text.ts`**: `useSaveTextMutation()` hook for saving text results to `/api/v1/a/saved-texts` with JWT auth, cache invalidation and toast feedback, used by Polish, Translate, and Process pages
 
 ### Theme Persistence (Mobile)
 
 Color theme is only available to authenticated users. Guests always see the default Indigo theme.
 
-**Storage**: Dual persistence — AsyncStorage (local, fast startup) + `mvp_user_settings` table (DB, cross-device sync via JWT-authenticated `/api/v1/m/settings` endpoint).
+**Storage**: Dual persistence — AsyncStorage (local, fast startup) + `mvp_user_settings` table (DB, cross-device sync via JWT-authenticated `/api/v1/a/settings` endpoint).
 
 **Startup flow** (authenticated users):
 1. Read AsyncStorage for instant theme application

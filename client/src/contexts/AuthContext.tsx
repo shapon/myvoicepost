@@ -24,6 +24,7 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [sessionReplacedMessage, setSessionReplacedMessage] = useState<string | null>(null);
 
   const checkAuth = useCallback(async () => {
     try {
@@ -34,7 +35,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
-      const response = await fetch("/api/v1/m/auth/me", {
+      const response = await fetch("/api/v1/a/auth/me", {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -43,6 +44,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const data = await response.json();
         setUser(data.user);
       } else {
+        try {
+          const errData = await response.clone().json();
+          if (errData.error === "SESSION_REPLACED") {
+            removeAuthToken();
+            setUser(null);
+            setSessionReplacedMessage(errData.message || "Your account has been logged in on another device.");
+            return;
+          }
+        } catch {}
         removeAuthToken();
         setUser(null);
       }
@@ -57,6 +67,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     checkAuth();
   }, [checkAuth]);
+
+  useEffect(() => {
+    const handleSessionReplaced = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      setUser(null);
+      setSessionReplacedMessage(detail || "Your account has been logged in on another device.");
+    };
+    window.addEventListener("session-replaced", handleSessionReplaced);
+    return () => window.removeEventListener("session-replaced", handleSessionReplaced);
+  }, []);
 
   const login = async (email: string, password: string) => {
     const response = await apiRequest("POST", "/api/v1/p/auth/login", { identifier: email, password });
@@ -109,7 +129,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const logout = async () => {
-    await apiRequest("POST", "/api/v1/m/auth/logout", {});
+    await apiRequest("POST", "/api/v1/a/auth/logout", {});
     removeAuthToken();
     setUser(null);
   };

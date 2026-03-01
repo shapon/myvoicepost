@@ -59,7 +59,7 @@ export default function Process() {
   const [selectedTone, setSelectedTone] = useState<string | null>(null);
   const [resultText, setResultText] = useState("");
 
-  const toneEndpoint = user ? "/api/v1/m/tone-categories" : "/api/v1/p/tone-categories";
+  const toneEndpoint = user ? "/api/v1/a/tone-categories" : "/api/v1/p/tone-categories";
 
   const { data: toneData } = useQuery<{ success: boolean; categories: Record<string, ToneCategory> }>({
     queryKey: [toneEndpoint],
@@ -71,7 +71,7 @@ export default function Process() {
 
   const transcribeUrlMutation = useMutation({
     mutationFn: async (url: string) => {
-      const endpoint = user ? "/api/v1/m/process-url" : "/api/v1/p/process-url";
+      const endpoint = user ? "/api/v1/a/process-url" : "/api/v1/p/process-url";
       const res = await apiRequest("POST", endpoint, { url, targetLanguage });
       if (!res.ok) {
         const err = await res.json();
@@ -101,7 +101,7 @@ export default function Process() {
       if (token) {
         const formData = new FormData();
         formData.append("audio", file);
-        const res = await fetch("/api/v1/m/transcribe-file", {
+        const res = await fetch("/api/v1/a/transcribe-file", {
           method: "POST",
           headers: { Authorization: `Bearer ${token}` },
           body: formData,
@@ -147,7 +147,7 @@ export default function Process() {
 
   const transformMutation = useMutation({
     mutationFn: async ({ text, toneId }: { text: string; toneId: string }) => {
-      const endpoint = user ? "/api/v1/m/transform-tone" : "/api/v1/p/transform-tone";
+      const endpoint = user ? "/api/v1/a/transform-tone" : "/api/v1/p/transform-tone";
       const res = await apiRequest("POST", endpoint, { text, toneId });
       if (!res.ok) {
         const err = await res.json();

@@ -19,6 +19,7 @@ export const users = pgTable("mvp_users", {
   trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
+  activeSessionId: varchar("active_session_id", { length: 64 }),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });

@@ -297,10 +297,10 @@ function PolishRecorder() {
   const queryClient = useQueryClient();
   
   const { data: savedTexts = [] } = useQuery<SavedText[]>({
-    queryKey: ["/api/v1/m/saved-texts", "polish"],
+    queryKey: ["/api/v1/a/saved-texts", "polish"],
     queryFn: async () => {
       const token = localStorage.getItem("mvp_auth_token");
-      const res = await fetch("/api/v1/m/saved-texts?type=polish", {
+      const res = await fetch("/api/v1/a/saved-texts?type=polish", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to fetch saved texts");
@@ -314,7 +314,7 @@ function PolishRecorder() {
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; polishedText: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch("/api/v1/m/saved-texts", {
+      const response = await fetch("/api/v1/a/saved-texts", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -334,7 +334,7 @@ function PolishRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       setIsSaving(false);
       toast({ title: "Saved!", description: "Your text has been saved." });
     },
@@ -348,7 +348,7 @@ function PolishRecorder() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch(`/api/v1/m/saved-texts/${id}`, {
+      const response = await fetch(`/api/v1/a/saved-texts/${id}`, {
         method: "DELETE",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: "include",
@@ -357,7 +357,7 @@ function PolishRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       toast({ title: "Deleted", description: "Saved text removed." });
     },
   });
@@ -1579,10 +1579,10 @@ function TranslateRecorder() {
   const queryClient = useQueryClient();
   
   const { data: savedTexts = [] } = useQuery<SavedText[]>({
-    queryKey: ["/api/v1/m/saved-texts", "translate"],
+    queryKey: ["/api/v1/a/saved-texts", "translate"],
     queryFn: async () => {
       const token = localStorage.getItem("mvp_auth_token");
-      const res = await fetch("/api/v1/m/saved-texts?type=translate", {
+      const res = await fetch("/api/v1/a/saved-texts?type=translate", {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
       });
       if (!res.ok) throw new Error("Failed to fetch saved texts");
@@ -1596,7 +1596,7 @@ function TranslateRecorder() {
   const saveMutation = useMutation({
     mutationFn: async (data: { originalText: string; translatedText: string; polishedText: string }) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch("/api/v1/m/saved-texts", {
+      const response = await fetch("/api/v1/a/saved-texts", {
         method: "POST",
         headers: { 
           "Content-Type": "application/json",
@@ -1617,7 +1617,7 @@ function TranslateRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       setIsSaving(false);
       toast({ title: "Saved!", description: "Your translation has been saved." });
     },
@@ -1631,7 +1631,7 @@ function TranslateRecorder() {
   const deleteMutation = useMutation({
     mutationFn: async (id: string) => {
       const token = localStorage.getItem("mvp_auth_token");
-      const response = await fetch(`/api/v1/m/saved-texts/${id}`, {
+      const response = await fetch(`/api/v1/a/saved-texts/${id}`, {
         method: "DELETE",
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         credentials: "include",
@@ -1640,7 +1640,7 @@ function TranslateRecorder() {
       return response.json();
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/v1/m/saved-texts"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/saved-texts"] });
       toast({ title: "Deleted", description: "Saved translation removed." });
     },
   });
