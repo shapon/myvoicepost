@@ -20,6 +20,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useAuth } from "@/contexts/AuthContext";
 import { useLocation } from "wouter";
 import type { TranslationResult, SavedText } from "@shared/schema";
+import { retryWithBackoff } from "@/lib/pendingRecordings";
 
 // Voice Input Button Component for inline voice recording
 interface VoiceInputButtonProps {
@@ -516,55 +517,60 @@ function PolishRecorder() {
   const polishMutation = useMutation({
     mutationFn: async (audioBlob: Blob) => {
       const audio = await blobToBase64Polish(audioBlob);
-      const transcribeRes = await fetch("/api/v1/p/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audio,
-          mimeType: audioBlob.type || "audio/webm",
-          language,
-        }),
-      });
 
-      if (!transcribeRes.ok) {
-        const error = await transcribeRes.json();
-        throw new Error(error.error || "Transcription failed");
-      }
+      const doPolish = async () => {
+        const transcribeRes = await fetch("/api/v1/p/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audio,
+            mimeType: audioBlob.type || "audio/webm",
+            language,
+          }),
+        });
 
-      const transcribeData = await transcribeRes.json();
-      const originalText = transcribeData.originalText;
+        if (!transcribeRes.ok) {
+          const error = await transcribeRes.json();
+          throw new Error(error.error || "Transcription failed");
+        }
 
-      if (!originalText || !originalText.trim()) {
-        throw new Error("Could not transcribe audio. Please try speaking more clearly.");
-      }
+        const transcribeData = await transcribeRes.json();
+        const originalText = transcribeData.originalText;
 
-      const polishRes = await fetch("/api/v1/p/polish", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: originalText,
-          language,
+        if (!originalText || !originalText.trim()) {
+          throw new Error("Could not transcribe audio. Please try speaking more clearly.");
+        }
+
+        const polishRes = await fetch("/api/v1/p/polish", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: originalText,
+            language,
+            outputFormat,
+            outputType,
+          }),
+        });
+
+        if (!polishRes.ok) {
+          const error = await polishRes.json();
+          throw new Error(error.error || "Polishing failed");
+        }
+
+        const polishData = await polishRes.json();
+        return {
+          id: "",
+          originalText,
+          translatedText: "",
+          polishedText: polishData.polishedText,
+          sourceLanguage: language,
+          targetLanguage: language,
           outputFormat,
-          outputType,
-        }),
-      });
+          createdAt: new Date(),
+        } as TranslationResult;
+      };
 
-      if (!polishRes.ok) {
-        const error = await polishRes.json();
-        throw new Error(error.error || "Polishing failed");
-      }
-
-      const polishData = await polishRes.json();
-      return {
-        id: "",
-        originalText,
-        translatedText: "",
-        polishedText: polishData.polishedText,
-        sourceLanguage: language,
-        targetLanguage: language,
-        outputFormat,
-        createdAt: new Date(),
-      } as TranslationResult;
+      return await retryWithBackoff(doPolish);
     },
     onSuccess: (data) => {
       setResult(data);
@@ -1794,55 +1800,60 @@ function TranslateRecorder() {
   const translateMutation = useMutation({
     mutationFn: async (audioBlob: Blob) => {
       const audio = await blobToBase64Translate(audioBlob);
-      const transcribeRes = await fetch("/api/v1/p/transcribe", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          audio,
-          mimeType: audioBlob.type || "audio/webm",
-          language: sourceLanguage,
-        }),
-      });
 
-      if (!transcribeRes.ok) {
-        const error = await transcribeRes.json();
-        throw new Error(error.error || "Transcription failed");
-      }
+      const doTranslate = async () => {
+        const transcribeRes = await fetch("/api/v1/p/transcribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            audio,
+            mimeType: audioBlob.type || "audio/webm",
+            language: sourceLanguage,
+          }),
+        });
 
-      const transcribeData = await transcribeRes.json();
-      const originalText = transcribeData.originalText;
+        if (!transcribeRes.ok) {
+          const error = await transcribeRes.json();
+          throw new Error(error.error || "Transcription failed");
+        }
 
-      if (!originalText || !originalText.trim()) {
-        throw new Error("Could not transcribe audio. Please try speaking more clearly.");
-      }
+        const transcribeData = await transcribeRes.json();
+        const originalText = transcribeData.originalText;
 
-      const translateRes = await fetch("/api/v1/p/translate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          text: originalText,
+        if (!originalText || !originalText.trim()) {
+          throw new Error("Could not transcribe audio. Please try speaking more clearly.");
+        }
+
+        const translateRes = await fetch("/api/v1/p/translate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: originalText,
+            sourceLanguage,
+            targetLanguage,
+            outputFormat,
+          }),
+        });
+
+        if (!translateRes.ok) {
+          const error = await translateRes.json();
+          throw new Error(error.error || "Translation failed");
+        }
+
+        const translateData = await translateRes.json();
+        return {
+          id: "",
+          originalText,
+          translatedText: translateData.translatedText,
+          polishedText: translateData.polishedText,
           sourceLanguage,
           targetLanguage,
           outputFormat,
-        }),
-      });
+          createdAt: new Date(),
+        } as TranslationResult;
+      };
 
-      if (!translateRes.ok) {
-        const error = await translateRes.json();
-        throw new Error(error.error || "Translation failed");
-      }
-
-      const translateData = await translateRes.json();
-      return {
-        id: "",
-        originalText,
-        translatedText: translateData.translatedText,
-        polishedText: translateData.polishedText,
-        sourceLanguage,
-        targetLanguage,
-        outputFormat,
-        createdAt: new Date(),
-      } as TranslationResult;
+      return await retryWithBackoff(doTranslate);
     },
     onSuccess: (data) => {
       setResult(data);

@@ -7,6 +7,7 @@ import { apiRequest, getAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
+import { retryWithBackoff } from "@/lib/pendingRecordings";
 
 interface WebVoiceRecorderProps {
   onTranscriptionComplete: (text: string) => void;
@@ -103,7 +104,7 @@ export default function WebVoiceRecorder({
 
     setProcessingChunks((prev) => prev + 1);
     try {
-      const text = await transcribeBlob(chunkBlob);
+      const text = await retryWithBackoff(() => transcribeBlob(chunkBlob));
       if (text.trim()) {
         accumulatedTextRef.current = accumulatedTextRef.current
           ? accumulatedTextRef.current + " " + text.trim()
@@ -111,7 +112,7 @@ export default function WebVoiceRecorder({
         onPartialTranscription?.(accumulatedTextRef.current);
       }
     } catch (err) {
-      console.error("Chunk transcription error:", err);
+      console.error("Chunk transcription failed after retries:", err);
     } finally {
       setProcessingChunks((prev) => Math.max(0, prev - 1));
     }
@@ -201,14 +202,19 @@ export default function WebVoiceRecorder({
       const finalBlob = new Blob(chunksRef.current, { type: "audio/webm" });
       chunksRef.current = [];
       try {
-        const text = await transcribeBlob(finalBlob);
+        const text = await retryWithBackoff(() => transcribeBlob(finalBlob));
         if (text.trim()) {
           accumulatedTextRef.current = accumulatedTextRef.current
             ? accumulatedTextRef.current + " " + text.trim()
             : text.trim();
         }
       } catch (err) {
-        console.error("Final chunk error:", err);
+        console.error("Final chunk failed after retries:", err);
+        toast({
+          title: "Processing Failed",
+          description: "Transcription failed after multiple attempts. Please try again.",
+          variant: "destructive",
+        });
       }
     }
 
