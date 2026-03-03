@@ -2250,6 +2250,19 @@ export async function registerRoutes(
 
   // Helper: Check if user has access (trial OR active subscription with minutes)
   async function checkUserAccess(userId: string) {
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const userRecord = userResult[0];
+
+    if (userRecord?.role === "ADMIN") {
+      const trial = await getTrialInfo(userId);
+      return {
+        access_granted: true,
+        access_source: "admin",
+        trial,
+        subscription: null,
+      };
+    }
+
     const trial = await getTrialInfo(userId);
 
     const activeSubResult = await db

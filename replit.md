@@ -40,7 +40,7 @@ PostgreSQL, accessed via Neon serverless driver and Drizzle ORM, is used for dat
 
 ### Authentication & Authorization
 
-The system uses JWT-based authentication with a session fallback. JWTs have a 7-day expiry. Passwords are hashed with bcryptjs, and email OTP verification is required for registration. Role-Based Access Control (RBAC) defines `GUEST`, `USER`, and `ADMIN` roles, with transitions based on subscription status. `refreshUserRole` and `checkRole` middleware enforce access.
+The system uses JWT-based authentication with a session fallback. JWTs have a 7-day expiry. Passwords are hashed with bcryptjs, and email OTP verification is required for registration. Role-Based Access Control (RBAC) defines `GUEST`, `TRIAL`, `USER`, and `ADMIN` roles, with transitions based on subscription status. `refreshUserRole` and `checkRole` middleware enforce access. `checkUserAccess()` grants access via trial, active subscription, or ADMIN role bypass. Both `server/routes.ts` and `api/index.ts` must stay in sync for this logic.
 
 ### Unified TextResultCard Component
 
