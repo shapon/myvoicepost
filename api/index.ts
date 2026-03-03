@@ -3870,7 +3870,9 @@ app.post("/api/v1/a/subscribe", mobileAuthMiddleware, async (req, res) => {
       .set({ subscriptionId: subscription.id, updatedAt: new Date() })
       .where(eq(users.id, userId));
 
-    console.log(`[DEBUG /m/subscribe] OUTPUT: success=true, userId=${userId}, plan=${plan.name}, validUntil=${validDateUpto.toISOString()}, carryover=${carryoverMinutes}min, totalMinutes=${totalMinutesAvailable}`);
+    const updatedRole = await refreshUserRole(userId);
+
+    console.log(`[Subscribe] userId=${userId}, plan=${plan.name}, validUntil=${validDateUpto.toISOString()}, carryover=${carryoverMinutes}min, totalMinutes=${totalMinutesAvailable}, role=${updatedRole}`);
 
     res.json({
       success: true,
@@ -3887,6 +3889,7 @@ app.post("/api/v1/a/subscribe", mobileAuthMiddleware, async (req, res) => {
         offline_recording: plan.offlineRecording,
         status: "active",
       },
+      role: updatedRole,
     });
   } catch (error: any) {
     console.error("[Subscribe] Error:", error);
@@ -5180,7 +5183,9 @@ app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any
 
       if (existingActive.length > 0) {
         console.log(`[Confirm Subscription] User already has an active subscription record (possibly from webhook)`);
-        return res.json({ success: true, message: "Subscription is active", status: stripeSub.status });
+        const role = await refreshUserRole(userId);
+        const accessInfo = await checkUserAccess(userId);
+        return res.json({ success: true, message: "Subscription is active", status: stripeSub.status, role, ...accessInfo });
       }
 
       const priceId = stripeSub.items.data[0]?.price?.id;
@@ -5249,7 +5254,9 @@ app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any
         console.log(`[Confirm Subscription] Created active subscription record for user ${userId}, plan: ${matchedPlan.name}`);
       }
 
-      return res.json({ success: true, message: "Subscription is active", status: stripeSub.status });
+      const role = await refreshUserRole(userId);
+      const accessInfo = await checkUserAccess(userId);
+      return res.json({ success: true, message: "Subscription is active", status: stripeSub.status, role, ...accessInfo });
     } else if (stripeSub.status === "incomplete") {
       console.log(`[Confirm Subscription] Subscription still incomplete for user ${userId}`);
       return res.json({
@@ -5532,6 +5539,8 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 }
 
                 const totalNewMinutesRemaining = newMinutesTotal - currentMinutesUsed;
+
+                await refreshUserRole(user.id);
                 console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}, access until ${newTrialEndsAt.toISOString()}, ${totalNewMinutesRemaining} mins remaining`);
 
                 if (user.email) {
@@ -5580,6 +5589,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
               }
             }
 
+            await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${failedSubId}`);
 
             if (user.email) {
@@ -5674,6 +5684,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
               }
             }
 
+            await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] subscription.updated: User ${user.id} status=${newStatus}`);
           }
         }
@@ -5708,6 +5719,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 .where(eq(userSubscriptions.id, activeSubResult[0].id));
             }
 
+            await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
           }
         }
