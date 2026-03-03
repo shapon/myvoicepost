@@ -2170,18 +2170,10 @@ export async function registerRoutes(
         })
         .returning();
 
-      // Promote role to USER on subscription activation (skip if ADMIN)
-      const currentUserResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      const currentUserRole = currentUserResult[0]?.role || "GUEST";
-      let updatedRole: UserRole = currentUserRole as UserRole;
-      if (currentUserRole !== "ADMIN") {
-        await storage.updateUserRole(userId, "USER");
-        updatedRole = "USER";
-        console.log(`[RBAC] User ${userId} promoted to USER via subscription`);
-      }
+      const updatedRole = await refreshUserRole(userId);
 
       console.log(
-        `[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()} (carryover: ${carryoverMinutes} mins)`,
+        `[Subscribe] User ${userId} subscribed to ${plan.name} plan until ${validDateUpto.toISOString()} (carryover: ${carryoverMinutes} mins, role: ${updatedRole})`,
       );
 
       res.json({
@@ -2941,13 +2933,7 @@ export async function registerRoutes(
                     status: "active",
                   });
 
-                  // Promote role to USER on successful payment (skip if ADMIN)
-                  const currentUser = userResult[0];
-                  if (currentUser.role !== "ADMIN") {
-                    await storage.updateUserRole(user.id, "USER");
-                    console.log(`[RBAC] User ${user.id} promoted to USER via invoice.paid`);
-                  }
-
+                  await refreshUserRole(user.id);
                   console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
                 }
               }
@@ -2984,12 +2970,7 @@ export async function registerRoutes(
                 }
               }
 
-              // Demote role to GUEST on payment failure (skip if ADMIN)
-              if (user.role !== "ADMIN") {
-                await storage.updateUserRole(user.id, "GUEST");
-                console.log(`[RBAC] User ${user.id} demoted to GUEST via payment failure`);
-              }
-
+              await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${subscriptionId}`);
             }
           }
@@ -3042,11 +3023,6 @@ export async function registerRoutes(
                   .set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() })
                   .where(eq(users.id, user.id));
 
-                // Promote role to USER when subscription becomes active (skip if ADMIN)
-                if (user.role !== "ADMIN") {
-                  await storage.updateUserRole(user.id, "USER");
-                  console.log(`[RBAC] User ${user.id} promoted to USER via subscription.updated(active)`);
-                }
               } else if (newStatus === "past_due" || newStatus === "unpaid") {
                 const activeSubResult = await db.select().from(userSubscriptions)
                   .where(and(
@@ -3060,14 +3036,9 @@ export async function registerRoutes(
                     .set({ status: "payment_failed" })
                     .where(eq(userSubscriptions.id, activeSubResult[0].id));
                 }
-
-                // Demote role to GUEST on past_due/unpaid (skip if ADMIN)
-                if (user.role !== "ADMIN") {
-                  await storage.updateUserRole(user.id, "GUEST");
-                  console.log(`[RBAC] User ${user.id} demoted to GUEST via subscription.updated(${newStatus})`);
-                }
               }
 
+              await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] subscription.updated: User ${user.id} status=${newStatus}`);
             }
           }
@@ -3102,12 +3073,7 @@ export async function registerRoutes(
                   .where(eq(userSubscriptions.id, activeSubResult[0].id));
               }
 
-              // Demote role to GUEST on subscription deletion (skip if ADMIN)
-              if (user.role !== "ADMIN") {
-                await storage.updateUserRole(user.id, "GUEST");
-                console.log(`[RBAC] User ${user.id} demoted to GUEST via subscription.deleted`);
-              }
-
+              await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
             }
           }

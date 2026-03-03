@@ -124,7 +124,13 @@ The build process uses Vite for the React frontend and esbuild for the Node.js b
 
 ### Trial & Subscription System
 
-New users receive a 7-day trial with 90 minutes of recording. Subscription plans (Starter, Pro) manage user access and features. Access is granted if a trial is active with minutes remaining or if there's an active subscription with available minutes.
+New users receive a 7-day trial with 90 minutes of recording. Subscription plans (Starter, Pro) manage user access and features.
+
+**Single Source of Truth**: `mvp_user_subscriptions` table stores subscription status (active, cancelled, payment_failed, superseded). `mvp_users` stores trial-only data (trialEndsAt, trialMinutesUsed, trialMinutesTotal). Access is determined by `checkUserAccess()` which reads from BOTH tables — trial from `mvp_users`, subscription from `mvp_user_subscriptions`.
+
+**Role Derivation**: User role (`GUEST`, `TRIAL`, `USER`, `ADMIN`) is derived from subscription/trial state via `refreshUserRole()`. This function is called after every subscription state change (subscribe, webhook events: invoice.paid, invoice.payment_failed, subscription.updated, subscription.deleted).
+
+**Mobile Subscription Flow**: After payment completion, `SubscriptionScreen` calls `refreshAfterSubscription()` which updates both the SubscriptionContext (used by ChunkedVoiceRecorder for access checks) and local screen state. `SubscriptionContext.checkAccess()` updates both `trial` and `subscription` state from the server response.
 
 ### Email OTP Verification
 

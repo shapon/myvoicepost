@@ -3912,7 +3912,7 @@ app.post("/api/v1/a/check-access", mobileAuthMiddleware, async (req, res) => {
 
     const accessInfo = await checkUserAccess(userId);
 
-    console.log(`[DEBUG /m/check-access] OUTPUT: userId=${userId}, granted=${accessInfo.access_granted}, source=${accessInfo.access_source}, trialActive=${accessInfo.trial?.is_active}, trialStatus=${accessInfo.trial?.status}, minutesRemaining=${accessInfo.trial?.minutes_remaining}, minutesUsed=${accessInfo.trial?.minutes_used}`);
+    console.log(`[Check Access] userId=${userId}, granted=${accessInfo.access_granted}, source=${accessInfo.access_source}, trialActive=${accessInfo.trial?.is_active}, trialStatus=${accessInfo.trial?.status}, trialMins=${accessInfo.trial?.minutes_remaining}, subStatus=${accessInfo.subscription?.status}, subMins=${accessInfo.subscription?.minutes_remaining}`);
 
     res.json({
       success: true,
