@@ -362,6 +362,37 @@ async function storeSessionId(userId: string, sessionId: string): Promise<void> 
   await db.update(users).set({ activeSessionId: sessionId }).where(eq(users.id, userId));
 }
 
+type UserRole = "ADMIN" | "USER" | "GUEST" | "TRIAL";
+
+async function refreshUserRole(userId: string): Promise<UserRole> {
+  const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const user = userResult[0];
+  if (!user) return "GUEST";
+
+  if (user.role === "ADMIN") return "ADMIN";
+
+  const activeSubResult = await db.select().from(userSubscriptions)
+    .where(and(
+      eq(userSubscriptions.userId, userId),
+      eq(userSubscriptions.status, "active"),
+      gte(userSubscriptions.validDateUpto, new Date()),
+    ))
+    .limit(1);
+
+  const hasActiveSub = activeSubResult.length > 0;
+
+  if (hasActiveSub) {
+    return "USER";
+  }
+
+  const trial = await getTrialInfo(userId);
+  if (trial && trial.is_active) {
+    return "TRIAL";
+  }
+
+  return "GUEST";
+}
+
 async function validateSessionId(userId: string, sessionId?: string): Promise<boolean> {
   if (!sessionId) return true;
   const result = await db.select({ activeSessionId: users.activeSessionId }).from(users).where(eq(users.id, userId)).limit(1);
@@ -1844,7 +1875,8 @@ app.post("/api/v1/p/login", async (req, res) => {
       }
     }
 
-    console.log(`[DEBUG /p/login] OUTPUT: success=true, userId=${user.id}, username=${user.username}, trialExpired=${trialExpired}`);
+    const currentRole = await refreshUserRole(user.id);
+    console.log(`[DEBUG /p/login] OUTPUT: success=true, userId=${user.id}, username=${user.username}, role=${currentRole}, trialExpired=${trialExpired}`);
 
     res.json({
       success: true,
@@ -1854,6 +1886,7 @@ app.post("/api/v1/p/login", async (req, res) => {
         id: user.id,
         email: user.email,
         username: user.username,
+        role: currentRole,
       },
       trial_expired: trialExpired,
     });
@@ -3670,10 +3703,18 @@ async function checkUserAccess(userId: string) {
     }
   }
 
-  const accessGranted = trial !== null && trial.is_active && trial.minutes_remaining > 0;
-  let accessSource = "none";
-  if (accessGranted && trial?.is_subscribed) accessSource = "subscription";
-  else if (accessGranted) accessSource = "trial";
+  const trialGrantsAccess = trial !== null && trial.is_active && trial.minutes_remaining > 0;
+  const subGrantsAccess = subscription !== null && subscription.status === "active" && subscription.minutes_remaining > 0;
+  const accessGranted = trialGrantsAccess || subGrantsAccess;
+
+  let accessSource: string;
+  if (trialGrantsAccess) {
+    accessSource = "trial";
+  } else if (subGrantsAccess) {
+    accessSource = "subscription";
+  } else {
+    accessSource = "none";
+  }
 
   return {
     access_granted: accessGranted,

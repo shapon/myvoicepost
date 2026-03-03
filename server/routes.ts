@@ -137,7 +137,17 @@ async function refreshUserRole(userId: string): Promise<UserRole> {
   if (hasActiveSub) {
     newRole = "USER";
   } else {
-    newRole = "GUEST";
+    const now = new Date();
+    const trialActive = user.trialEndsAt && !user.trialUsed && now < user.trialEndsAt;
+    const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+    const trialMinutesTotal = user.trialMinutesTotal || 90;
+    const trialHasMinutes = (trialMinutesTotal - trialMinutesUsed) > 0;
+
+    if (trialActive && trialHasMinutes) {
+      newRole = "TRIAL";
+    } else {
+      newRole = "GUEST";
+    }
   }
 
   if (user.role !== newRole) {
@@ -634,7 +644,8 @@ export async function registerRoutes(
         }
       }
 
-      console.log(`[Public Login] User ${user.username} logged in successfully`);
+      const currentRole = await refreshUserRole(user.id);
+      console.log(`[Public Login] User ${user.username} logged in successfully, role: ${currentRole}`);
 
       res.json({
         success: true,
@@ -644,6 +655,7 @@ export async function registerRoutes(
           id: user.id,
           email: user.email,
           username: user.username,
+          role: currentRole,
         },
         trial_expired: trialExpired,
       });
