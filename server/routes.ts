@@ -2611,6 +2611,12 @@ export async function registerRoutes(
 
       const trial = await getTrialInfo(userId);
 
+      if (user.stripeCustomerId) {
+        cleanupStalePayments(user.stripeCustomerId).catch(err =>
+          console.warn("[Subscription Status] Background cleanup error:", err.message)
+        );
+      }
+
       const activeSubResult = await db.select().from(userSubscriptions)
         .where(and(
           eq(userSubscriptions.userId, userId),
@@ -2682,6 +2688,65 @@ export async function registerRoutes(
     await handleSubscriptionStatus(req, res, userId);
   });
 
+  const PAYMENT_TIMEOUT_MS = 15 * 60 * 1000;
+
+  async function cleanupStalePayments(customerId: string) {
+    try {
+      const stripe = await getUncachableStripeClient();
+      const cutoffTime = Math.floor((Date.now() - PAYMENT_TIMEOUT_MS) / 1000);
+
+      for (const status of ["incomplete", "incomplete_expired"] as const) {
+        let hasMore = true;
+        let startingAfter: string | undefined;
+        while (hasMore) {
+          const params: any = { customer: customerId, status, limit: 100 };
+          if (startingAfter) params.starting_after = startingAfter;
+          const staleSubs = await stripe.subscriptions.list(params);
+          for (const sub of staleSubs.data) {
+            if (sub.created < cutoffTime) {
+              try {
+                await stripe.subscriptions.cancel(sub.id);
+                console.log(`[Stripe Cleanup] Cancelled stale ${status} subscription ${sub.id} (created ${new Date(sub.created * 1000).toISOString()})`);
+              } catch (cancelErr: any) {
+                console.warn(`[Stripe Cleanup] Could not cancel sub ${sub.id}:`, cancelErr.message);
+              }
+            }
+          }
+          hasMore = staleSubs.has_more;
+          if (staleSubs.data.length > 0) {
+            startingAfter = staleSubs.data[staleSubs.data.length - 1].id;
+          }
+        }
+      }
+
+      let hasMore = true;
+      let startingAfter: string | undefined;
+      const cancelableStatuses = ["requires_payment_method", "requires_confirmation", "requires_action"];
+      while (hasMore) {
+        const params: any = { customer: customerId, limit: 100 };
+        if (startingAfter) params.starting_after = startingAfter;
+        const pendingPIs = await stripe.paymentIntents.list(params);
+        for (const pi of pendingPIs.data) {
+          if (pi.created >= cutoffTime) continue;
+          if (cancelableStatuses.includes(pi.status)) {
+            try {
+              await stripe.paymentIntents.cancel(pi.id);
+              console.log(`[Stripe Cleanup] Cancelled stale PaymentIntent ${pi.id} (status: ${pi.status}, created ${new Date(pi.created * 1000).toISOString()})`);
+            } catch (cancelErr: any) {
+              console.warn(`[Stripe Cleanup] Could not cancel PI ${pi.id}:`, cancelErr.message);
+            }
+          }
+        }
+        hasMore = pendingPIs.has_more;
+        if (pendingPIs.data.length > 0) {
+          startingAfter = pendingPIs.data[pendingPIs.data.length - 1].id;
+        }
+      }
+    } catch (error: any) {
+      console.error("[Stripe Cleanup] Error cleaning up stale payments:", error.message);
+    }
+  }
+
   // POST /api/create-subscription (Web) + POST /api/v1/a/create-subscription (Mobile)
   async function handleCreateSubscription(req: Request, res: Response, userId: string, userEmail: string) {
     try {
@@ -2735,6 +2800,8 @@ export async function registerRoutes(
           .set({ stripeCustomerId: customerId, updatedAt: new Date() })
           .where(eq(users.id, userId));
       }
+
+      await cleanupStalePayments(customerId);
 
       const subscription = await stripe.subscriptions.create({
         customer: customerId,

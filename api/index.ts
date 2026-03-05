@@ -4394,10 +4394,14 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
       return res.status(404).json({ success: false, error: "User not found" });
     }
 
-    // Recover any pending top-ups that weren't confirmed
     await recoverPendingTopups(userId, user.stripeCustomerId);
 
-    // Re-fetch user after potential recovery
+    if (user.stripeCustomerId) {
+      cleanupStalePayments(user.stripeCustomerId).catch(err =>
+        console.warn("[Subscription Status] Background cleanup error:", err.message)
+      );
+    }
+
     const updatedUserResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     const updatedUser = updatedUserResult[0] || user;
 
@@ -4506,6 +4510,65 @@ app.get("/api/v1/a/subscription-status", mobileAuthMiddleware, async (req, res) 
   await handleSubscriptionStatus(req, res, userId);
 });
 
+const PAYMENT_TIMEOUT_MS = 15 * 60 * 1000;
+
+async function cleanupStalePayments(customerId: string) {
+  try {
+    const stripe = await getStripeClient();
+    const cutoffTime = Math.floor((Date.now() - PAYMENT_TIMEOUT_MS) / 1000);
+
+    for (const status of ["incomplete", "incomplete_expired"] as const) {
+      let hasMore = true;
+      let startingAfter: string | undefined;
+      while (hasMore) {
+        const params: any = { customer: customerId, status, limit: 100 };
+        if (startingAfter) params.starting_after = startingAfter;
+        const staleSubs = await stripe.subscriptions.list(params);
+        for (const sub of staleSubs.data) {
+          if (sub.created < cutoffTime) {
+            try {
+              await stripe.subscriptions.cancel(sub.id);
+              console.log(`[Stripe Cleanup] Cancelled stale ${status} subscription ${sub.id} (created ${new Date(sub.created * 1000).toISOString()})`);
+            } catch (cancelErr: any) {
+              console.warn(`[Stripe Cleanup] Could not cancel sub ${sub.id}:`, cancelErr.message);
+            }
+          }
+        }
+        hasMore = staleSubs.has_more;
+        if (staleSubs.data.length > 0) {
+          startingAfter = staleSubs.data[staleSubs.data.length - 1].id;
+        }
+      }
+    }
+
+    let hasMore = true;
+    let startingAfter: string | undefined;
+    const cancelableStatuses = ["requires_payment_method", "requires_confirmation", "requires_action"];
+    while (hasMore) {
+      const params: any = { customer: customerId, limit: 100 };
+      if (startingAfter) params.starting_after = startingAfter;
+      const pendingPIs = await stripe.paymentIntents.list(params);
+      for (const pi of pendingPIs.data) {
+        if (pi.created >= cutoffTime) continue;
+        if (cancelableStatuses.includes(pi.status)) {
+          try {
+            await stripe.paymentIntents.cancel(pi.id);
+            console.log(`[Stripe Cleanup] Cancelled stale PaymentIntent ${pi.id} (status: ${pi.status}, created ${new Date(pi.created * 1000).toISOString()})`);
+          } catch (cancelErr: any) {
+            console.warn(`[Stripe Cleanup] Could not cancel PI ${pi.id}:`, cancelErr.message);
+          }
+        }
+      }
+      hasMore = pendingPIs.has_more;
+      if (pendingPIs.data.length > 0) {
+        startingAfter = pendingPIs.data[pendingPIs.data.length - 1].id;
+      }
+    }
+  } catch (error: any) {
+    console.error("[Stripe Cleanup] Error cleaning up stale payments:", error.message);
+  }
+}
+
 async function handleCreateSubscription(req: Request, res: Response, userId: string) {
   try {
     console.log(`[DEBUG /create-subscription] INPUT: userId=${userId}, body=${JSON.stringify(req.body)}`);
@@ -4559,25 +4622,7 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
         .where(eq(users.id, userId));
     }
 
-    // Cancel any existing incomplete/incomplete_expired subscriptions for this customer to avoid duplicates
-    try {
-      for (const status of ["incomplete", "incomplete_expired"] as const) {
-        const existingSubs = await stripe.subscriptions.list({
-          customer: customerId,
-          status,
-        });
-        for (const sub of existingSubs.data) {
-          try {
-            await stripe.subscriptions.cancel(sub.id);
-            console.log(`[Stripe] Cancelled ${status} subscription: ${sub.id}`);
-          } catch (innerErr: any) {
-            console.warn(`[Stripe] Could not cancel sub ${sub.id}:`, innerErr.message);
-          }
-        }
-      }
-    } catch (cancelErr: any) {
-      console.warn("[Stripe] Could not clean up incomplete subscriptions:", cancelErr.message);
-    }
+    await cleanupStalePayments(customerId);
 
     const subscription = await stripe.subscriptions.create({
       customer: customerId,
@@ -4757,13 +4802,13 @@ async function handleCreateTopupCheckout(req: Request, res: Response, userId: st
       return res.status(500).json({ success: false, error: "Invalid price configuration" });
     }
 
-    // Create ephemeral key for the customer (needed for Payment Sheet)
+    await cleanupStalePayments(customerId);
+
     const ephemeralKey = await stripe.ephemeralKeys.create(
       { customer: customerId },
       { apiVersion: "2024-06-20" }
     );
 
-    // Create PaymentIntent for one-time payment (in-app Payment Sheet)
     const paymentIntent = await stripe.paymentIntents.create({
       amount,
       currency,
