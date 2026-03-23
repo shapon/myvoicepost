@@ -4,6 +4,7 @@ import { SiX, SiDiscord, SiInstagram } from "react-icons/si";
 
 const footerLinks = {
   product: [
+    { label: "About", href: "/about", isRoute: true },
     { label: "Updates", href: "#" },
     { label: "Blog", href: "#" },
     { label: "Resources", href: "#" },

@@ -1481,7 +1481,7 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
       });
     }
 
-    const originalText = await transcribeAudio(audioBuffer, mimeType);
+    const originalText = await transcribeAudio(audioBuffer, mimeType, language);
 
     console.log(`[DEBUG /p/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
 

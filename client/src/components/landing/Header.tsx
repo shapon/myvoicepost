@@ -35,6 +35,7 @@ export default function Header() {
     { label: "Features", href: "#features" },
     { label: "Use Cases", href: "#usecases" },
     { label: "Reviews", href: "#reviews" },
+    { label: "About", href: "/about", isRoute: true },
     { label: "Pricing", href: "/pricing", isRoute: true },
   ];
 

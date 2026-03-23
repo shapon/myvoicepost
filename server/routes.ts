@@ -385,10 +385,10 @@ export async function registerRoutes(
       const audioBuffer = Buffer.from(audio, "base64");
 
       console.log(
-        `[Public Transcribe] Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}`,
+        `[Public Transcribe] Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}, lang: ${language}`,
       );
 
-      const originalText = await transcribeAudio(audioBuffer, mimeType);
+      const originalText = await transcribeAudio(audioBuffer, mimeType, language);
 
       if (!originalText || originalText.trim() === "") {
         return res.status(400).json({
@@ -1133,10 +1133,10 @@ export async function registerRoutes(
       const audioBuffer = Buffer.from(audio, "base64");
 
       console.log(
-        `[Mobile Transcribe] User: ${userId}, Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}`,
+        `[Mobile Transcribe] User: ${userId}, Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}, lang: ${language}`,
       );
 
-      const originalText = await transcribeAudio(audioBuffer, mimeType);
+      const originalText = await transcribeAudio(audioBuffer, mimeType, language);
 
       if (!originalText || originalText.trim() === "") {
         return res.status(400).json({
@@ -1587,9 +1587,10 @@ export async function registerRoutes(
         });
       }
 
-      console.log(`[Process Transcribe-File] File: ${req.file.originalname}, Size: ${req.file.size} bytes, MIME: ${req.file.mimetype}`);
+      const fileLanguage = (req.body?.language as string) || "en";
+      console.log(`[Process Transcribe-File] File: ${req.file.originalname}, Size: ${req.file.size} bytes, MIME: ${req.file.mimetype}, lang: ${fileLanguage}`);
 
-      const transcribedText = await transcribeAudio(req.file.buffer, req.file.mimetype);
+      const transcribedText = await transcribeAudio(req.file.buffer, req.file.mimetype, fileLanguage);
 
       if (!transcribedText || transcribedText.trim() === "") {
         return res.status(400).json({

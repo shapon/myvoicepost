@@ -17,6 +17,7 @@ import Process from "@/pages/Process";
 import Polish from "@/pages/Polish";
 import Translate from "@/pages/Translate";
 import SavedItems from "@/pages/SavedItems";
+import About from "@/pages/About";
 
 function Router() {
   return (
@@ -33,6 +34,7 @@ function Router() {
       <Route path="/polish" component={Polish} />
       <Route path="/translate" component={Translate} />
       <Route path="/saved" component={SavedItems} />
+      <Route path="/about" component={About} />
       <Route component={NotFound} />
     </Switch>
   );

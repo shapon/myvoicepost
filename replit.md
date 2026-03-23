@@ -173,6 +173,22 @@ A separate full-stack location tracking system in `mobile_loc/` folder, complete
 - `index.html` - Login with OTP
 - `home.html` - Dashboard with tabs: Profile, Groups, Map (Leaflet), Invitations, Subscriptions
 
+## Android E2E Tests (Detox)
+
+Located in `mobile/mobile_android/`. Contains 16 Detox test files with 120+ test cases covering all app features:
+- **Authentication**: Login, registration, password recovery, sign out
+- **Core Features**: Polish, Translate, Process/Transcribe with voice recording
+- **Saved Items**: View, filter, edit, delete
+- **Profile & Stats**: User info, statistics, activity log
+- **Subscription & Payment**: Plans, subscribe, cancel, restore, top-up
+- **Account Settings**: Auto-renew, update card, payment history
+- **Settings**: Theme, battery profile, language management
+- **Help & Support**: Search, suggestions, contact
+- **Recording Recovery**: Background/foreground, crash recovery
+- **Battery Warning, Diagnostics, Result Actions, Navigation**
+
+Run with: `cd mobile && ./mobile_android/run-tests.sh` (requires Android SDK + Detox CLI)
+
 ## External Dependencies
 
 ### Third-Party Services
