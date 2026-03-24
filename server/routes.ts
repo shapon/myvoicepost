@@ -40,7 +40,7 @@ if (!JWT_SECRET) {
   );
   process.exit(1);
 }
-const JWT_EXPIRES_IN = "7d";
+const JWT_EXPIRES_IN = "60d";
 
 // Extend Express Request to include user from JWT
 declare global {
@@ -585,11 +585,11 @@ export async function registerRoutes(
       const sessionId = generateSessionId();
       await storeSessionId(user.id, sessionId);
 
-      // Generate JWT token (valid for 7 days)
+      // Generate JWT token (valid for 60 days)
       const token = jwt.sign(
         { userId: user.id, email: user.email, username: user.username, sessionId },
         JWT_SECRET,
-        { expiresIn: "7d" },
+        { expiresIn: "60d" },
       );
 
       // Check trial expiry on login and auto-assign pending_payment if needed
@@ -650,7 +650,7 @@ export async function registerRoutes(
       res.json({
         success: true,
         token,
-        expiresIn: 7 * 24 * 60 * 60,
+        expiresIn: 60 * 24 * 60 * 60,
         user: {
           id: user.id,
           email: user.email,
@@ -758,11 +758,11 @@ export async function registerRoutes(
       const sessionId = generateSessionId();
       await storeSessionId(user.id, sessionId);
 
-      // Generate JWT token (valid for 3 days)
+      // Generate JWT token (valid for 60 days)
       const token = jwt.sign(
         { userId: user.id, email: user.email, username: user.username, sessionId },
         JWT_SECRET,
-        { expiresIn: "3d" },
+        { expiresIn: "60d" },
       );
 
       console.log(`[Public Signup] User ${user.username} created successfully with 7-day trial`);
@@ -771,7 +771,7 @@ export async function registerRoutes(
         success: true,
         message: "Account created successfully",
         token,
-        expiresIn: 3 * 24 * 60 * 60,
+        expiresIn: 60 * 24 * 60 * 60,
         user: {
           id: user.id,
           email: user.email,
@@ -875,7 +875,7 @@ export async function registerRoutes(
           return res.json({
             success: true,
             token,
-            expiresIn: 7 * 24 * 60 * 60,
+            expiresIn: 60 * 24 * 60 * 60,
             user: { id: user.id, email: user.email, username: user.username, role: currentRole },
             isNewUser: false,
           });
@@ -906,7 +906,7 @@ export async function registerRoutes(
         return res.json({
           success: true,
           token,
-          expiresIn: 7 * 24 * 60 * 60,
+          expiresIn: 60 * 24 * 60 * 60,
           user: { id: user.id, email: user.email, username: user.username, role: currentRole },
           isNewUser: false,
         });
@@ -967,7 +967,7 @@ export async function registerRoutes(
       res.status(201).json({
         success: true,
         token,
-        expiresIn: 7 * 24 * 60 * 60,
+        expiresIn: 60 * 24 * 60 * 60,
         user: { id: user.id, email: user.email, username: user.username, role: "GUEST" },
         isNewUser: true,
         trial: {

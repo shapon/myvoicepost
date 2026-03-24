@@ -334,7 +334,7 @@ async function getStripePublishableKey(): Promise<string> {
 
 // ============ JWT CONFIG ============
 const JWT_SECRET = process.env.SESSION_SECRET || "myvoicepost-jwt-secret-key";
-const JWT_EXPIRES_IN = "7d";
+const JWT_EXPIRES_IN = "60d";
 
 interface JwtPayload {
   userId: string;
@@ -1860,7 +1860,7 @@ app.post("/api/v1/p/login", async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, username: user.username, sessionId },
       JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "60d" }
     );
 
     let trialExpired = false;
@@ -1881,7 +1881,7 @@ app.post("/api/v1/p/login", async (req, res) => {
     res.json({
       success: true,
       token,
-      expiresIn: 7 * 24 * 60 * 60,
+      expiresIn: 60 * 24 * 60 * 60,
       user: {
         id: user.id,
         email: user.email,
@@ -1986,7 +1986,7 @@ app.post("/api/v1/p/register", async (req, res) => {
     const token = jwt.sign(
       { userId: user.id, email: user.email, username: user.username, sessionId },
       JWT_SECRET,
-      { expiresIn: "3d" }
+      { expiresIn: "60d" }
     );
 
     console.log(`[DEBUG /p/register] OUTPUT: success=true, userId=${user.id}, username=${user.username}, trialEnds=${trialEndsAt.toISOString()}`);
@@ -1994,7 +1994,7 @@ app.post("/api/v1/p/register", async (req, res) => {
     res.status(201).json({
       success: true,
       token,
-      expiresIn: 3 * 24 * 60 * 60,
+      expiresIn: 60 * 24 * 60 * 60,
       user: {
         id: user.id,
         email: user.email,
@@ -2163,7 +2163,7 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
         const appToken = jwt.sign(
           { userId: user.id, email: user.email, username: user.username, sessionId: cbSessionId1 },
           JWT_SECRET,
-          { expiresIn: "7d" }
+          { expiresIn: "60d" }
         );
 
         await db.update(userSsoAccounts)
@@ -2197,7 +2197,7 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
       const appToken = jwt.sign(
         { userId: user.id, email: user.email, username: user.username, sessionId: cbSessionId2 },
         JWT_SECRET,
-        { expiresIn: "7d" }
+        { expiresIn: "60d" }
       );
 
       console.log(`[Google SSO] Linked Google SSO to existing email user: userId=${user.id}`);
@@ -2258,7 +2258,7 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
     const appToken = jwt.sign(
       { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId: cbSessionId3 },
       JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "60d" }
     );
 
     console.log(`[Google SSO] New user created: userId=${newUser.id}, username=${newUser.username}`);
@@ -2334,7 +2334,7 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
         const token = jwt.sign(
           { userId: user.id, email: user.email, username: user.username, sessionId: ssoSessionId },
           JWT_SECRET,
-          { expiresIn: "7d" }
+          { expiresIn: "60d" }
         );
 
         await db.update(userSsoAccounts)
@@ -2344,7 +2344,7 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
         return res.json({
           success: true,
           token,
-          expiresIn: 7 * 24 * 60 * 60,
+          expiresIn: 60 * 24 * 60 * 60,
           user: { id: user.id, email: user.email, username: user.username },
           isNewUser: false,
         });
@@ -2371,13 +2371,13 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
       const token = jwt.sign(
         { userId: user.id, email: user.email, username: user.username, sessionId: emailSsoSessionId },
         JWT_SECRET,
-        { expiresIn: "7d" }
+        { expiresIn: "60d" }
       );
 
       return res.json({
         success: true,
         token,
-        expiresIn: 7 * 24 * 60 * 60,
+        expiresIn: 60 * 24 * 60 * 60,
         user: { id: user.id, email: user.email, username: user.username },
         isNewUser: false,
       });
@@ -2435,7 +2435,7 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
     const token = jwt.sign(
       { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId: newUserSessionId },
       JWT_SECRET,
-      { expiresIn: "7d" }
+      { expiresIn: "60d" }
     );
 
     console.log(`[Google SSO] POST New user created: userId=${newUser.id}, username=${newUser.username}`);
@@ -2443,7 +2443,7 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
     res.status(201).json({
       success: true,
       token,
-      expiresIn: 7 * 24 * 60 * 60,
+      expiresIn: 60 * 24 * 60 * 60,
       user: { id: newUser.id, email: newUser.email, username: newUser.username },
       isNewUser: true,
     });
