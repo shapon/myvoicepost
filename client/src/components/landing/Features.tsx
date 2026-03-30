@@ -22,7 +22,7 @@ const features = [
   {
     icon: Zap,
     title: "Actions",
-    description: "Send your notes anywhere—from Google Docs to Notion—using Zapier or webhooks.",
+    description: "Send your notes anywhere--from Google Docs to Notion--using Zapier or webhooks.",
   },
   {
     icon: Globe,

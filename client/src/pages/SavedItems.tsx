@@ -288,7 +288,7 @@ export default function SavedItems() {
                           <span className="text-xs text-muted-foreground">
                             {getLanguageName(item.sourceLanguage)}
                             {item.type === "translate" && item.targetLanguage
-                              ? ` → ${getLanguageName(item.targetLanguage)}`
+                              ? ` -> ${getLanguageName(item.targetLanguage)}`
                               : ""}
                           </span>
                           {item.outputFormat && (

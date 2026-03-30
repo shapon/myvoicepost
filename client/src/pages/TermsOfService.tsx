@@ -1104,7 +1104,7 @@ export default function TermsOfService() {
             <div className="grid sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="font-medium">How do I cancel my subscription?</p>
-                <p className="text-muted-foreground">Account Settings → Subscription → Cancel</p>
+                <p className="text-muted-foreground">Account Settings &gt; Subscription &gt; Cancel</p>
               </div>
               <div>
                 <p className="font-medium">Can I get a refund?</p>
@@ -1124,7 +1124,7 @@ export default function TermsOfService() {
 
         <div className="mt-8 text-center text-sm text-muted-foreground border-t pt-8">
           <p>Last updated: February 29, 2026 | Version 2.0</p>
-          <p className="mt-1">© 2026 MyVoicePost. All rights reserved.</p>
+          <p className="mt-1">(c) 2026 MyVoicePost. All rights reserved.</p>
           <div className="flex items-center justify-center gap-4 mt-4">
             <Link href="/privacy">
               <Button variant="ghost" size="sm">Privacy Policy</Button>

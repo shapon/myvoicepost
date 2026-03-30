@@ -587,10 +587,10 @@ async function sendPasswordResetEmail(
           <strong>This link will expire in ${RESET_TOKEN_EXPIRY_HOURS} hour(s).</strong>
         </p>
         <p style="color: #888; font-size: 13px;">If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.</p>
-        <p style="color: #888; font-size: 13px; margin-bottom: 0;">— The MyVoicePost Team</p>
+        <p style="color: #888; font-size: 13px; margin-bottom: 0;">-- The MyVoicePost Team</p>
       </div>
       <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
-        <p>© ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
+        <p>(c) ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
       </div>
     </body>
     </html>
@@ -610,7 +610,7 @@ This link will expire in ${RESET_TOKEN_EXPIRY_HOURS} hour(s).
 
 If you didn't request this password reset, you can safely ignore this email. Your password will remain unchanged.
 
-— The MyVoicePost Team
+-- The MyVoicePost Team
   `.trim();
 
   // Send email
@@ -1066,55 +1066,311 @@ function safeJsonParse(text: string, fallback: any = {}): any {
   }
 }
 
-async function transcribeAudio(audioBuffer: Buffer, mimeType: string): Promise<string> {
-  // Validate audio buffer - must have reasonable size for actual audio
-  if (!audioBuffer || audioBuffer.length < 1000) {
-    console.error('[Transcribe] Invalid audio: buffer too small', audioBuffer?.length);
-    throw new Error('Invalid audio data - file too small');
+// Normalise MIME type for Gemini compatibility
+function normaliseMimeType(mimeType: string): string {
+  if (mimeType === 'audio/m4a') return 'audio/mp4';
+  if (mimeType === 'audio/x-m4a') return 'audio/mp4';
+  if (mimeType === 'audio/x-wav') return 'audio/wav';
+  if (mimeType === 'audio/x-mp3') return 'audio/mpeg';
+  return mimeType;
+}
+
+// Patterns that indicate Gemini hallucinated instead of transcribing real audio
+const HALLUCINATION_PATTERNS = [
+  /^it'?s?\s+just\s+that\s+there'?s?\s+that\.?$/i,
+  /^(um+|uh+|hmm+|ah+|oh+|eh+)[\s.,!?]*$/i,
+  /^that'?s?\s+it\.?$/i,
+  /^(okay|alright|all right|sure|yep|yeah|yes|no)[,.]?$/i,
+  /^thank\s+you\.?$/i,
+  /^(hello|hi|hey)\s*(there|everyone|folks)?\.?$/i,
+  /^welcome\.?$/i,
+  /^(good\s+)?(morning|afternoon|evening|day)\.?$/i,
+  /music\s+(playing|continues|fades)/i,
+  /\[music\]/i,
+  /\[applause\]/i,
+  /\[laughter\]/i,
+  /\[background\s+noise\]/i,
+  /\[inaudible\]/i,
+  /\[crosstalk\]/i,
+  /this\s+is\s+(a\s+)?test/i,
+  /the\s+following\s+is\s+a\s+transcription/i,
+  /^(caption|subtitle)s?\s+by/i,
+  /subtitles?\s+provided\s+by/i,
+  /auto(-|\s)?generated\s+captions?/i,
+  /transcript\s+generated\s+by/i,
+  /^narrator\s*:/i,
+  /^speaker\s*\d*\s*:/i,
+  /^(right|so|well)[,.]?$/i,
+  /^\.+$/,
+  /welcome\s+to\s+(the\s+)?(new\s+)?episode\s+of/i,
+  /welcome\s+to\s+this\s+new\s+episode/i,
+  /welcome\s+to\s+(the\s+)?podcast/i,
+  /today\s+we\s+are\s+joined\s+by/i,
+  /today\s+we'?re?\s+joined\s+by/i,
+  /our\s+very\s+special\s+guest/i,
+  /thank\s+you\s+for\s+joining\s+us/i,
+  /thank\s+you\s+for\s+being\s+with\s+us/i,
+  /john\s+smith/i,
+  /jane\s+doe/i,
+  /mr\.\s+smith/i,
+  /mrs?\.\s+john/i,
+  /^\s*$/,
+];
+
+function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
+  const trimmed = text.trim();
+
+  if (trimmed.length < 5) {
+    console.log(`[Transcribe] Hallucination check: Text too short (${trimmed.length} chars)`);
+    return true;
   }
 
-  // Use concurrency limiter to prevent overwhelming the AI API under high load
+  const charsPerKb = trimmed.length / (audioSizeBytes / 1024);
+  if (charsPerKb < 0.5 && trimmed.length < 50) {
+    console.log(`[Transcribe] Suspiciously low text density: ${charsPerKb.toFixed(2)} chars/KB`);
+    return true;
+  }
+
+  for (const pattern of HALLUCINATION_PATTERNS) {
+    if (pattern.test(trimmed)) {
+      console.log(`[Transcribe] Hallucination pattern matched: ${pattern.source}`);
+      console.log(`[Transcribe] Flagged text: "${trimmed.substring(0, 200)}"`);
+      return true;
+    }
+  }
+
+  const hallucinationKeywords = [
+    'podcast', 'episode', 'special guest', 'john smith', 'jane doe',
+    'welcome to the show', 'thank you for joining', 'honored to have',
+    'our guest today', 'joining us today'
+  ];
+  const lowerText = trimmed.toLowerCase();
+  let keywordCount = 0;
+  for (const keyword of hallucinationKeywords) {
+    if (lowerText.includes(keyword)) {
+      keywordCount++;
+      console.log(`[Transcribe] Hallucination keyword found: "${keyword}"`);
+    }
+  }
+  if (keywordCount >= 2) {
+    console.log(`[Transcribe] Multiple hallucination keywords (${keywordCount}) -- likely fabricated`);
+    return true;
+  }
+
+  return false;
+}
+
+// Transcribe audio -- language-agnostic: detects and returns ALL speech regardless of language spoken.
+// Use this for /transcribe (no language hint from client).
+async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promise<{ text: string; detectedLanguage?: string }> {
+  const transcriptionId = `trans_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+  if (!audioBuffer || audioBuffer.length < 5000) {
+    console.log(`[TranscribeAuto] ${transcriptionId} - Audio too small (${audioBuffer?.length} bytes), skipping`);
+    return { text: "" };
+  }
+
+  const effectiveMimeType = normaliseMimeType(mimeType);
+  console.log(`[TranscribeAuto] ${transcriptionId} - size=${audioBuffer.length}, mime=${mimeType}->${effectiveMimeType}`);
+
   return aiRequestLimiter(() => pRetry(async () => {
     try {
+      const base64Data = audioBuffer.toString("base64");
+
+      const prompt = `You are a strict speech-to-text transcription engine.
+
+TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken.
+
+STRICT RULES -- you MUST follow every rule:
+1. Detect and transcribe ALL spoken words exactly as heard, in their original language(s).
+2. If multiple languages are spoken, transcribe each part in its original language without mixing or translating.
+3. If there is NO speech (silence, background noise, music only), set "hasSpeech" to false and "transcription" to "".
+4. If speech is unclear, set "confidence" to "low" and still transcribe what you hear.
+5. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
+6. NEVER add labels like "Speaker:", "Narrator:", language tags, timestamps, or any commentary.
+7. NEVER output podcast intros, greetings, or placeholder text.
+8. Return ONLY valid JSON. No extra text before or after.
+
+Return this exact JSON structure:
+{
+  "hasSpeech": true,
+  "confidence": "high",
+  "transcription": "exact words spoken here",
+  "detectedLanguage": "en"
+}
+
+Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (hard to hear)
+For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en", "hi", "es", "fr")`;
+
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
-        config: {
-          temperature: 0,  // Make output deterministic - reduces hallucination
-          topK: 1,         // Only consider most likely token
-          topP: 1,         // No nucleus sampling
-        },
         contents: [{
           role: "user",
           parts: [
-            { 
-              text: `You are a precise speech-to-text transcription system. Your ONLY job is to transcribe the exact words spoken in this audio.
-
-STRICT RULES - FAILURE TO FOLLOW WILL RESULT IN ERROR:
-1. Listen carefully to the audio and transcribe ONLY the exact words spoken
-2. If you cannot clearly hear speech, respond with exactly: [NO_SPEECH_DETECTED]
-3. NEVER generate, invent, create, or imagine any text
-4. NEVER add words that were not spoken
-5. NEVER describe or summarize - just transcribe word-for-word
-6. If audio quality is poor, transcribe what you CAN hear, even if incomplete
-
-This is a transcription task, NOT a creative writing task. Output ONLY the spoken words:` 
-            },
-            { inlineData: { mimeType, data: audioBuffer.toString("base64") } }
+            { inlineData: { mimeType: effectiveMimeType, data: base64Data } },
+            { text: prompt }
           ]
-        }]
+        }],
+        config: {
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              hasSpeech:        { type: Type.BOOLEAN },
+              confidence:       { type: Type.STRING },
+              transcription:    { type: Type.STRING },
+              detectedLanguage: { type: Type.STRING },
+            },
+            required: ["hasSpeech", "confidence", "transcription"],
+          },
+        }
       });
-      
-      const transcribedText = response.text?.trim() || "";
-      
-      // Check for no speech detected
-      if (transcribedText === "[NO_SPEECH_DETECTED]" || 
-          transcribedText.includes("[NO_SPEECH_DETECTED]") ||
-          transcribedText === "") {
-        console.log('[Transcribe] No speech detected in audio');
-        throw new Error('No speech detected in the audio. Please try speaking more clearly.');
+
+      const rawText = response.text?.trim() || "";
+      console.log(`[TranscribeAuto] ${transcriptionId} - Raw JSON: ${rawText.substring(0, 300)}`);
+
+      const parsed = safeJsonParse(rawText, null);
+      if (!parsed) {
+        console.log(`[TranscribeAuto] ${transcriptionId} - JSON parse failed`);
+        return { text: "" };
       }
-      
-      return transcribedText;
+
+      const { hasSpeech, confidence, transcription, detectedLanguage } = parsed as {
+        hasSpeech: boolean; confidence: string; transcription: string; detectedLanguage?: string;
+      };
+
+      console.log(`[TranscribeAuto] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, detectedLang=${detectedLanguage}, text="${String(transcription).substring(0, 120)}"`);
+
+      if (!hasSpeech) return { text: "" };
+      if (confidence === "low") return { text: "" };
+
+      const text = String(transcription || "").trim();
+      if (!text) return { text: "" };
+
+      const errorMarkers = ["[SILENCE]", "[SILENT]", "[NOISE]", "[UNCLEAR]",
+                            "[AUDIO_UNCLEAR]", "[AUDIO_EMPTY]", "[NO AUDIO]", "[NO SPEECH]"];
+      for (const marker of errorMarkers) {
+        if (text.toUpperCase().includes(marker)) return { text: "" };
+      }
+
+      if (isLikelyHallucination(text, audioBuffer.length)) {
+        console.log(`[TranscribeAuto] ${transcriptionId} - Hallucination detected, discarding`);
+        return { text: "" };
+      }
+
+      console.log(`[TranscribeAuto] ${transcriptionId} - ACCEPTED: "${text.substring(0, 120)}"`);
+      return { text, detectedLanguage: detectedLanguage || undefined };
+
+    } catch (error: any) {
+      if (isRateLimitError(error)) throw error;
+      throw new AbortError(error);
+    }
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
+}
+
+// Transcribe audio -- language-specific: transcribes ONLY speech in the given language.
+// Used for /transcribe_l (client provides explicit language code).
+async function transcribeAudio(audioBuffer: Buffer, mimeType: string, language: string = "en"): Promise<string> {
+  const transcriptionId = `trans_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
+
+  if (!audioBuffer || audioBuffer.length < 5000) {
+    console.log(`[Transcribe] ${transcriptionId} - Audio too small (${audioBuffer?.length} bytes), skipping`);
+    return "";
+  }
+
+  const effectiveMimeType = normaliseMimeType(mimeType);
+  const langName = languageNames[language] || language;
+  console.log(`[Transcribe] ${transcriptionId} - size=${audioBuffer.length}, mime=${mimeType}->${effectiveMimeType}, lang=${langName}`);
+
+  return aiRequestLimiter(() => pRetry(async () => {
+    try {
+      const base64Data = audioBuffer.toString("base64");
+
+      const prompt = `You are a strict speech-to-text transcription engine.
+
+TASK: Transcribe the audio attached to this message.
+EXPECTED LANGUAGE: ${langName} (${language})
+
+STRICT RULES -- you MUST follow every rule:
+1. Output ONLY what is actually spoken in the audio. Word-for-word.
+2. If the audio contains speech in ${langName}, transcribe it exactly.
+3. IGNORE any words spoken in other languages -- do NOT include them.
+4. If there is NO ${langName} speech (silence, noise, or other languages only), set "hasSpeech" to false and "transcription" to "".
+5. If the speech is too unclear to transcribe reliably, set "confidence" to "low" and still transcribe what you hear.
+6. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
+7. NEVER add labels like "Speaker:", "Narrator:", timestamps, or any commentary.
+8. NEVER output podcast intros, greetings, or placeholder text.
+9. Return ONLY valid JSON. No extra text before or after.
+
+Return this exact JSON structure:
+{
+  "hasSpeech": true,
+  "confidence": "high",
+  "transcription": "exact words spoken here"
+}
+
+Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (hard to hear)`;
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: [{
+          role: "user",
+          parts: [
+            { inlineData: { mimeType: effectiveMimeType, data: base64Data } },
+            { text: prompt }
+          ]
+        }],
+        config: {
+          temperature: 0,
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              hasSpeech:     { type: Type.BOOLEAN },
+              confidence:    { type: Type.STRING },
+              transcription: { type: Type.STRING },
+            },
+            required: ["hasSpeech", "confidence", "transcription"],
+          },
+        }
+      });
+
+      const rawText = response.text?.trim() || "";
+      console.log(`[Transcribe] ${transcriptionId} - Raw JSON: ${rawText.substring(0, 300)}`);
+
+      const parsed = safeJsonParse(rawText, null);
+      if (!parsed) {
+        console.log(`[Transcribe] ${transcriptionId} - JSON parse failed`);
+        return "";
+      }
+
+      const { hasSpeech, confidence, transcription } = parsed as {
+        hasSpeech: boolean; confidence: string; transcription: string;
+      };
+
+      console.log(`[Transcribe] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, text="${String(transcription).substring(0, 120)}"`);
+
+      if (!hasSpeech) return "";
+      if (confidence === "low") return "";
+
+      const text = String(transcription || "").trim();
+      if (!text) return "";
+
+      const errorMarkers = ["[SILENCE]", "[SILENT]", "[NOISE]", "[UNCLEAR]",
+                            "[AUDIO_UNCLEAR]", "[AUDIO_EMPTY]", "[NO AUDIO]", "[NO SPEECH]"];
+      for (const marker of errorMarkers) {
+        if (text.toUpperCase().includes(marker)) return "";
+      }
+
+      if (isLikelyHallucination(text, audioBuffer.length)) {
+        console.log(`[Transcribe] ${transcriptionId} - Hallucination detected, discarding`);
+        return "";
+      }
+
+      console.log(`[Transcribe] ${transcriptionId} - ACCEPTED (${langName}): "${text.substring(0, 120)}"`);
+      return text;
+
     } catch (error: any) {
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
@@ -1389,7 +1645,7 @@ const upload = multer({
 // In-memory translations storage (for serverless)
 const translations = new Map<string, any>();
 
-// Backward-compatible redirect: /api/v1/m/* → /api/v1/a/* (for mobile app transition)
+// Backward-compatible redirect: /api/v1/m/* -> /api/v1/a/* (for mobile app transition)
 app.use((req, res, next) => {
   if (req.path.startsWith("/api/v1/m/")) {
     req.url = req.url.replace("/api/v1/m/", "/api/v1/a/");
@@ -1434,7 +1690,7 @@ const base64TranslateSchema = z.object({
 // No authentication required
 // ============================================================
 
-// Public: Transcribe audio to text
+// Public: Transcribe audio -- language-agnostic (auto-detect ALL speech regardless of language)
 app.post("/api/v1/p/transcribe", async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
@@ -1450,7 +1706,6 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
     const schema = z.object({
       audio: z.string().min(1, "Audio data is required"),
       mimeType: z.string().optional().default("audio/mp4"),
-      language: z.string().optional().default("en"),
       durationSeconds: z.number().optional(),
     });
 
@@ -1463,8 +1718,8 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
       });
     }
 
-    const { audio, mimeType, language, durationSeconds } = parseResult.data;
-    console.log(`[DEBUG /p/transcribe] INPUT: language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioBase64Length=${audio?.length}`);
+    const { audio, mimeType, durationSeconds } = parseResult.data;
+    console.log(`[DEBUG /p/transcribe] INPUT: mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioBase64Length=${audio?.length}`);
 
     if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
       return res.status(400).json({
@@ -1481,9 +1736,9 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
       });
     }
 
-    const originalText = await transcribeAudio(audioBuffer, mimeType, language);
+    const { text: originalText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, mimeType);
 
-    console.log(`[DEBUG /p/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+    console.log(`[DEBUG /p/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}, detectedLanguage=${detectedLanguage}`);
 
     if (!originalText || originalText.trim() === "") {
       console.log(`[DEBUG /p/transcribe] OUTPUT: FAILED - empty transcription`);
@@ -1497,7 +1752,7 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
     res.json({
       success: true,
       originalText,
-      language,
+      ...(detectedLanguage ? { detectedLanguage } : {}),
     });
   } catch (error: any) {
     console.error("[DEBUG /p/transcribe] ERROR:", error);
@@ -1508,8 +1763,8 @@ app.post("/api/v1/p/transcribe", async (req, res) => {
   }
 });
 
-// Public: Transcribe audio - language-specific (extracts only the specified language)
-app.post("/api/v1/p/transcribe-language", async (req, res) => {
+// Public: Transcribe audio -- language-specific (returns ONLY speech in the given language)
+app.post("/api/v1/p/transcribe_l", async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -1538,7 +1793,7 @@ app.post("/api/v1/p/transcribe-language", async (req, res) => {
     }
 
     const { audio, mimeType, language, durationSeconds } = parseResult.data;
-    console.log(`[DEBUG /p/transcribe-language] INPUT: language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioBase64Length=${audio?.length}`);
+    console.log(`[DEBUG /p/transcribe_l] INPUT: language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioBase64Length=${audio?.length}`);
 
     if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
       return res.status(400).json({
@@ -1555,26 +1810,26 @@ app.post("/api/v1/p/transcribe-language", async (req, res) => {
       });
     }
 
-    const originalText = await transcribeAudioLanguageOnly(audioBuffer, mimeType, language);
+    const originalText = await transcribeAudio(audioBuffer, mimeType, language);
 
-    console.log(`[DEBUG /p/transcribe-language] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+    console.log(`[DEBUG /p/transcribe_l] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
 
     if (!originalText || originalText.trim() === "") {
-      console.log(`[DEBUG /p/transcribe-language] OUTPUT: FAILED - empty transcription`);
+      console.log(`[DEBUG /p/transcribe_l] OUTPUT: FAILED - empty transcription`);
       return res.status(400).json({
         success: false,
         error: "Could not transcribe audio. Please try speaking more clearly.",
       });
     }
 
-    console.log(`[DEBUG /p/transcribe-language] OUTPUT: success=true, textLength=${originalText.length}`);
+    console.log(`[DEBUG /p/transcribe_l] OUTPUT: success=true, textLength=${originalText.length}`);
     res.json({
       success: true,
       originalText,
       language,
     });
   } catch (error: any) {
-    console.error("[DEBUG /p/transcribe-language] ERROR:", error);
+    console.error("[DEBUG /p/transcribe_l] ERROR:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to transcribe audio",
@@ -1729,7 +1984,7 @@ async function sendOtpEmail(email: string, otp: string): Promise<void> {
         <p style="color: #666; font-size: 14px;">This code expires in <strong>10 minutes</strong>.</p>
         <p style="color: #666; font-size: 14px;">If you didn't request this code, you can safely ignore this email.</p>
         <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
-        <p style="color: #888; font-size: 13px; margin-bottom: 0;">— The MyVoicePost Team</p>
+        <p style="color: #888; font-size: 13px; margin-bottom: 0;">-- The MyVoicePost Team</p>
       </div>
       <div style="text-align: center; padding: 20px; color: #999; font-size: 12px;">
         <p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p>
@@ -2947,7 +3202,69 @@ app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// Mobile: Transcribe audio
+// Helper: log audio usage and return updated trial info for authenticated users
+async function logUsageAndGetTrialInfo(
+  userId: string,
+  durationSeconds: number,
+  language: string,
+  tag: string
+): Promise<{ trial_minutes_total: number; trial_minutes_used: number; is_subscribed: boolean } | null> {
+  if (userId && durationSeconds > 0) {
+    try {
+      const totalSec = Math.round(durationSeconds);
+      const hours = Math.floor(totalSec / 3600);
+      const minutes = Math.floor((totalSec % 3600) / 60);
+      const seconds = totalSec % 60;
+      const usageTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+
+      await db.insert(audioLogs).values({
+        userId,
+        usageTime,
+        usageSeconds: totalSec,
+        sourceLanguage: language || "auto",
+      });
+
+      const usageMinutes = totalSec / 60;
+      await db.update(users)
+        .set({
+          trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
+          updatedAt: new Date(),
+        })
+        .where(eq(users.id, userId));
+
+      console.log(`[${tag}] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`);
+    } catch (logError: any) {
+      console.error(`[${tag}] USAGE LOG FAILED:`, logError.message);
+    }
+  } else {
+    console.log(`[${tag}] USAGE NOT LOGGED: userId=${userId}, durationSeconds=${durationSeconds}`);
+  }
+
+  if (!userId) return null;
+
+  try {
+    const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (updatedUser.length > 0) {
+      const u = updatedUser[0];
+      const minutesTotal = u.trialMinutesTotal || 90;
+      const minutesUsed = parseFloat(u.trialMinutesUsed || "0") || 0;
+      const hasActiveSub = await db.select().from(userSubscriptions)
+        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+        .limit(1);
+      return {
+        trial_minutes_total: minutesTotal,
+        trial_minutes_used: Math.round(minutesUsed * 100) / 100,
+        is_subscribed: hasActiveSub.length > 0,
+      };
+    }
+  } catch (trialErr: any) {
+    console.error(`[${tag}] TRIAL INFO FETCH FAILED:`, trialErr.message);
+  }
+
+  return null;
+}
+
+// Mobile: Transcribe audio -- language-agnostic (auto-detect ALL speech regardless of language)
 app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
@@ -2960,7 +3277,6 @@ app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
     const schema = z.object({
       audio: z.string().min(1, "Audio data is required"),
       mimeType: z.string().optional().default("audio/mp4"),
-      language: z.string().optional().default("en"),
       durationSeconds: z.number().optional().default(0),
     });
 
@@ -2973,88 +3289,36 @@ app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const { audio, mimeType, language, durationSeconds } = parseResult.data;
+    const { audio, mimeType, durationSeconds } = parseResult.data;
     const audioBuffer = Buffer.from(audio, 'base64');
 
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
-    console.log(`[DEBUG /m/transcribe] INPUT: userId=${userId}, language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioSize=${audioBuffer.length} bytes`);
+    console.log(`[DEBUG /a/transcribe] INPUT: userId=${userId}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioSize=${audioBuffer.length} bytes`);
 
-    const originalText = await transcribeAudio(audioBuffer, mimeType);
+    const { text: originalText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, mimeType);
 
-    console.log(`[DEBUG /m/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+    console.log(`[DEBUG /a/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}, detectedLanguage=${detectedLanguage}`);
 
     if (!originalText || originalText.trim() === "") {
-      console.log(`[DEBUG /m/transcribe] OUTPUT: FAILED - empty transcription`);
+      console.log(`[DEBUG /a/transcribe] OUTPUT: FAILED - empty transcription`);
       return res.status(400).json({
         success: false,
         error: "Could not transcribe audio. Please try speaking more clearly.",
       });
     }
 
-    if (userId && durationSeconds > 0) {
-      try {
-        const totalSec = Math.round(durationSeconds);
-        const hours = Math.floor(totalSec / 3600);
-        const minutes = Math.floor((totalSec % 3600) / 60);
-        const seconds = totalSec % 60;
-        const usageTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    const trialInfo = await logUsageAndGetTrialInfo(userId, durationSeconds, "auto", "DEBUG /a/transcribe");
 
-        await db.insert(audioLogs).values({
-          userId,
-          usageTime,
-          usageSeconds: totalSec,
-          sourceLanguage: language,
-        });
-
-        const usageMinutes = totalSec / 60;
-        await db.update(users)
-          .set({
-            trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, userId));
-
-        console.log(`[DEBUG /m/transcribe] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`);
-      } catch (logError: any) {
-        console.error("[DEBUG /m/transcribe] USAGE LOG FAILED:", logError.message);
-      }
-    } else {
-      console.log(`[DEBUG /m/transcribe] USAGE NOT LOGGED: userId=${userId}, durationSeconds=${durationSeconds} (need both userId and durationSeconds>0)`);
-    }
-
-    // Fetch updated trial info to return with response
-    let trialInfo: { trial_minutes_total: number; trial_minutes_used: number; is_subscribed: boolean } | null = null;
-    if (userId) {
-      try {
-        const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-        if (updatedUser.length > 0) {
-          const u = updatedUser[0];
-          const minutesTotal = u.trialMinutesTotal || 90;
-          const minutesUsed = parseFloat(u.trialMinutesUsed || "0") || 0;
-          const hasActiveSub = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
-            .limit(1);
-          trialInfo = {
-            trial_minutes_total: minutesTotal,
-            trial_minutes_used: Math.round(minutesUsed * 100) / 100,
-            is_subscribed: hasActiveSub.length > 0,
-          };
-        }
-      } catch (trialErr: any) {
-        console.error("[DEBUG /m/transcribe] TRIAL INFO FETCH FAILED:", trialErr.message);
-      }
-    }
-
-    console.log(`[DEBUG /m/transcribe] OUTPUT: success=true, textLength=${originalText.length}, trialInfo=${JSON.stringify(trialInfo)}`);
+    console.log(`[DEBUG /a/transcribe] OUTPUT: success=true, textLength=${originalText.length}, trialInfo=${JSON.stringify(trialInfo)}`);
     res.json({
       success: true,
       originalText,
-      language,
+      ...(detectedLanguage ? { detectedLanguage } : {}),
       ...(trialInfo ? trialInfo : {}),
     });
   } catch (error: any) {
-    console.error("[Mobile Transcribe] Error:", error);
+    console.error("[Mobile Transcribe Auto] Error:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to transcribe audio",
@@ -3062,8 +3326,8 @@ app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// Mobile: Transcribe audio - language-specific (extracts only the specified language)
-app.post("/api/v1/a/transcribe-language", mobileAuthMiddleware, async (req, res) => {
+// Mobile: Transcribe audio -- language-specific (returns ONLY speech in the given language)
+app.post("/api/v1/a/transcribe_l", mobileAuthMiddleware, async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
       return res.status(500).json({
@@ -3093,72 +3357,23 @@ app.post("/api/v1/a/transcribe-language", mobileAuthMiddleware, async (req, res)
 
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
-    console.log(`[DEBUG /m/transcribe-language] INPUT: userId=${userId}, language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioSize=${audioBuffer.length} bytes`);
+    console.log(`[DEBUG /a/transcribe_l] INPUT: userId=${userId}, language=${language}, mimeType=${mimeType}, durationSeconds=${durationSeconds}, audioSize=${audioBuffer.length} bytes`);
 
-    const originalText = await transcribeAudioLanguageOnly(audioBuffer, mimeType, language);
+    const originalText = await transcribeAudio(audioBuffer, mimeType, language);
 
-    console.log(`[DEBUG /m/transcribe-language] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
+    console.log(`[DEBUG /a/transcribe_l] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
 
     if (!originalText || originalText.trim() === "") {
-      console.log(`[DEBUG /m/transcribe-language] OUTPUT: FAILED - empty transcription`);
+      console.log(`[DEBUG /a/transcribe_l] OUTPUT: FAILED - empty transcription`);
       return res.status(400).json({
         success: false,
         error: "Could not transcribe audio. Please try speaking more clearly.",
       });
     }
 
-    if (userId && durationSeconds > 0) {
-      try {
-        const totalSec = Math.round(durationSeconds);
-        const hours = Math.floor(totalSec / 3600);
-        const minutes = Math.floor((totalSec % 3600) / 60);
-        const seconds = totalSec % 60;
-        const usageTime = `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    const trialInfo = await logUsageAndGetTrialInfo(userId, durationSeconds, language, "DEBUG /a/transcribe_l");
 
-        await db.insert(audioLogs).values({
-          userId,
-          usageTime,
-          usageSeconds: totalSec,
-          sourceLanguage: language,
-        });
-
-        const usageMinutes = totalSec / 60;
-        await db.update(users)
-          .set({
-            trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
-            updatedAt: new Date(),
-          })
-          .where(eq(users.id, userId));
-
-        console.log(`[DEBUG /m/transcribe-language] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`);
-      } catch (logError: any) {
-        console.error("[DEBUG /m/transcribe-language] USAGE LOG FAILED:", logError.message);
-      }
-    }
-
-    let trialInfo: { trial_minutes_total: number; trial_minutes_used: number; is_subscribed: boolean } | null = null;
-    if (userId) {
-      try {
-        const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-        if (updatedUser.length > 0) {
-          const u = updatedUser[0];
-          const minutesTotal = u.trialMinutesTotal || 90;
-          const minutesUsed = parseFloat(u.trialMinutesUsed || "0") || 0;
-          const hasActiveSub = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
-            .limit(1);
-          trialInfo = {
-            trial_minutes_total: minutesTotal,
-            trial_minutes_used: Math.round(minutesUsed * 100) / 100,
-            is_subscribed: hasActiveSub.length > 0,
-          };
-        }
-      } catch (trialErr: any) {
-        console.error("[DEBUG /m/transcribe-language] TRIAL INFO FETCH FAILED:", trialErr.message);
-      }
-    }
-
-    console.log(`[DEBUG /m/transcribe-language] OUTPUT: success=true, textLength=${originalText.length}, trialInfo=${JSON.stringify(trialInfo)}`);
+    console.log(`[DEBUG /a/transcribe_l] OUTPUT: success=true, textLength=${originalText.length}, trialInfo=${JSON.stringify(trialInfo)}`);
     res.json({
       success: true,
       originalText,
@@ -3166,7 +3381,7 @@ app.post("/api/v1/a/transcribe-language", mobileAuthMiddleware, async (req, res)
       ...(trialInfo ? trialInfo : {}),
     });
   } catch (error: any) {
-    console.error("[Mobile Transcribe-Language] Error:", error);
+    console.error("[Mobile Transcribe Lang] Error:", error);
     res.status(500).json({
       success: false,
       error: error.message || "Failed to transcribe audio",
@@ -6890,7 +7105,7 @@ const toneCategories: Record<string, { label: string; tones: { id: string; label
       { id: "friendly", label: "Friendly", instruction: "Use a warm, approachable, and friendly tone that makes the reader feel welcome." },
       { id: "humorous", label: "Humorous", instruction: "Use a witty, humorous tone with light jokes and clever phrasing. Keep it tasteful." },
       { id: "storytelling", label: "Storytelling", instruction: "Use a narrative, storytelling tone. Structure the content as an engaging story with flow and vivid details." },
-      { id: "podcast", label: "Podcast-style", instruction: "Write in a podcast host style — conversational, engaging, with rhetorical questions and natural flow as if speaking to an audience." },
+      { id: "podcast", label: "Podcast-style", instruction: "Write in a podcast host style -- conversational, engaging, with rhetorical questions and natural flow as if speaking to an audience." },
       { id: "interview", label: "Interview", instruction: "Format the content as if presenting interview insights. Structured, clear, with key quotes and takeaways." },
     ],
   },

@@ -121,7 +121,7 @@ export default function Footer() {
 
         <div className="mt-16 pt-8 border-t border-border flex flex-col sm:flex-row justify-between items-center gap-4">
           <p className="text-sm text-muted-foreground">
-            © 2024 MyVoicePost. All rights reserved.
+            (c) 2024 MyVoicePost. All rights reserved.
           </p>
           <p className="text-sm text-muted-foreground">
             Get in touch: <a href="mailto:hi@myvoicepost.com" className="text-primary hover:underline">hi@myvoicepost.com</a>

@@ -703,7 +703,7 @@ export default function PrivacyPolicy() {
                     <p className="text-sm font-medium">Through Your Account Settings:</p>
                     <ol className="text-sm text-muted-foreground space-y-1 list-decimal ml-4">
                       <li>Log in to your account</li>
-                      <li>Navigate to Settings → Privacy & Data</li>
+                      <li>Navigate to Settings &gt; Privacy & Data</li>
                       <li>Choose: View, Download, or Delete</li>
                     </ol>
                   </div>
@@ -865,7 +865,7 @@ export default function PrivacyPolicy() {
                 <div className="p-4 bg-purple-50 dark:bg-purple-950/30 rounded-lg border border-purple-200 dark:border-purple-800">
                   <h4 className="font-medium mb-2">How to Opt Out of AI Training:</h4>
                   <ol className="text-sm text-muted-foreground space-y-1 list-decimal ml-4">
-                    <li>Go to Account Settings → Privacy</li>
+                    <li>Go to Account Settings &gt; Privacy</li>
                     <li>Find "AI & Machine Learning" section</li>
                     <li>Toggle "Use my data to improve AI" to OFF</li>
                   </ol>
@@ -1022,7 +1022,7 @@ export default function PrivacyPolicy() {
                 ))}
               </div>
               <p className="text-sm text-muted-foreground mt-4">
-                Manage connections in Account Settings → Connected Apps. You can disconnect anytime.
+                Manage connections in Account Settings &gt; Connected Apps. You can disconnect anytime.
               </p>
             </AccordionContent>
           </AccordionItem>
@@ -1135,15 +1135,15 @@ export default function PrivacyPolicy() {
             <div className="grid sm:grid-cols-2 gap-4 text-sm">
               <div>
                 <p className="font-medium">How do I delete my account?</p>
-                <p className="text-muted-foreground">Account Settings → Delete Account, or email privacy@myvoicepost.com</p>
+                <p className="text-muted-foreground">Account Settings &gt; Delete Account, or email privacy@myvoicepost.com</p>
               </div>
               <div>
                 <p className="font-medium">How do I download my data?</p>
-                <p className="text-muted-foreground">Account Settings → Export Data</p>
+                <p className="text-muted-foreground">Account Settings &gt; Export Data</p>
               </div>
               <div>
                 <p className="font-medium">How do I stop marketing emails?</p>
-                <p className="text-muted-foreground">Click "unsubscribe" in any email, or Account Settings → Notifications</p>
+                <p className="text-muted-foreground">Click "unsubscribe" in any email, or Account Settings &gt; Notifications</p>
               </div>
               <div>
                 <p className="font-medium">Do you sell my data?</p>
@@ -1155,7 +1155,7 @@ export default function PrivacyPolicy() {
 
         <div className="mt-8 text-center text-sm text-muted-foreground border-t pt-8">
           <p>Last updated: February 29, 2026 | Version 1.0</p>
-          <p className="mt-1">© 2026 MyVoicePost. All rights reserved.</p>
+          <p className="mt-1">(c) 2026 MyVoicePost. All rights reserved.</p>
           <div className="flex items-center justify-center gap-4 mt-4">
             <Link href="/terms">
               <Button variant="ghost" size="sm">Terms of Service</Button>

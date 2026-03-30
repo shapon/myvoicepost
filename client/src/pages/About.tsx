@@ -125,7 +125,7 @@ const features = [
   {
     icon: Globe,
     title: "Voice Translation",
-    description: "Speak in one language, get perfectly translated and polished text in another — instantly.",
+    description: "Speak in one language, get perfectly translated and polished text in another -- instantly.",
     color: "bg-blue-500/10 text-blue-600 dark:text-blue-400",
     badge: "Popular",
   },
@@ -139,14 +139,14 @@ const features = [
   {
     icon: FileText,
     title: "Multiple Output Types",
-    description: "Messages, emails, notes, social posts, journals, articles, meeting summaries — pick your format.",
+    description: "Messages, emails, notes, social posts, journals, articles, meeting summaries -- pick your format.",
     color: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
     badge: null,
   },
   {
     icon: Zap,
     title: "Tone Selection",
-    description: "Professional, casual, formal, friendly, creative, academic — your text sounds exactly how you want it.",
+    description: "Professional, casual, formal, friendly, creative, academic -- your text sounds exactly how you want it.",
     color: "bg-yellow-500/10 text-yellow-600 dark:text-yellow-400",
     badge: null,
   },
@@ -190,7 +190,7 @@ const useCases = [
   {
     icon: Mail,
     title: "Emails",
-    description: "Compose professional emails effortlessly. A task that should take 30 seconds — not 15 minutes.",
+    description: "Compose professional emails effortlessly. A task that should take 30 seconds -- not 15 minutes.",
     color: "from-blue-500 to-cyan-500",
   },
   {
@@ -291,7 +291,7 @@ export default function About() {
             className="text-xl md:text-2xl text-muted-foreground max-w-3xl mx-auto mb-10 leading-relaxed"
           >
             MyVoicePost transforms your voice into perfectly written, AI-polished text.
-            Not just transcription — intelligent writing that sounds like you actually sat down and crafted it.
+            Not just transcription -- intelligent writing that sounds like you actually sat down and crafted it.
           </motion.p>
 
           <motion.div
@@ -379,10 +379,10 @@ export default function About() {
 
           <div className="grid md:grid-cols-2 gap-6">
             {[
-              { icon: "❌", text: "NO typing when your thoughts are flowing fast", sub: "Just open the app and speak" },
-              { icon: "❌", text: "NO time wasted composing or proofreading", sub: "AI handles structure and grammar" },
-              { icon: "❌", text: "NO awkward dictated text that reads as spoken", sub: "Natural, polished output every time" },
-              { icon: "❌", text: "NO lost ideas because you couldn't write them down", sub: "Capture in seconds, anytime" },
+              { icon: "", text: "NO typing when your thoughts are flowing fast", sub: "Just open the app and speak" },
+              { icon: "", text: "NO time wasted composing or proofreading", sub: "AI handles structure and grammar" },
+              { icon: "", text: "NO awkward dictated text that reads as spoken", sub: "Natural, polished output every time" },
+              { icon: "", text: "NO lost ideas because you couldn't write them down", sub: "Capture in seconds, anytime" },
             ].map((item, i) => (
               <AnimatedSection key={i} delay={i * 0.1}>
                 <div className="flex items-start gap-4 bg-card border border-border rounded-2xl p-6">
@@ -470,7 +470,7 @@ export default function About() {
             <Badge className="mb-4 bg-primary/10 text-primary border-primary/20">Use Cases</Badge>
             <h2 className="text-4xl md:text-5xl font-bold mb-4">Use it for everything</h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              MyVoicePost fits every moment of your day — at work, at home, on the go.
+              MyVoicePost fits every moment of your day -- at work, at home, on the go.
             </p>
           </AnimatedSection>
 
@@ -507,12 +507,12 @@ export default function About() {
 
           <div className="grid sm:grid-cols-2 md:grid-cols-3 gap-4">
             {[
-              { icon: "💼", label: "Professionals", desc: "Compose emails and meeting notes without slowing down your day" },
-              { icon: "✍️", label: "Content Creators", desc: "Write blogs, posts, and scripts by voice — faster and more naturally" },
-              { icon: "🎓", label: "Students", desc: "Capture notes, ideas, and summaries instantly, hands-free" },
-              { icon: "🧠", label: "ADHD Users", desc: "Speaking is more natural than writing — capture thoughts as they come" },
-              { icon: "🌍", label: "Non-Native Speakers", desc: "Get polished, natural-sounding text in your target language" },
-              { icon: "⚡", label: "Busy People", desc: "No time to write? Speak it. Done. In the time it takes to think it." },
+              { icon: "", label: "Professionals", desc: "Compose emails and meeting notes without slowing down your day" },
+              { icon: "", label: "Content Creators", desc: "Write blogs, posts, and scripts by voice -- faster and more naturally" },
+              { icon: "", label: "Students", desc: "Capture notes, ideas, and summaries instantly, hands-free" },
+              { icon: "", label: "ADHD Users", desc: "Speaking is more natural than writing -- capture thoughts as they come" },
+              { icon: "", label: "Non-Native Speakers", desc: "Get polished, natural-sounding text in your target language" },
+              { icon: "", label: "Busy People", desc: "No time to write? Speak it. Done. In the time it takes to think it." },
             ].map((item, i) => (
               <AnimatedSection key={item.label} delay={i * 0.08}>
                 <div className="bg-card border border-border rounded-2xl p-6 hover-elevate">
