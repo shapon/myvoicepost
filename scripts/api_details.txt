@@ -1,0 +1,792 @@
+================================================================================
+  MyVoicePost - API Reference
+  Last updated: 2026-04-02
+  Source of truth: server/routes.ts  (dev)  |  api/index.ts  (Vercel production)
+================================================================================
+
+CONVENTIONS
+-----------
+  /api/v1/p/   Public  - no authentication required (guest access)
+  /api/v1/a/   Auth    - requires JWT token in Authorization header
+  /api/v1/wp/  Web-only public endpoints (not used by mobile)
+
+AUTH HEADER (all /api/v1/a/ routes)
+  Authorization: Bearer <jwt_token>
+
+ERROR ENVELOPE (all endpoints)
+  { "success": false, "error": "Human-readable message", "details": [...] }
+
+SUCCESS/FAILURE always indicated by top-level "success": true|false
+
+================================================================================
+  SECTION 1 — AUTHENTICATION
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/mail_otp
+  Purpose : Send email OTP for signup verification
+  Auth    : None
+  Request body:
+    { "email": "user@example.com" }
+  Response 200:
+    { "success": true, "message": "Verification code sent to your email" }
+  Error 409: Email already registered
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/auth/signup
+  Purpose : Register new account (OTP must have been sent + verified first)
+  Auth    : None
+  Request body:
+    {
+      "email":    "user@example.com",      // required
+      "username": "johndoe",               // required
+      "password": "secret123",             // required
+      "otp":      "123456"                 // required - from mail_otp
+    }
+  Response 201:
+    {
+      "success": true,
+      "message": "Account created successfully",
+      "token":   "<jwt>",
+      "expiresIn": 5184000,                // 60 days in seconds
+      "user":  { "id": "...", "email": "...", "username": "..." },
+      "trial": {
+        "starts_at": "<ISO>",
+        "ends_at":   "<ISO>",
+        "minutes_total":     90,
+        "minutes_used":       0,
+        "minutes_remaining": 90
+      }
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/auth/login
+  Purpose : Login with email/username + password, returns JWT
+  Auth    : None
+  Request body:
+    {
+      "identifier": "user@example.com",    // email OR username
+      "password":   "secret123"
+    }
+  Response 200:
+    {
+      "success": true,
+      "token":   "<jwt>",
+      "expiresIn": 5184000,
+      "user": {
+        "id":       "...",
+        "email":    "...",
+        "username": "...",
+        "role":     "USER" | "ADMIN" | "GUEST"
+      }
+    }
+  Error 401: Invalid credentials
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/auth/google
+  Purpose : Login / signup via Google ID token
+  Auth    : None
+  Request body:
+    { "idToken": "<google_id_token>" }
+  Response 200:
+    {
+      "success": true,
+      "token":   "<jwt>",
+      "expiresIn": 5184000,
+      "user":    { "id": "...", "email": "...", "username": "..." },
+      "isNewUser": true | false
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/wp/auth/google/config
+  Purpose : Get Google OAuth Client ID for web frontend (GSI)
+  Auth    : None
+  Response 200:
+    { "success": true, "clientId": "<google_client_id>" }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/auth/me
+  Purpose : Get current authenticated user info (refreshes role live)
+  Auth    : JWT
+  Response 200:
+    {
+      "success": true,
+      "user": {
+        "id":       "...",
+        "email":    "...",
+        "username": "...",
+        "role":     "USER" | "ADMIN"
+      }
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/auth/logout
+  Purpose : Logout - invalidates session (clears activeSessionId server-side)
+  Auth    : JWT
+  Request body: {} (empty)
+  Response 200:
+    { "success": true, "message": "Logged out successfully" }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 2 — TRANSCRIPTION
+================================================================================
+
+NOTE ON AUDIO FORMAT
+  audio     : base64-encoded raw audio bytes
+  mimeType  : "audio/mp4" (default) | "audio/m4a" | "audio/wav" | "audio/mpeg"
+              "audio/webm" | "audio/ogg"
+
+NOTE ON LANGUAGE CODES
+  All language fields use BCP-47 codes: "en", "es", "fr", "de", "it", "pt",
+  "nl", "ru", "zh", "ja", "ko", "ar", "hi", "tr", "pl", "vi", "th", "id"
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/transcribe          [GUEST - auto-detect language]
+POST /api/v1/a/transcribe          [AUTH  - auto-detect language]
+  Purpose : Transcribe audio, auto-detect spoken language.
+            Use when caller does NOT know the language in advance.
+            Gemini is instructed: LANGUAGE: auto
+  Auth    : p/ = none  |  a/ = JWT
+  Request body:
+    {
+      "audio":           "<base64_string>",   // required
+      "mimeType":        "audio/mp4",          // optional, default "audio/mp4"
+      "durationSeconds": 40                    // optional, number
+    }
+  Guest limits: max 55 seconds, max 5 MB audio file
+  Response 200:
+    {
+      "success":          true,
+      "originalText":     "the full transcription here",
+      "detectedLanguage": "en"                 // BCP-47, present if detected
+    }
+  Error 400: Audio too long / too large / no speech detected
+  Notes:
+    - Uses transcribeAudioAuto() in gemini.ts - independent prompt
+    - Do NOT confuse with /transcribe_l which requires explicit language
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/transcribe_l        [GUEST - language-specific]
+POST /api/v1/a/transcribe_l        [AUTH  - language-specific]
+  Purpose : Transcribe audio in a specific language only.
+            Caller MUST provide the language code.
+            Gemini is instructed: EXPECTED LANGUAGE: <lang>
+            Words spoken in other languages are IGNORED.
+  Auth    : p/ = none  |  a/ = JWT
+  Request body:
+    {
+      "audio":           "<base64_string>",   // required
+      "mimeType":        "audio/mp4",          // optional, default "audio/mp4"
+      "language":        "en",                 // REQUIRED - BCP-47 code
+      "durationSeconds": 40                    // optional, number
+    }
+  Guest limits: max 55 seconds, max 5 MB audio file
+  Response 200:
+    {
+      "success":      true,
+      "originalText": "the full transcription here",
+      "language":     "en"                     // echoes requested language
+    }
+  Error 400: Audio too long / too large / no speech detected
+  Notes:
+    - Uses transcribeAudio() in gemini.ts - independent prompt (separate from /transcribe)
+    - detectedLanguage is NOT returned (language was caller-specified)
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/transcribe-url
+  Purpose : Download audio from a URL and transcribe it
+  Auth    : JWT
+  Request body:
+    {
+      "url":      "https://example.com/audio.mp3",  // required
+      "language": "en"                               // optional, default "en"
+    }
+  Response 200:
+    { "success": true, "transcribedText": "..." }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/transcribe-file
+  Purpose : Transcribe an audio file uploaded as multipart/form-data
+  Auth    : JWT (or open depending on deployment)
+  Content-Type: multipart/form-data
+  Form fields:
+    audio    : File   // audio file (any common format)
+    language : string // optional, BCP-47, default "en"
+  Response 200:
+    { "success": true, "transcribedText": "..." }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 3 — POLISH (TEXT QUALITY IMPROVEMENT)
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/polish              [GUEST]
+POST /api/v1/a/polish              [AUTH]
+  Purpose : Polish / improve raw transcription text.
+            p/ uses field "text"; a/ uses field "originalText"
+  Auth    : p/ = none  |  a/ = JWT
+
+  GUEST request body  (/api/v1/p/polish):
+    {
+      "text":         "raw transcribed text",   // required
+      "language":     "en",                      // optional, default "en"
+      "outputFormat": "professional",            // optional, default "professional"
+                                                 //   "professional"|"casual"|"formal"|"friendly"
+      "outputType":   "message"                  // optional, default "message"
+                                                 //   "message"|"note"|"email"|"post"|"journal"
+    }
+  GUEST response 200:
+    {
+      "success":      true,
+      "originalText": "raw transcribed text",
+      "polishedText": "improved version",
+      "language":     "en",
+      "outputFormat": "professional",
+      "outputType":   "message"
+    }
+
+  AUTH request body  (/api/v1/a/polish):
+    {
+      "originalText": "raw transcribed text",   // required  (note: field name differs from guest)
+      "language":     "en",                      // optional, default "en"
+      "outputFormat": "paragraph",               // optional, default "paragraph"
+      "outputType":   "general"                  // optional, default "general"
+    }
+  AUTH response 200:
+    {
+      "success":      true,
+      "originalText": "raw transcribed text",
+      "polishedText": "improved version",
+      "language":     "en",
+      "outputFormat": "paragraph",
+      "outputType":   "general"
+    }
+
+  IMPORTANT: Field name difference:
+    Guest (/p/)  uses "text"         as request field
+    Auth  (/a/)  uses "originalText" as request field
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 4 — TRANSLATE
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/translate           [GUEST]
+POST /api/v1/a/translate           [AUTH]
+  Purpose : Translate text from one language to another (with optional polishing)
+  Auth    : p/ = none  |  a/ = JWT
+
+  GUEST request body  (/api/v1/p/translate):
+    {
+      "text":           "text to translate",   // required
+      "sourceLanguage": "en",                   // required - BCP-47
+      "targetLanguage": "es",                   // required - BCP-47
+      "outputFormat":   "professional"          // optional, default "professional"
+    }
+  GUEST response 200:
+    {
+      "success":        true,
+      "originalText":   "text to translate",
+      "translatedText": "texto a traducir",
+      "polishedText":   "refined translation",
+      "sourceLanguage": "en",
+      "targetLanguage": "es",
+      "outputFormat":   "professional"
+    }
+
+  AUTH request body  (/api/v1/a/translate):
+    {
+      "originalText":   "text to translate",   // required  (note: field name differs)
+      "sourceLanguage": "en",                   // required
+      "targetLanguage": "es",                   // required
+      "outputFormat":   "professional"          // optional, default "professional"
+    }
+  AUTH response 200:
+    {
+      "success":        true,
+      "originalText":   "text to translate",
+      "translatedText": "texto a traducir",
+      "polishedText":   "refined translation",
+      "sourceLanguage": "en",
+      "targetLanguage": "es",
+      "outputFormat":   "professional"
+    }
+
+  IMPORTANT: Field name difference:
+    Guest (/p/)  uses "text"         as request field
+    Auth  (/a/)  uses "originalText" as request field
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 5 — TONE TRANSFORM
+================================================================================
+
+--------------------------------------------------------------------------------
+GET /api/v1/p/tone-categories
+GET /api/v1/a/tone-categories
+  Purpose : Get list of available tone categories for tone transformation
+  Auth    : None
+  Response 200:
+    { "success": true, "categories": [ { "id": "...", "name": "...", ... } ] }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/transform-tone      [GUEST]
+POST /api/v1/a/transform-tone      [AUTH]
+  Purpose : Rewrite text in a specific tone/style
+  Auth    : p/ = none  |  a/ = JWT
+  Request body:
+    {
+      "text":   "original text",   // required
+      "toneId": "formal"           // required - ID from /tone-categories
+    }
+  Response 200:
+    {
+      "success":         true,
+      "originalText":    "original text",
+      "transformedText": "rewritten in chosen tone",
+      "toneId":          "formal"
+    }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 6 — PROCESS URL (YouTube / Webpage)
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/p/process-url         [GUEST]
+POST /api/v1/a/process-url         [AUTH]
+  Purpose : Extract text from a YouTube video (via transcript) or webpage,
+            optionally translate to target language
+  Auth    : p/ = none  |  a/ = JWT
+  Request body:
+    {
+      "url":            "https://youtube.com/watch?v=abc",  // required
+      "targetLanguage": "en"                                 // required - BCP-47
+    }
+  Response 200:
+    {
+      "success":        true,
+      "sourceText":     "original extracted text",
+      "targetText":     "translated text (or same if same language)",
+      "sourceLanguage": "es",
+      "targetLanguage": "en",
+      "sourceType":     "youtube" | "webpage"
+    }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 7 — SAVED TEXTS (requires auth)
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/saved-texts
+  Purpose : Save a polished or translated text record
+  Auth    : JWT
+  Request body:
+    {
+      "type":           "polish" | "translate",         // required
+      "originalText":   "raw text",                      // required
+      "polishedText":   "improved text",                 // required
+      "translatedText": "translated text" | null,        // optional
+      "sourceLanguage": "en",                            // required
+      "targetLanguage": "es" | null,                     // optional
+      "outputFormat":   "professional",                  // required
+      "outputType":     "message" | null                 // optional
+    }
+  Response 200:
+    { "success": true, "savedText": { ...savedTextObject } }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/saved-texts
+  Purpose : Get all saved texts for authenticated user
+  Auth    : JWT
+  Query params:
+    type = "polish" | "translate"    // optional filter
+  Response 200:
+    {
+      "success":    true,
+      "savedTexts": [ ...savedTextObjects ],
+      "count":      42
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/saved-texts/:id
+  Purpose : Get single saved text by ID
+  Auth    : JWT
+  Response 200:
+    { "success": true, "savedText": { ...savedTextObject } }
+  Error 404: Not found or not owned by user
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+PUT /api/v1/a/saved-texts/:id
+  Purpose : Update a saved text by ID
+  Auth    : JWT
+  Request body (all fields optional):
+    {
+      "type":           "polish" | "translate",
+      "originalText":   "...",
+      "polishedText":   "...",
+      "translatedText": "..." | null,
+      "sourceLanguage": "en",
+      "targetLanguage": "es" | null,
+      "outputFormat":   "professional",
+      "outputType":     "message" | null
+    }
+  Response 200:
+    { "success": true, "savedText": { ...updatedSavedTextObject } }
+  Error 404: Not found or not owned by user
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+DELETE /api/v1/a/saved-texts/:id
+  Purpose : Delete a saved text by ID
+  Auth    : JWT
+  Response 200:
+    { "success": true }
+  Error 404: Not found
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 8 — USER SETTINGS
+================================================================================
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/settings
+  Purpose : Get all settings for authenticated user (key-value pairs)
+  Auth    : JWT
+  Response 200:
+    {
+      "success": true,
+      "settings": [
+        { "id": "...", "setting_key": "theme", "setting_value": "dark", "updated_at": "..." }
+      ]
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+PUT /api/v1/a/settings
+  Purpose : Upsert (create or update) one or more settings
+  Auth    : JWT
+  Request body:
+    {
+      "settings": [
+        { "setting_key": "theme",    "setting_value": "dark" },
+        { "setting_key": "language", "setting_value": "en" }
+      ]
+    }
+  Response 200:
+    { "success": true, "settings": [ ...savedSettingObjects ] }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+DELETE /api/v1/a/settings/:key
+  Purpose : Delete a specific setting by key
+  Auth    : JWT
+  URL param: key = "theme"
+  Response 200:
+    { "success": true, "message": "Setting deleted" }
+  Error 404: Setting not found
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 9 — SUBSCRIPTION & PLANS
+================================================================================
+
+--------------------------------------------------------------------------------
+GET /api/v1/p/plans
+  Purpose : Get list of visible subscription plans
+  Auth    : None
+  Query params:
+    all = "true"    // optional - include hidden plans (admin use)
+  Response 200:
+    {
+      "success": true,
+      "plans": [
+        {
+          "id":                      "uuid",
+          "name":                    "Pro",
+          "valid_total_minutes":     300,
+          "valid_date_upto_days":    30,
+          "recordings_available_days": 90,
+          "chunks_count":            10,
+          "offline_recording":       true,
+          "price_monthly":           "9.99",
+          "stripe_price_id":         "price_xxx",
+          "is_default":              false,
+          "is_visible":              true
+        }
+      ]
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/p/stripe-config
+  Purpose : Get Stripe publishable key for frontend payment initialization
+  Auth    : None
+  Response 200:
+    { "success": true, "publishableKey": "pk_live_..." }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/subscription
+  Purpose : Get current user's active subscription details + trial info
+  Auth    : JWT
+  Response 200 (active subscription):
+    {
+      "success": true,
+      "subscription": {
+        "id":                      "uuid",
+        "plan_name":               "Pro",
+        "valid_total_minutes":     300,
+        "minutes_used":            45,
+        "minutes_remaining":       255,
+        "valid_date_upto":         "2026-05-01T00:00:00.000Z",
+        "recordings_available_days": 90,
+        "chunks_count":            10,
+        "chunks_used":             2,
+        "offline_recording":       true,
+        "status":                  "active"
+      },
+      "trial": { ...trialObject }
+    }
+  Response 200 (no active subscription):
+    { "success": true, "subscription": null, "trial": { ...trialObject } }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/subscription-status
+  Purpose : Get detailed subscription status including trial + Stripe status
+  Auth    : JWT
+  Response 200:
+    {
+      "success": true,
+      "trial": {
+        "active":             true,
+        "starts_at":          "...",
+        "ends_at":            "...",
+        "minutes_total":      90,
+        "minutes_used":       15,
+        "minutes_remaining":  75
+      },
+      "subscription": { ...subscriptionObject | null }
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/check-access
+  Purpose : Check if user can perform a transcription (trial/subscription check)
+  Auth    : JWT
+  Request body: {} (empty)
+  Response 200:
+    {
+      "success":    true,
+      "hasAccess":  true,
+      "reason":     "trial" | "subscription" | "none",
+      "minutesRemaining": 75
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/create-subscription
+  Purpose : Create a Stripe subscription for the user
+  Auth    : JWT
+  Request body:
+    {
+      "planId":          "uuid",           // required
+      "paymentMethodId": "pm_xxx"          // required - Stripe payment method ID
+    }
+  Response 200:
+    {
+      "success": true,
+      "subscriptionId":  "sub_xxx",
+      "clientSecret":    "...",            // for 3D Secure confirmation if needed
+      "status":          "active" | "incomplete"
+    }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/cancel-subscription
+  Purpose : Cancel the user's active Stripe subscription (at period end)
+  Auth    : JWT
+  Request body: {} (empty)
+  Response 200:
+    { "success": true, "message": "Subscription will be cancelled at period end" }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/stripe-webhook
+  Purpose : Stripe webhook handler (called by Stripe, not frontend)
+  Auth    : Stripe-Signature header
+  Note    : This is NOT called directly by frontend - Stripe calls it
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 10 — USER ROLE
+================================================================================
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/user-role
+  Purpose : Get current user's role
+  Auth    : JWT
+  Response 200:
+    { "success": true, "role": "USER" | "ADMIN" }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 11 — ADMIN ENDPOINTS  (ADMIN role required)
+================================================================================
+
+All admin endpoints require:  Authorization: Bearer <jwt>  with ADMIN role
+
+--------------------------------------------------------------------------------
+GET /api/v1/a/admin/stats
+  Response: { "success": true, "stats": { totalUsers, activeSubscriptions, ... } }
+
+GET /api/v1/a/admin/users
+  Response: { "success": true, "users": [ ...userObjects ] }
+
+GET /api/v1/a/admin/subscriptions
+  Response: { "success": true, "subscriptions": [ ...subscriptionObjects ] }
+
+GET /api/v1/a/admin/payments
+  Response: { "success": true, "payments": [ ...paymentObjects ] }
+
+GET /api/v1/a/admin/support
+  Response: { "success": true, "tickets": [ ...supportTickets ] }
+
+PATCH /api/v1/a/admin/support/:id
+  Request:  { "status": "open" | "resolved" }
+  Response: { "success": true, "ticket": { ...updatedTicket } }
+
+GET /api/v1/a/admin/errors
+  Response: { "success": true, "errors": [ ...errorLogObjects ] }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 12 — SUPPORT & ERROR LOGGING
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/support
+  Purpose : Submit a support ticket
+  Auth    : JWT
+  Request body:
+    {
+      "subject": "My issue",           // required
+      "message": "Detailed description" // required
+    }
+  Response 200:
+    { "success": true, "ticket": { "id": "...", ... } }
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/error-log
+  Purpose : Log a client-side error to the server
+  Auth    : JWT
+  Request body:
+    {
+      "error":   "Error message",      // required
+      "context": { ... }               // optional - any additional context
+    }
+  Response 200:
+    { "success": true }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 13 — IMAGE GENERATION
+================================================================================
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/generate-image
+  Purpose : Generate an image from text using Gemini image generation
+  Auth    : JWT
+  Request body:
+    {
+      "text":   "description of image to generate",  // required
+      "width":  512,                                   // optional
+      "height": 512                                    // optional
+    }
+  Response 200:
+    {
+      "success":   true,
+      "imageData": "<base64_encoded_png>"
+    }
+--------------------------------------------------------------------------------
+
+================================================================================
+  SECTION 14 — HEALTH CHECK
+================================================================================
+
+--------------------------------------------------------------------------------
+GET /api/health
+  Purpose : Server health check
+  Auth    : None
+  Response 200:
+    { "status": "ok", "timestamp": "2026-04-02T..." }
+--------------------------------------------------------------------------------
+
+================================================================================
+  QUICK REFERENCE — ENDPOINT ROUTING DECISION
+================================================================================
+
+  User is a GUEST (not logged in)?
+    Transcription (auto):      POST /api/v1/p/transcribe
+    Transcription (language):  POST /api/v1/p/transcribe_l
+    Polish text:               POST /api/v1/p/polish           (body field: "text")
+    Translate text:            POST /api/v1/p/translate        (body field: "text")
+    Process URL:               POST /api/v1/p/process-url
+
+  User is LOGGED IN (has JWT)?
+    Transcription (auto):      POST /api/v1/a/transcribe
+    Transcription (language):  POST /api/v1/a/transcribe_l
+    Polish text:               POST /api/v1/a/polish           (body field: "originalText")
+    Translate text:            POST /api/v1/a/translate        (body field: "originalText")
+    Process URL:               POST /api/v1/a/process-url
+    Save result:               POST /api/v1/a/saved-texts
+    View saved:                GET  /api/v1/a/saved-texts
+    My account:                GET  /api/v1/a/auth/me
+    Subscription:              GET  /api/v1/a/subscription
+
+  CRITICAL FIELD NAME DIFFERENCE (common bug source):
+    /api/v1/p/polish    and  /api/v1/p/translate  ->  "text"
+    /api/v1/a/polish    and  /api/v1/a/translate  ->  "originalText"
+
+================================================================================
+  SECTION 15 — MOBILE-ONLY ENDPOINTS  (api/index.ts only, Vercel deployment)
+  These are NOT in server/routes.ts (dev server). Mobile app only.
+================================================================================
+
+  POST /api/v1/a/push-token              Register push notification token
+  DELETE /api/v1/a/push-token            Remove push notification token
+  POST /api/v1/a/crash-report            Submit crash report from mobile app
+  GET  /api/v1/a/crash-reports           Admin: list crash reports
+  POST /api/v1/a/create-topup-checkout   Create Stripe top-up checkout session
+  POST /api/v1/a/confirm-topup           Confirm top-up payment
+  GET  /api/v1/a/payment-history         Get payment transaction history
+  POST /api/v1/a/confirm-subscription    Confirm Stripe subscription payment
+  POST /api/v1/a/reactivate-subscription Reactivate a cancelled subscription
+  POST /api/v1/a/update-payment-method   Update default Stripe payment method
+  GET  /api/v1/a/usage-stats             Get detailed usage stats for user
+  GET  /api/v1/a/audio-logs              Get audio transcription logs
+  POST /api/v1/a/process-audio           Process audio file (mobile pipeline)
+  GET  /api/cron/subscription-expiry-notifications  Cron job (Vercel only)
+
+================================================================================
+  END OF API REFERENCE
+================================================================================

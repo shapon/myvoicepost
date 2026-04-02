@@ -82,13 +82,13 @@ Web and mobile share the exact same backend handlers:
 - **Admin**: `/api/v1/a/admin/*` — dashboard stats, users, subscriptions, payments, support, errors (ADMIN role required)
 - **Stripe**: `/api/v1/a/stripe-webhook`, `/api/v1/a/create-subscription`, etc.
 - **Health**: `GET /api/health` — server health check (only non-v1 endpoint remaining)
-- **Backward compat**: `/api/v1/m/*` requests are URL-rewritten to `/api/v1/a/*` via middleware (temporary, for mobile app transition)
+
 
 Audio is sent as base64 JSON (`{ audio: base64, mimeType }`) from both web and mobile.
-Public endpoints accept `text` field; auth endpoints accept both `originalText` and `text` for polish/translate (backward compatible).
+Public endpoints (`/api/v1/p/`) accept `text` field; auth endpoints (`/api/v1/a/`) require `originalText` field for polish/translate — these are different field names.
 Auth endpoints return `{ success, savedTexts }` wrapper format.
 Web frontend uses JWT Bearer tokens from localStorage (`mvp_auth_token`) for `/api/v1/a/*` endpoints.
-Landing page VoiceRecorder uses two-step flow (transcribe ? polish/translate) via `/api/v1/p/*` public endpoints.
+Landing page VoiceRecorder uses two-step flow (transcribe ? polish/translate). When user is logged in it uses `/api/v1/a/transcribe_l` + `/api/v1/a/polish` or `/api/v1/a/translate` (with `originalText` field); when guest it falls back to `/api/v1/p/transcribe_l` + `/api/v1/p/polish` or `/api/v1/p/translate` (with `text` field).
 
 ### Shared Constants & Reusable Utilities
 

@@ -1163,8 +1163,13 @@ function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
   return false;
 }
 
-// Transcribe audio -- language-agnostic: detects and returns ALL speech regardless of language spoken.
-// Use this for /transcribe (no language hint from client).
+// =============================================================================
+// ENDPOINT: /api/v1/a/transcribe  (auto-detect transcription)
+// PURPOSE : No language is provided by the caller.  Gemini must auto-detect the
+//           spoken language and return ALL speech regardless of language.
+// PROMPT  : Defined inline inside this function -- fully standalone.
+//           Do NOT share or merge with transcribeAudio's prompt.
+// =============================================================================
 async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promise<{ text: string; detectedLanguage?: string }> {
   const transcriptionId = `trans_auto_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
@@ -1183,6 +1188,7 @@ async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promi
       const prompt = `You are a strict speech-to-text transcription engine.
 
 TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken — every single word from start to finish.
+LANGUAGE: auto (detect language automatically from the audio)
 
 STRICT RULES -- you MUST follow every rule:
 1. Detect and transcribe ALL spoken words exactly as heard, in their original language(s).
@@ -1276,8 +1282,13 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
   }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
 }
 
-// Transcribe audio -- language-specific: transcribes ONLY speech in the given language.
-// Used for /transcribe_l (client provides explicit language code).
+// =============================================================================
+// ENDPOINT: /api/v1/a/transcribe_l  (language-specific transcription)
+// PURPOSE : Caller provides an explicit BCP-47 language code.  Gemini is told
+//           which language to expect and should IGNORE all other languages.
+// PROMPT  : Defined inline inside this function -- fully standalone.
+//           Do NOT share or merge with transcribeAudioAuto's prompt.
+// =============================================================================
 async function transcribeAudio(audioBuffer: Buffer, mimeType: string, language: string = "en"): Promise<string> {
   const transcriptionId = `trans_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
 
@@ -1656,13 +1667,6 @@ const upload = multer({
 // In-memory translations storage (for serverless)
 const translations = new Map<string, any>();
 
-// Backward-compatible redirect: /api/v1/m/* -> /api/v1/a/* (for mobile app transition)
-app.use((req, res, next) => {
-  if (req.path.startsWith("/api/v1/m/")) {
-    req.url = req.url.replace("/api/v1/m/", "/api/v1/a/");
-  }
-  next();
-});
 
 // ============ ROUTES ============
 

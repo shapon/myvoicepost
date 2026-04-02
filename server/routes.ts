@@ -211,13 +211,6 @@ export async function registerRoutes(
   // Apply JWT middleware to all API routes
   app.use("/api", jwtAuthMiddleware);
 
-  // Backward-compatible redirect: /api/v1/m/* -> /api/v1/a/* (for mobile app transition)
-  app.use((req, res, next) => {
-    if (req.path.startsWith("/api/v1/m/")) {
-      req.url = req.url.replace("/api/v1/m/", "/api/v1/a/");
-    }
-    next();
-  });
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {

@@ -248,9 +248,13 @@ function normaliseMimeType(mimeType: string): string {
   return mimeType;
 }
 
-// Transcribe audio using Gemini with retry logic
-// language: BCP-47 code ("en", "es", "fr", ...) -- always provide this so Gemini
-//           knows what language to expect, which significantly reduces hallucinations.
+// =============================================================================
+// ENDPOINT: /api/v1/a/transcribe_l  (language-specific transcription)
+// PURPOSE : Caller provides an explicit BCP-47 language code.  Gemini is told
+//           which language to expect and should IGNORE all other languages.
+// PROMPT  : Defined inline inside this function -- fully standalone.
+//           Do NOT share or merge with transcribeAudioAuto's prompt.
+// =============================================================================
 export async function transcribeAudio(
   audioBuffer: Buffer,
   mimeType: string,
@@ -416,8 +420,13 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
   );
 }
 
-// Transcribe audio using Gemini -- language-agnostic (detects and returns ALL speech,
-// regardless of what language is spoken). Use this when no target language is known.
+// =============================================================================
+// ENDPOINT: /api/v1/a/transcribe  (auto-detect transcription)
+// PURPOSE : No language is provided by the caller.  Gemini must auto-detect the
+//           spoken language and return ALL speech regardless of language.
+// PROMPT  : Defined inline inside this function -- fully standalone.
+//           Do NOT share or merge with transcribeAudio's prompt.
+// =============================================================================
 export async function transcribeAudioAuto(
   audioBuffer: Buffer,
   mimeType: string
@@ -445,17 +454,19 @@ export async function transcribeAudioAuto(
 
         const prompt = `You are a strict speech-to-text transcription engine.
 
-TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken.
+TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken — every single word from start to finish.
+LANGUAGE: auto (detect language automatically from the audio)
 
 STRICT RULES -- you MUST follow every rule:
 1. Detect and transcribe ALL spoken words exactly as heard, in their original language(s).
-2. If multiple languages are spoken, transcribe each part in its original language without mixing or translating.
-3. If there is NO speech (silence, background noise, music only), set "hasSpeech" to false and "transcription" to "".
-4. If speech is unclear, set "confidence" to "low" and still transcribe what you hear.
-5. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
-6. NEVER add labels like "Speaker:", "Narrator:", language tags, timestamps, or any commentary.
-7. NEVER output podcast intros, greetings, or placeholder text.
-8. Return ONLY valid JSON. No extra text before or after.
+2. Transcribe the COMPLETE audio from beginning to end. Do NOT stop early or truncate.
+3. If multiple languages are spoken, transcribe each part in its original language without mixing or translating.
+4. If there is NO speech (silence, background noise, music only), set "hasSpeech" to false and "transcription" to "".
+5. If speech is unclear, set "confidence" to "low" and still transcribe what you hear.
+6. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
+7. NEVER add labels like "Speaker:", "Narrator:", language tags, timestamps, or any commentary.
+8. NEVER output podcast intros, greetings, or placeholder text.
+9. Return ONLY valid JSON. No extra text before or after.
 
 Return this exact JSON structure:
 {

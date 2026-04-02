@@ -22,6 +22,17 @@ import { useLocation } from "wouter";
 import type { TranslationResult, SavedText } from "@shared/schema";
 import { retryWithBackoff } from "@/lib/pendingRecordings";
 
+// Auth helpers — use JWT token from localStorage when available
+function getVRToken(): string | null {
+  return localStorage.getItem("mvp_auth_token");
+}
+function vrAuthHeaders(): Record<string, string> {
+  const token = getVRToken();
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) h["Authorization"] = `Bearer ${token}`;
+  return h;
+}
+
 // Voice Input Button Component for inline voice recording
 interface VoiceInputButtonProps {
   onTranscription: (text: string) => void;
@@ -105,9 +116,11 @@ function VoiceInputButton({ onTranscription, language = "en", disabled, classNam
   const processAudio = async (audioBlob: Blob) => {
     try {
       const audio = await blobToBase64(audioBlob);
-      const response = await fetch("/api/v1/p/transcribe", {
+      const token = getVRToken();
+      const transcribeEndpoint = token ? "/api/v1/a/transcribe_l" : "/api/v1/p/transcribe_l";
+      const response = await fetch(transcribeEndpoint, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: vrAuthHeaders(),
         body: JSON.stringify({
           audio,
           mimeType: audioBlob.type || "audio/webm",
@@ -519,9 +532,11 @@ function PolishRecorder() {
       const audio = await blobToBase64Polish(audioBlob);
 
       const doPolish = async () => {
-        const transcribeRes = await fetch("/api/v1/p/transcribe", {
+        const token = getVRToken();
+        const transcribeEndpoint = token ? "/api/v1/a/transcribe_l" : "/api/v1/p/transcribe_l";
+        const transcribeRes = await fetch(transcribeEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: vrAuthHeaders(),
           body: JSON.stringify({
             audio,
             mimeType: audioBlob.type || "audio/webm",
@@ -541,10 +556,16 @@ function PolishRecorder() {
           throw new Error("Could not transcribe audio. Please try speaking more clearly.");
         }
 
-        const polishRes = await fetch("/api/v1/p/polish", {
+        const polishEndpoint = token ? "/api/v1/a/polish" : "/api/v1/p/polish";
+        const polishRes = await fetch(polishEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          headers: vrAuthHeaders(),
+          body: JSON.stringify(token ? {
+            originalText,
+            language,
+            outputFormat,
+            outputType,
+          } : {
             text: originalText,
             language,
             outputFormat,
@@ -595,12 +616,17 @@ function PolishRecorder() {
 
   const textPolishMutation = useMutation({
     mutationFn: async (text: string) => {
-      const response = await fetch("/api/v1/p/polish", {
+      const token = getVRToken();
+      const endpoint = token ? "/api/v1/a/polish" : "/api/v1/p/polish";
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        headers: vrAuthHeaders(),
+        body: JSON.stringify(token ? {
+          originalText: text,
+          language,
+          outputFormat,
+          outputType,
+        } : {
           text,
           language,
           outputFormat,
@@ -647,12 +673,17 @@ function PolishRecorder() {
 
   const repolishMutation = useMutation({
     mutationFn: async ({ text, tone, template }: { text: string; tone: string; template: string }) => {
-      const response = await fetch("/api/v1/p/polish", {
+      const token = getVRToken();
+      const endpoint = token ? "/api/v1/a/polish" : "/api/v1/p/polish";
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        headers: vrAuthHeaders(),
+        body: JSON.stringify(token ? {
+          originalText: text,
+          language,
+          outputFormat: tone,
+          outputType,
+        } : {
           text,
           language,
           outputFormat: tone,
@@ -700,16 +731,21 @@ function PolishRecorder() {
   // Translate polished text to another language
   const translatePolishedMutation = useMutation({
     mutationFn: async ({ text, targetLang }: { text: string; targetLang: string }) => {
-      const response = await fetch("/api/v1/p/translate", {
+      const token = getVRToken();
+      const endpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        headers: vrAuthHeaders(),
+        body: JSON.stringify(token ? {
+          originalText: text,
+          sourceLanguage: language,
+          targetLanguage: targetLang,
+          outputFormat,
+        } : {
           text,
           sourceLanguage: language,
           targetLanguage: targetLang,
-          outputFormat: outputFormat,
+          outputFormat,
         }),
       });
 
@@ -1802,9 +1838,11 @@ function TranslateRecorder() {
       const audio = await blobToBase64Translate(audioBlob);
 
       const doTranslate = async () => {
-        const transcribeRes = await fetch("/api/v1/p/transcribe", {
+        const token = getVRToken();
+        const transcribeEndpoint = token ? "/api/v1/a/transcribe_l" : "/api/v1/p/transcribe_l";
+        const transcribeRes = await fetch(transcribeEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: vrAuthHeaders(),
           body: JSON.stringify({
             audio,
             mimeType: audioBlob.type || "audio/webm",
@@ -1824,10 +1862,16 @@ function TranslateRecorder() {
           throw new Error("Could not transcribe audio. Please try speaking more clearly.");
         }
 
-        const translateRes = await fetch("/api/v1/p/translate", {
+        const translateEndpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
+        const translateRes = await fetch(translateEndpoint, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
+          headers: vrAuthHeaders(),
+          body: JSON.stringify(token ? {
+            originalText,
+            sourceLanguage,
+            targetLanguage,
+            outputFormat,
+          } : {
             text: originalText,
             sourceLanguage,
             targetLanguage,
@@ -1878,12 +1922,17 @@ function TranslateRecorder() {
 
   const textTranslateMutation = useMutation({
     mutationFn: async (text: string) => {
-      const response = await fetch("/api/v1/p/translate", {
+      const token = getVRToken();
+      const endpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        headers: vrAuthHeaders(),
+        body: JSON.stringify(token ? {
+          originalText: text,
+          sourceLanguage,
+          targetLanguage,
+          outputFormat,
+        } : {
           text,
           sourceLanguage,
           targetLanguage,
@@ -1932,12 +1981,17 @@ function TranslateRecorder() {
   // Convert polished text to another language
   const convertLanguageMutation = useMutation({
     mutationFn: async ({ text, toLang }: { text: string; toLang: string }) => {
-      const response = await fetch("/api/v1/p/translate", {
+      const token = getVRToken();
+      const endpoint = token ? "/api/v1/a/translate" : "/api/v1/p/translate";
+      const response = await fetch(endpoint, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
+        headers: vrAuthHeaders(),
+        body: JSON.stringify(token ? {
+          originalText: text,
+          sourceLanguage: targetLanguage,
+          targetLanguage: toLang,
+          outputFormat,
+        } : {
           text,
           sourceLanguage: targetLanguage,
           targetLanguage: toLang,
