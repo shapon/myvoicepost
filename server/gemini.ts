@@ -160,15 +160,17 @@ const HALLUCINATION_PATTERNS = [
 function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
   const trimmed = text.trim();
   
-  // Empty or very short text
-  if (trimmed.length < 5) {
+  // Empty or very short text (only flag if truly trivial - single char/punctuation)
+  if (trimmed.length < 3) {
     console.log(`[Gemini] Hallucination check: Text too short (${trimmed.length} chars)`);
     return true;
   }
   
-  // Very short text relative to audio size (less than 1 char per 10KB of audio suggests silence)
+  // Density check: only flag if text is extremely sparse AND very small (< 10 chars).
+  // Do NOT discard real short utterances ("yes", "hello", short answers) from long recordings.
+  // Trust Gemini's hasSpeech/confidence judgement over a byte-ratio heuristic.
   const charsPerKb = trimmed.length / (audioSizeBytes / 1024);
-  if (charsPerKb < 0.5 && trimmed.length < 50) {
+  if (charsPerKb < 0.1 && trimmed.length < 10) {
     console.log(`[Gemini] Suspiciously low text density: ${charsPerKb.toFixed(2)} chars/KB`);
     return true;
   }
@@ -292,18 +294,19 @@ export async function transcribeAudio(
         // reject low-confidence guesses before they reach the user.
         const prompt = `You are a strict speech-to-text transcription engine.
 
-TASK: Transcribe the audio attached to this message.
+TASK: Transcribe the audio attached to this message — every single word from start to finish.
 EXPECTED LANGUAGE: ${langName} (${language})
 
 STRICT RULES -- you MUST follow every rule:
-1. Output ONLY what is actually spoken in the audio. Word-for-word.
-2. If the audio contains speech in ${langName}, transcribe it exactly.
-3. If there is NO speech (silence, background noise, music), set "hasSpeech" to false and "transcription" to "".
-4. If the speech is too unclear to transcribe reliably, set "confidence" to "low" and still transcribe what you hear.
-5. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
-6. NEVER add labels like "Speaker:", "Narrator:", timestamps, or any commentary.
-7. NEVER output podcast intros, greetings, or placeholder text.
-8. Return ONLY valid JSON. No extra text before or after.
+1. Output ONLY what is actually spoken in the audio. Word-for-word, ALL of it.
+2. Transcribe the COMPLETE audio from beginning to end. Do NOT stop early or truncate.
+3. If the audio contains speech in ${langName}, transcribe it exactly.
+4. If there is NO speech (silence, background noise, music), set "hasSpeech" to false and "transcription" to "".
+5. If the speech is too unclear to transcribe reliably, set "confidence" to "low" and still transcribe what you hear.
+6. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
+7. NEVER add labels like "Speaker:", "Narrator:", timestamps, or any commentary.
+8. NEVER output podcast intros, greetings, or placeholder text.
+9. Return ONLY valid JSON. No extra text before or after.
 
 Return this exact JSON structure:
 {
@@ -325,6 +328,7 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
           }],
           config: {
             temperature: 0,
+            maxOutputTokens: 8192,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -364,10 +368,9 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
           return "";
         }
 
-        //  Guard: low-confidence result 
+        //  Guard: low-confidence result -- still return text, don't discard
         if (confidence === "low") {
-          console.log(`[Gemini] ${transcriptionId} - Low-confidence transcription, discarding`);
-          return "";
+          console.log(`[Gemini] ${transcriptionId} - Low confidence, returning text with warning`);
         }
 
         const text = String(transcription || "").trim();
@@ -476,6 +479,7 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
           }],
           config: {
             temperature: 0,
+            maxOutputTokens: 8192,
             responseMimeType: "application/json",
             responseSchema: {
               type: Type.OBJECT,
@@ -514,8 +518,7 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
         }
 
         if (confidence === "low") {
-          console.log(`[Gemini] ${transcriptionId} - Low-confidence, discarding`);
-          return { text: "" };
+          console.log(`[Gemini] ${transcriptionId} - Low confidence, returning text with warning`);
         }
 
         const text = String(transcription || "").trim();

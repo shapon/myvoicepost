@@ -1120,13 +1120,16 @@ const HALLUCINATION_PATTERNS = [
 function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
   const trimmed = text.trim();
 
-  if (trimmed.length < 5) {
+  // Only flag truly trivial content (single char/punctuation)
+  if (trimmed.length < 3) {
     console.log(`[Transcribe] Hallucination check: Text too short (${trimmed.length} chars)`);
     return true;
   }
 
+  // Density check: only discard if extremely sparse AND nearly empty (< 10 chars).
+  // Do NOT discard real short utterances from long recordings — trust Gemini's hasSpeech/confidence.
   const charsPerKb = trimmed.length / (audioSizeBytes / 1024);
-  if (charsPerKb < 0.5 && trimmed.length < 50) {
+  if (charsPerKb < 0.1 && trimmed.length < 10) {
     console.log(`[Transcribe] Suspiciously low text density: ${charsPerKb.toFixed(2)} chars/KB`);
     return true;
   }
@@ -1179,17 +1182,18 @@ async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promi
 
       const prompt = `You are a strict speech-to-text transcription engine.
 
-TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken.
+TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken — every single word from start to finish.
 
 STRICT RULES -- you MUST follow every rule:
 1. Detect and transcribe ALL spoken words exactly as heard, in their original language(s).
-2. If multiple languages are spoken, transcribe each part in its original language without mixing or translating.
-3. If there is NO speech (silence, background noise, music only), set "hasSpeech" to false and "transcription" to "".
-4. If speech is unclear, set "confidence" to "low" and still transcribe what you hear.
-5. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
-6. NEVER add labels like "Speaker:", "Narrator:", language tags, timestamps, or any commentary.
-7. NEVER output podcast intros, greetings, or placeholder text.
-8. Return ONLY valid JSON. No extra text before or after.
+2. Transcribe the COMPLETE audio from beginning to end. Do NOT stop early or truncate.
+3. If multiple languages are spoken, transcribe each part in its original language without mixing or translating.
+4. If there is NO speech (silence, background noise, music only), set "hasSpeech" to false and "transcription" to "".
+5. If speech is unclear, set "confidence" to "low" and still transcribe what you hear.
+6. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
+7. NEVER add labels like "Speaker:", "Narrator:", language tags, timestamps, or any commentary.
+8. NEVER output podcast intros, greetings, or placeholder text.
+9. Return ONLY valid JSON. No extra text before or after.
 
 Return this exact JSON structure:
 {
@@ -1213,6 +1217,7 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
         }],
         config: {
           temperature: 0,
+          maxOutputTokens: 8192,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -1243,7 +1248,9 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
       console.log(`[TranscribeAuto] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, detectedLang=${detectedLanguage}, text="${String(transcription).substring(0, 120)}"`);
 
       if (!hasSpeech) return { text: "" };
-      if (confidence === "low") return { text: "" };
+      if (confidence === "low") {
+        console.log(`[TranscribeAuto] ${transcriptionId} - Low confidence, returning text with warning`);
+      }
 
       const text = String(transcription || "").trim();
       if (!text) return { text: "" };
@@ -1289,19 +1296,20 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string, language: 
 
       const prompt = `You are a strict speech-to-text transcription engine.
 
-TASK: Transcribe the audio attached to this message.
+TASK: Transcribe the audio attached to this message — every single word from start to finish.
 EXPECTED LANGUAGE: ${langName} (${language})
 
 STRICT RULES -- you MUST follow every rule:
-1. Output ONLY what is actually spoken in the audio. Word-for-word.
-2. If the audio contains speech in ${langName}, transcribe it exactly.
-3. IGNORE any words spoken in other languages -- do NOT include them.
-4. If there is NO ${langName} speech (silence, noise, or other languages only), set "hasSpeech" to false and "transcription" to "".
-5. If the speech is too unclear to transcribe reliably, set "confidence" to "low" and still transcribe what you hear.
-6. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
-7. NEVER add labels like "Speaker:", "Narrator:", timestamps, or any commentary.
-8. NEVER output podcast intros, greetings, or placeholder text.
-9. Return ONLY valid JSON. No extra text before or after.
+1. Output ONLY what is actually spoken in the audio. Word-for-word, ALL of it.
+2. Transcribe the COMPLETE audio from beginning to end. Do NOT stop early or truncate.
+3. If the audio contains speech in ${langName}, transcribe it exactly.
+4. IGNORE any words spoken in other languages -- do NOT include them.
+5. If there is NO ${langName} speech (silence, noise, or other languages only), set "hasSpeech" to false and "transcription" to "".
+6. If the speech is too unclear to transcribe reliably, set "confidence" to "low" and still transcribe what you hear.
+7. NEVER invent, paraphrase, summarise, or add anything not actually spoken.
+8. NEVER add labels like "Speaker:", "Narrator:", timestamps, or any commentary.
+9. NEVER output podcast intros, greetings, or placeholder text.
+10. Return ONLY valid JSON. No extra text before or after.
 
 Return this exact JSON structure:
 {
@@ -1323,6 +1331,7 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
         }],
         config: {
           temperature: 0,
+          maxOutputTokens: 8192,
           responseMimeType: "application/json",
           responseSchema: {
             type: Type.OBJECT,
@@ -1352,7 +1361,9 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
       console.log(`[Transcribe] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, text="${String(transcription).substring(0, 120)}"`);
 
       if (!hasSpeech) return "";
-      if (confidence === "low") return "";
+      if (confidence === "low") {
+        console.log(`[Transcribe] ${transcriptionId} - Low confidence, returning text with warning`);
+      }
 
       const text = String(transcription || "").trim();
       if (!text) return "";
