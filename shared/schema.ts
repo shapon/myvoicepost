@@ -3,7 +3,7 @@ import { pgTable, text, varchar, uuid, timestamp, boolean, integer, numeric } fr
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
-export const USER_ROLES = ["GUEST", "USER", "ADMIN"] as const;
+export const USER_ROLES = ["GUEST", "USER", "ADMIN", "TRIAL"] as const;
 export type UserRole = typeof USER_ROLES[number];
 
 export const users = pgTable("mvp_users", {
@@ -286,3 +286,53 @@ export const insertErrorLogSchema = createInsertSchema(errorLogs).omit({
 
 export type InsertErrorLog = z.infer<typeof insertErrorLogSchema>;
 export type ErrorLog = typeof errorLogs.$inferSelect;
+
+export const pushTokens = pgTable("mvp_push_tokens", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  pushToken: varchar("push_token", { length: 255 }).notNull(),
+  platform: varchar("platform", { length: 20 }).notNull().default("expo"),
+  deviceId: varchar("device_id", { length: 255 }),
+  isActive: boolean("is_active").default(true),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type PushToken = typeof pushTokens.$inferSelect;
+
+export const appSettings = pgTable("mvp_app_settings", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  settingKey: varchar("setting_key", { length: 100 }).notNull().unique(),
+  settingValue: text("setting_value").notNull(),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type AppSetting = typeof appSettings.$inferSelect;
+
+export const crashReports = pgTable("mvp_crash_reports", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  source: varchar("source", { length: 20 }).notNull(),
+  errorMessage: text("error_message").notNull(),
+  stackTrace: text("stack_trace"),
+  userId: uuid("user_id"),
+  deviceInfo: text("device_info"),
+  appVersion: varchar("app_version", { length: 20 }),
+  endpoint: varchar("endpoint", { length: 255 }),
+  emailSent: boolean("email_sent").default(false),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export type CrashReport = typeof crashReports.$inferSelect;
+
+export const notificationLog = pgTable("mvp_notification_log", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  notificationType: varchar("notification_type", { length: 50 }).notNull(),
+  subscriptionId: uuid("subscription_id"),
+  sentAt: timestamp("sent_at").defaultNow(),
+  status: varchar("status", { length: 20 }).default("sent"),
+  message: text("message"),
+});
+
+export type NotificationLog = typeof notificationLog.$inferSelect;

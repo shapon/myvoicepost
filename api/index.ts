@@ -3404,6 +3404,98 @@ app.post("/api/v1/a/transcribe_l", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
+// Mobile: Multipart transcribe — accepts up to 6 audio snippets (10s each = 60s batch)
+// Fields: snippet_0 … snippet_N (files), mimeType (optional string body field)
+app.post("/api/v1/a/mp/transcribe", mobileAuthMiddleware, upload.any(), async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ success: false, error: "Gemini AI integration not configured" });
+    }
+
+    const files = (req.files as Express.Multer.File[]) || [];
+    if (files.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one audio snippet is required" });
+    }
+
+    const mimeType = (req.body.mimeType as string | undefined) || "audio/mp4";
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+
+    const sorted = [...files].sort((a, b) => {
+      const ai = parseInt(a.fieldname.replace(/\D/g, '') || '0', 10);
+      const bi = parseInt(b.fieldname.replace(/\D/g, '') || '0', 10);
+      return ai - bi;
+    });
+
+    console.log(`[MP Transcribe Auto] User: ${userId}, snippets: ${sorted.length}, mimeType: ${mimeType}`);
+
+    const parts: string[] = [];
+    for (const file of sorted) {
+      const result = await transcribeAudioAuto(file.buffer, mimeType);
+      if (result.text && result.text.trim()) parts.push(result.text.trim());
+    }
+
+    const originalText = parts.join(' ');
+    if (!originalText) {
+      return res.status(400).json({ success: false, error: "Could not transcribe audio. Please try speaking more clearly." });
+    }
+
+    console.log(`[MP Transcribe Auto] Success: ${parts.length} snippets, ${originalText.length} chars`);
+    return res.json({ success: true, originalText });
+  } catch (error: any) {
+    console.error("[MP Transcribe Auto] Error:", error);
+    return res.status(500).json({ success: false, error: error.message || "Failed to transcribe audio" });
+  }
+});
+
+// Mobile: Multipart language-specific transcribe
+// Fields: snippet_0 … snippet_N (files), language (required string body field), mimeType (optional)
+app.post("/api/v1/a/mp/transcribe_l", mobileAuthMiddleware, upload.any(), async (req, res) => {
+  try {
+    if (!process.env.GEMINI_API_KEY) {
+      return res.status(500).json({ success: false, error: "Gemini AI integration not configured" });
+    }
+
+    const files = (req.files as Express.Multer.File[]) || [];
+    if (files.length === 0) {
+      return res.status(400).json({ success: false, error: "At least one audio snippet is required" });
+    }
+
+    const language = req.body.language as string | undefined;
+    if (!language) {
+      return res.status(400).json({ success: false, error: "language is required" });
+    }
+    const mimeType = (req.body.mimeType as string | undefined) || "audio/mp4";
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+
+    const sorted = [...files].sort((a, b) => {
+      const ai = parseInt(a.fieldname.replace(/\D/g, '') || '0', 10);
+      const bi = parseInt(b.fieldname.replace(/\D/g, '') || '0', 10);
+      return ai - bi;
+    });
+
+    console.log(`[MP Transcribe Lang] User: ${userId}, snippets: ${sorted.length}, language: ${language}, mimeType: ${mimeType}`);
+
+    const parts: string[] = [];
+    for (const file of sorted) {
+      const text = await transcribeAudio(file.buffer, mimeType, language);
+      if (text && text.trim()) parts.push(text.trim());
+    }
+
+    const originalText = parts.join(' ');
+    if (!originalText) {
+      return res.status(400).json({ success: false, error: "Could not transcribe audio. Please try speaking more clearly." });
+    }
+
+    console.log(`[MP Transcribe Lang] Success: ${parts.length} snippets, ${originalText.length} chars`);
+    return res.json({ success: true, originalText, language });
+  } catch (error: any) {
+    console.error("[MP Transcribe Lang] Error:", error);
+    return res.status(500).json({ success: false, error: error.message || "Failed to transcribe audio" });
+  }
+});
+
 // Mobile: Polish text
 app.post("/api/v1/a/polish", mobileAuthMiddleware, async (req, res) => {
   try {

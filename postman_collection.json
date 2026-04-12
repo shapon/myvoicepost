@@ -1,7 +1,7 @@
 {
   "info": {
-    "name": "MyVoicePost Production API",
-    "description": "API collection for testing MyVoicePost production server at www.myvoicepost.com",
+    "name": "MyVoicePost API",
+    "description": "Complete API collection for MyVoicePost. Base URL: https://www.myvoicepost.com\n\nPREFIX CONVENTIONS:\n  /api/v1/p/   Public — no auth required (guest access)\n  /api/v1/a/   Authenticated — requires Bearer token\n  /api/v1/wp/  Web-only public (not used by mobile)\n\nAUTH: After running 'Login', the authToken variable is auto-saved and used by all authenticated requests.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
@@ -14,34 +14,30 @@
       "key": "authToken",
       "value": "",
       "type": "string",
-      "description": "JWT token from login - set this after logging in"
+      "description": "JWT token — auto-populated by Login request test script"
     }
   ],
   "item": [
     {
-      "name": "Auth",
+      "name": "Health",
       "item": [
         {
-          "name": "Register",
+          "name": "API Health Check",
           "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"Test User\"\n}"
-            },
+            "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/v1/auth/register",
+              "raw": "{{baseUrl}}/api/health",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "register"]
-            }
+              "path": ["api", "health"]
+            },
+            "description": "Returns {status:'ok'} if server is running."
           }
-        },
+        }
+      ]
+    },
+    {
+      "name": "Public — Auth",
+      "item": [
         {
           "name": "Login",
           "event": [
@@ -52,7 +48,9 @@
                   "var jsonData = pm.response.json();",
                   "if (jsonData.token) {",
                   "    pm.collectionVariables.set('authToken', jsonData.token);",
-                  "    console.log('Token saved to collection variable');",
+                  "    console.log('Token saved:', jsonData.token.substring(0, 20) + '...');",
+                  "} else {",
+                  "    console.log('No token in response:', JSON.stringify(jsonData));",
                   "}"
                 ],
                 "type": "text/javascript"
@@ -61,261 +59,151 @@
           ],
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"email\": \"test@example.com\",\n  \"password\": \"password123\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/auth/login",
+              "raw": "{{baseUrl}}/api/v1/p/auth/login",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "login"]
-            }
+              "path": ["api", "v1", "p", "auth", "login"]
+            },
+            "description": "Login with email + password. Returns JWT token. Test script auto-saves token to authToken variable.\n\nResponse: { success, token, user: { id, email, name, role } }"
           }
         },
         {
-          "name": "Get Profile (Auth)",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
+          "name": "Sign Up",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "var jsonData = pm.response.json();",
+                  "if (jsonData.token) {",
+                  "    pm.collectionVariables.set('authToken', jsonData.token);",
+                  "    console.log('Token saved from signup');",
+                  "}"
+                ],
+                "type": "text/javascript"
               }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/auth/me",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "auth", "me"]
             }
-          }
-        },
-        {
-          "name": "Forgot Password (Web)",
+          ],
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"email\": \"your_email@example.com\"\n}"
+              "raw": "{\n  \"email\": \"newuser@example.com\",\n  \"password\": \"password123\",\n  \"name\": \"New User\",\n  \"otp\": \"123456\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/forgot-password",
+              "raw": "{{baseUrl}}/api/v1/p/auth/signup",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "forgot-password"]
+              "path": ["api", "v1", "p", "auth", "signup"]
             },
-            "description": "Request a password reset for web app. Returns a reset token (15 min expiry)."
+            "description": "Register a new user. Requires OTP from mail_otp first.\n\nResponse: { success, token, user: { id, email, name, role } }"
           }
         },
         {
-          "name": "Reset Password (Web)",
+          "name": "Send OTP (Mail Verification)",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"token\": \"RESET_TOKEN_FROM_FORGOT_PASSWORD\",\n  \"newPassword\": \"newpassword123\",\n  \"confirmPassword\": \"newpassword123\"\n}"
+              "raw": "{\n  \"email\": \"newuser@example.com\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/auth/reset-password",
+              "raw": "{{baseUrl}}/api/v1/p/mail_otp",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "auth", "reset-password"]
+              "path": ["api", "v1", "p", "mail_otp"]
             },
-            "description": "Reset password using the token from forgot-password endpoint."
+            "description": "Send a one-time verification code to the given email address. Required before signup.\n\nResponse: { success, message }"
+          }
+        },
+        {
+          "name": "Google Sign-In",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"credential\": \"GOOGLE_ID_TOKEN_HERE\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/auth/google",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "auth", "google"]
+            },
+            "description": "Sign in using a Google ID token (from Google Sign-In button). Creates account if first time.\n\nResponse: { success, token, user: { id, email, name, role } }"
           }
         }
       ]
     },
     {
-      "name": "Public API (No Auth)",
+      "name": "Public — Transcription",
       "item": [
         {
-          "name": "Login (Public)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "var jsonData = pm.response.json();",
-                  "if (jsonData.token) {",
-                  "    pm.collectionVariables.set('authToken', jsonData.token);",
-                  "    console.log('Token saved to collection variable');",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ],
+          "name": "Transcribe Audio — Auto-Detect Language",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"identifier\": \"your_username_or_email\",\n  \"password\": \"your_password\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/p/login",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "p", "login"]
-            },
-            "description": "Login with username or email. The identifier field accepts either."
-          }
-        },
-        {
-          "name": "Register (Public)",
-          "event": [
-            {
-              "listen": "test",
-              "script": {
-                "exec": [
-                  "var jsonData = pm.response.json();",
-                  "if (jsonData.token) {",
-                  "    pm.collectionVariables.set('authToken', jsonData.token);",
-                  "    console.log('Token saved to collection variable');",
-                  "}"
-                ],
-                "type": "text/javascript"
-              }
-            }
-          ],
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"username\": \"newuser\",\n  \"email\": \"newuser@example.com\",\n  \"password\": \"password123\",\n  \"confirmPassword\": \"password123\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/p/register",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "p", "register"]
-            },
-            "description": "Register a new user account. Returns JWT token on success."
-          }
-        },
-        {
-          "name": "Forgot Password (Public)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"email\": \"your_email@example.com\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/p/forgot-password",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "p", "forgot-password"]
-            },
-            "description": "Request a password reset. Returns a reset token (15 min expiry)."
-          }
-        },
-        {
-          "name": "Reset Password (Public)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"token\": \"RESET_TOKEN_FROM_FORGOT_PASSWORD\",\n  \"newPassword\": \"newpassword123\",\n  \"confirmPassword\": \"newpassword123\"\n}"
-            },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/p/reset-password",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "p", "reset-password"]
-            },
-            "description": "Reset password using the token from forgot-password endpoint."
-          }
-        },
-        {
-          "name": "Transcribe Audio (Public)",
-          "request": {
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"audio\": \"BASE64_ENCODED_AUDIO_HERE\",\n  \"mimeType\": \"audio/mp4\",\n  \"language\": \"en\"\n}"
+              "raw": "{\n  \"audio\": \"BASE64_ENCODED_AUDIO_HERE\",\n  \"mimeType\": \"audio/mp4\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/p/transcribe",
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "p", "transcribe"]
             },
-            "description": "Transcribe audio to text. Replace BASE64_ENCODED_AUDIO_HERE with actual base64 audio data."
+            "description": "Transcribe audio with automatic language detection. Use when language is unknown.\n\nRequest: { audio: base64, mimeType: 'audio/mp4'|'audio/webm'|'audio/m4a' }\n\nResponse: { success, originalText, detectedLanguage, confidence }"
           }
         },
         {
-          "name": "Polish Text (Public)",
+          "name": "Transcribe Audio — Language Specific",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"hello how are you doing today\",\n  \"language\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\"\n}"
+              "raw": "{\n  \"audio\": \"BASE64_ENCODED_AUDIO_HERE\",\n  \"mimeType\": \"audio/mp4\",\n  \"language\": \"en\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/transcribe_l",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "transcribe_l"]
+            },
+            "description": "Transcribe audio with a known language for higher accuracy. Use when language is already selected.\n\nRequest: { audio: base64, mimeType, language: 'en'|'es'|'fr'|'de'|'zh'|... }\n\nResponse: { success, originalText, language, confidence }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Public — Polish & Translate",
+      "item": [
+        {
+          "name": "Polish Text",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"hello how are you doing today i hope you are well\",\n  \"language\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\"\n}"
             },
             "url": {
               "raw": "{{baseUrl}}/api/v1/p/polish",
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "p", "polish"]
             },
-            "description": "Polish/improve text. outputFormat: professional, casual, formal, friendly. outputType: message, email, social, note"
+            "description": "Polish/improve text for guests (no auth required). Field name is 'text'.\n\noutputFormat: 'professional' | 'casual' | 'formal' | 'friendly'\noutputType: 'general' | 'message' | 'email' | 'social' | 'note'\n\nResponse: { success, originalText, polishedText, language, outputFormat, outputType }"
           }
         },
         {
-          "name": "Translate Text (Public)",
+          "name": "Translate Text",
           "request": {
             "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"text\": \"Hello, how are you?\",\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"es\",\n  \"outputFormat\": \"professional\"\n}"
@@ -325,62 +213,241 @@
               "host": ["{{baseUrl}}"],
               "path": ["api", "v1", "p", "translate"]
             },
-            "description": "Translate text from source to target language. Languages: en, es, fr, de, it, pt, zh, ja, ko, ar, hi, ru"
+            "description": "Translate text for guests (no auth required). Field name is 'text'.\n\nsourceLanguage / targetLanguage: 'en' | 'es' | 'fr' | 'de' | 'it' | 'pt' | 'zh' | 'ja' | 'ko' | 'ar' | 'hi' | 'ru' | ...\n\nResponse: { success, originalText, translatedText, polishedText, sourceLanguage, targetLanguage, outputFormat }"
           }
         }
       ]
     },
     {
-      "name": "Authenticated API (Requires Token)",
+      "name": "Public — Tone & Process",
       "item": [
         {
-          "name": "Transcribe Audio (Auth)",
+          "name": "Get Tone Categories",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/tone-categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "tone-categories"]
+            },
+            "description": "Returns all available tone transformation categories and their options.\n\nResponse: { success, categories: [ { id, name, tones: [...] } ] }"
+          }
+        },
+        {
+          "name": "Transform Tone",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"text\": \"I need this done by tomorrow.\",\n  \"tone\": \"friendly\",\n  \"language\": \"en\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/transform-tone",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "transform-tone"]
+            },
+            "description": "Rewrite text in a different tone (guest, no auth).\n\nResponse: { success, originalText, transformedText, tone }"
+          }
+        },
+        {
+          "name": "Process URL (Public)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/article\",\n  \"targetLanguage\": \"es\",\n  \"outputFormat\": \"professional\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/process-url",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "process-url"]
+            },
+            "description": "Extract text from a URL and translate/polish it (guest, no auth).\n\nResponse: { success, originalText, processedText, sourceLanguage, targetLanguage }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Public — Plans & Stripe Config",
+      "item": [
+        {
+          "name": "Get Plans",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/plans",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "plans"]
+            },
+            "description": "Returns available subscription plans.\n\nResponse: { success, plans: [ { id, name, price, interval, features } ] }"
+          }
+        },
+        {
+          "name": "Get Stripe Config",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/p/stripe-config",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "p", "stripe-config"]
+            },
+            "description": "Returns Stripe publishable key for client-side Stripe initialization.\n\nResponse: { publishableKey }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Auth",
+      "item": [
+        {
+          "name": "Get My Profile",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/auth/me",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "auth", "me"]
+            },
+            "description": "Returns the authenticated user's profile.\n\nResponse: { success, user: { id, email, name, role, subscription } }"
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/auth/logout",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "auth", "logout"]
+            },
+            "description": "Invalidates the current JWT session.\n\nResponse: { success, message }"
+          }
+        },
+        {
+          "name": "Get User Role",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/user-role",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "user-role"]
+            },
+            "description": "Returns the user's current role (GUEST, TRIAL, USER, ADMIN).\n\nResponse: { success, role, hasAccess }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Transcription",
+      "item": [
+        {
+          "name": "Transcribe Audio — Auto-Detect Language (Auth)",
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"audio\": \"BASE64_ENCODED_AUDIO_HERE\",\n  \"mimeType\": \"audio/mp4\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/transcribe",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "transcribe"]
+            },
+            "description": "Transcribe audio with automatic language detection (authenticated). Results may be saved to user history.\n\nRequest: { audio: base64, mimeType }\n\nResponse: { success, originalText, detectedLanguage, confidence }"
+          }
+        },
+        {
+          "name": "Transcribe Audio — Language Specific (Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
             ],
             "body": {
               "mode": "raw",
               "raw": "{\n  \"audio\": \"BASE64_ENCODED_AUDIO_HERE\",\n  \"mimeType\": \"audio/mp4\",\n  \"language\": \"en\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/m/transcribe",
+              "raw": "{{baseUrl}}/api/v1/a/transcribe_l",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "transcribe"]
-            }
+              "path": ["api", "v1", "a", "transcribe_l"]
+            },
+            "description": "Transcribe audio with known language for highest accuracy (authenticated).\n\nRequest: { audio: base64, mimeType, language: 'en'|'es'|... }\n\nResponse: { success, originalText, language, confidence }"
           }
         },
+        {
+          "name": "Transcribe from URL (Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/audio.mp3\",\n  \"language\": \"en\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/transcribe-url",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "transcribe-url"]
+            },
+            "description": "Transcribe audio from a remote URL.\n\nResponse: { success, originalText, language }"
+          }
+        },
+        {
+          "name": "Transcribe Audio File Upload (Auth)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                { "key": "audio", "type": "file", "src": "", "description": "Audio file to transcribe" },
+                { "key": "language", "value": "en", "type": "text" }
+              ]
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/transcribe-file",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "transcribe-file"]
+            },
+            "description": "Transcribe an audio file uploaded as multipart/form-data.\n\nResponse: { success, originalText, language }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Polish & Translate",
+      "item": [
         {
           "name": "Polish Text (Auth)",
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"hello how are you doing today\",\n  \"language\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\"\n}"
+              "raw": "{\n  \"originalText\": \"hello how are you doing today i hope you are well\",\n  \"language\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/m/polish",
+              "raw": "{{baseUrl}}/api/v1/a/polish",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "polish"]
-            }
+              "path": ["api", "v1", "a", "polish"]
+            },
+            "description": "Polish/improve text for authenticated users. Field name is 'originalText' (differs from public 'text').\n\noutputFormat: 'professional' | 'casual' | 'formal' | 'friendly'\noutputType: 'general' | 'message' | 'email' | 'social' | 'note'\n\nResponse: { success, originalText, polishedText, language, outputFormat, outputType, savedTextId? }"
           }
         },
         {
@@ -388,136 +455,540 @@
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"text\": \"Hello, how are you?\",\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"es\",\n  \"outputFormat\": \"professional\"\n}"
+              "raw": "{\n  \"originalText\": \"Hello, how are you?\",\n  \"sourceLanguage\": \"en\",\n  \"targetLanguage\": \"es\",\n  \"outputFormat\": \"professional\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/m/translate",
+              "raw": "{{baseUrl}}/api/v1/a/translate",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "translate"]
-            }
+              "path": ["api", "v1", "a", "translate"]
+            },
+            "description": "Translate text for authenticated users. Field name is 'originalText' (differs from public 'text').\n\nResponse: { success, originalText, translatedText, polishedText, sourceLanguage, targetLanguage, outputFormat, savedTextId? }"
           }
         },
         {
-          "name": "Get Saved Items",
-          "request": {
-            "method": "GET",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/m/saved-items",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "saved-items"]
-            }
-          }
-        },
-        {
-          "name": "Create Saved Item",
+          "name": "Transform Tone (Auth)",
           "request": {
             "method": "POST",
             "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
             ],
             "body": {
               "mode": "raw",
-              "raw": "{\n  \"type\": \"polish\",\n  \"originalText\": \"hello how are you\",\n  \"polishedText\": \"Hello! How are you doing?\",\n  \"sourceLanguage\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\"\n}"
+              "raw": "{\n  \"text\": \"I need this done by tomorrow.\",\n  \"tone\": \"friendly\",\n  \"language\": \"en\"\n}"
             },
             "url": {
-              "raw": "{{baseUrl}}/api/v1/m/saved-items",
+              "raw": "{{baseUrl}}/api/v1/a/transform-tone",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "saved-items"]
-            }
+              "path": ["api", "v1", "a", "transform-tone"]
+            },
+            "description": "Rewrite text in a different tone (authenticated).\n\nResponse: { success, originalText, transformedText, tone }"
           }
         },
         {
-          "name": "Update Saved Item",
+          "name": "Get Tone Categories (Auth)",
           "request": {
-            "method": "PUT",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              },
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"originalText\": \"updated text here\",\n  \"polishedText\": \"Updated polished text\"\n}"
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/tone-categories",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "tone-categories"]
             },
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/m/saved-items/:id",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "saved-items", ":id"],
-              "variable": [
-                {
-                  "key": "id",
-                  "value": "ITEM_ID_HERE"
-                }
-              ]
-            }
-          }
-        },
-        {
-          "name": "Delete Saved Item",
-          "request": {
-            "method": "DELETE",
-            "header": [
-              {
-                "key": "Authorization",
-                "value": "Bearer {{authToken}}"
-              }
-            ],
-            "url": {
-              "raw": "{{baseUrl}}/api/v1/m/saved-items/:id",
-              "host": ["{{baseUrl}}"],
-              "path": ["api", "v1", "m", "saved-items", ":id"],
-              "variable": [
-                {
-                  "key": "id",
-                  "value": "ITEM_ID_HERE"
-                }
-              ]
-            }
+            "description": "Returns all available tone transformation categories (authenticated version).\n\nResponse: { success, categories: [ { id, name, tones: [...] } ] }"
           }
         }
       ]
     },
     {
-      "name": "Health Check",
+      "name": "Authenticated — Process & Generate",
       "item": [
         {
-          "name": "API Health",
+          "name": "Process URL (Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"url\": \"https://example.com/article\",\n  \"targetLanguage\": \"es\",\n  \"outputFormat\": \"professional\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/process-url",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "process-url"]
+            },
+            "description": "Extract text from a URL and translate/polish it (authenticated, results saved).\n\nResponse: { success, originalText, processedText, sourceLanguage, targetLanguage }"
+          }
+        },
+        {
+          "name": "Generate Image (Auth)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"prompt\": \"A serene mountain lake at sunset\",\n  \"style\": \"photorealistic\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/generate-image",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "generate-image"]
+            },
+            "description": "Generate an AI image from a text prompt (authenticated).\n\nResponse: { success, imageUrl, prompt }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Saved Texts",
+      "item": [
+        {
+          "name": "List Saved Texts",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/saved-texts?type=polish&limit=20&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "saved-texts"],
+              "query": [
+                { "key": "type", "value": "polish", "description": "Filter: 'polish' | 'translate'" },
+                { "key": "limit", "value": "20" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "List saved texts for the authenticated user.\n\nQuery params: type ('polish'|'translate'), limit, offset\n\nResponse: { success, savedTexts: [ { id, type, originalText, polishedText, translatedText, language, createdAt, ... } ] }"
+          }
+        },
+        {
+          "name": "Get Saved Text by ID",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/saved-texts/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "saved-texts", ":id"],
+              "variable": [{ "key": "id", "value": "SAVED_TEXT_ID_HERE" }]
+            },
+            "description": "Get a single saved text by its ID.\n\nResponse: { success, savedText: { id, type, originalText, polishedText, ... } }"
+          }
+        },
+        {
+          "name": "Create Saved Text",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"type\": \"polish\",\n  \"originalText\": \"hello how are you\",\n  \"polishedText\": \"Hello! How are you doing today?\",\n  \"language\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/saved-texts",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "saved-texts"]
+            },
+            "description": "Save a polish or translate result to the user's history.\n\ntype: 'polish' | 'translate'\nFor translate, also include: translatedText, sourceLanguage, targetLanguage\n\nResponse: { success, savedText: { id, ... } }"
+          }
+        },
+        {
+          "name": "Update Saved Text",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"originalText\": \"updated original text\",\n  \"polishedText\": \"Updated polished text here.\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/saved-texts/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "saved-texts", ":id"],
+              "variable": [{ "key": "id", "value": "SAVED_TEXT_ID_HERE" }]
+            },
+            "description": "Update an existing saved text entry.\n\nResponse: { success, savedText: { id, ... } }"
+          }
+        },
+        {
+          "name": "Delete Saved Text",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/saved-texts/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "saved-texts", ":id"],
+              "variable": [{ "key": "id", "value": "SAVED_TEXT_ID_HERE" }]
+            },
+            "description": "Permanently delete a saved text entry.\n\nResponse: { success, message }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Settings",
+      "item": [
+        {
+          "name": "Get Settings",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/settings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "settings"]
+            },
+            "description": "Get all user settings as a key-value map.\n\nResponse: { success, settings: { key: value, ... } }"
+          }
+        },
+        {
+          "name": "Update Settings",
+          "request": {
+            "method": "PUT",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"defaultLanguage\": \"en\",\n  \"outputFormat\": \"professional\",\n  \"outputType\": \"message\",\n  \"autoSave\": true\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/settings",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "settings"]
+            },
+            "description": "Upsert one or more user settings. Pass any key-value pairs to save.\n\nResponse: { success, settings: { key: value, ... } }"
+          }
+        },
+        {
+          "name": "Delete Setting by Key",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/settings/:key",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "settings", ":key"],
+              "variable": [{ "key": "key", "value": "defaultLanguage" }]
+            },
+            "description": "Delete a single setting by its key.\n\nResponse: { success, message }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Subscription",
+      "item": [
+        {
+          "name": "Get Subscription",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/subscription",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "subscription"]
+            },
+            "description": "Get the user's current subscription details.\n\nResponse: { success, subscription: { status, plan, expiresAt, ... } }"
+          }
+        },
+        {
+          "name": "Get Subscription Status",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/subscription-status",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "subscription-status"]
+            },
+            "description": "Get a lightweight subscription status check (active, trial, expired).\n\nResponse: { success, status, trial, hasAccess }"
+          }
+        },
+        {
+          "name": "Check Access",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/check-access",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "check-access"]
+            },
+            "description": "Check whether the user has access to premium features (trial, active subscription, or ADMIN).\n\nResponse: { success, hasAccess, reason }"
+          }
+        },
+        {
+          "name": "Subscribe (Mobile / IAP)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"platform\": \"android\",\n  \"purchaseToken\": \"GOOGLE_PLAY_PURCHASE_TOKEN\",\n  \"productId\": \"mvp_monthly\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/subscribe",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "subscribe"]
+            },
+            "description": "Verify and activate an in-app purchase subscription (Android/iOS).\n\nResponse: { success, subscription: { status, plan, expiresAt } }"
+          }
+        },
+        {
+          "name": "Create Stripe Subscription (Web)",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"priceId\": \"price_STRIPE_PRICE_ID_HERE\",\n  \"paymentMethodId\": \"pm_STRIPE_PAYMENT_METHOD_ID\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/create-subscription",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "create-subscription"]
+            },
+            "description": "Create a Stripe subscription for the authenticated user (web checkout flow).\n\nResponse: { success, subscription, clientSecret? }"
+          }
+        },
+        {
+          "name": "Cancel Subscription (Web)",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/cancel-subscription",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "cancel-subscription"]
+            },
+            "description": "Cancel the current Stripe subscription at period end.\n\nResponse: { success, message, cancelAtPeriodEnd }"
+          }
+        },
+        {
+          "name": "Stripe Webhook",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "stripe-signature", "value": "STRIPE_WEBHOOK_SIGNATURE_HERE" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "STRIPE_WEBHOOK_PAYLOAD_HERE"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/stripe-webhook",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "stripe-webhook"]
+            },
+            "description": "Stripe webhook endpoint — called by Stripe, not by the app. Handles subscription events (payment_intent.succeeded, customer.subscription.updated, etc.)."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Authenticated — Support & Logging",
+      "item": [
+        {
+          "name": "Submit Support Request",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"subject\": \"Cannot save my texts\",\n  \"message\": \"When I try to save a polished text it shows an error.\",\n  \"category\": \"bug\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/support",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "support"]
+            },
+            "description": "Submit a support ticket from the app.\n\nResponse: { success, ticketId, message }"
+          }
+        },
+        {
+          "name": "Log Client Error",
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"error\": \"TypeError: Cannot read property 'text' of undefined\",\n  \"stack\": \"at VoiceRecorder.tsx:245\",\n  \"context\": { \"screen\": \"Polish\", \"action\": \"polish-submit\" }\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/error-log",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "error-log"]
+            },
+            "description": "Log a client-side error to the server for monitoring.\n\nResponse: { success }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Admin (ADMIN role required)",
+      "item": [
+        {
+          "name": "Dashboard Stats",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/stats",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "stats"]
+            },
+            "description": "Returns aggregate stats: total users, active subscriptions, revenue, usage counts.\n\nResponse: { success, stats: { totalUsers, activeSubscriptions, totalRevenue, ... } }"
+          }
+        },
+        {
+          "name": "List Users",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/users?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "users"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "List all users with their roles and subscription status.\n\nResponse: { success, users: [ { id, email, name, role, subscriptionStatus, createdAt } ] }"
+          }
+        },
+        {
+          "name": "List Subscriptions",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/subscriptions?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "subscriptions"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "List all subscriptions across all users.\n\nResponse: { success, subscriptions: [ { id, userId, plan, status, expiresAt, ... } ] }"
+          }
+        },
+        {
+          "name": "List Payments",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/payments?limit=50&offset=0",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "payments"],
+              "query": [
+                { "key": "limit", "value": "50" },
+                { "key": "offset", "value": "0" }
+              ]
+            },
+            "description": "List all payment records.\n\nResponse: { success, payments: [ { id, userId, amount, currency, status, createdAt } ] }"
+          }
+        },
+        {
+          "name": "List Support Tickets",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/support?status=open",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "support"],
+              "query": [
+                { "key": "status", "value": "open", "description": "Filter: 'open' | 'closed' | 'all'" }
+              ]
+            },
+            "description": "List all support tickets.\n\nResponse: { success, tickets: [ { id, userId, subject, message, status, createdAt } ] }"
+          }
+        },
+        {
+          "name": "Update Support Ticket Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{authToken}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"status\": \"closed\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/support/:id",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "support", ":id"],
+              "variable": [{ "key": "id", "value": "TICKET_ID_HERE" }]
+            },
+            "description": "Update the status of a support ticket.\n\nstatus: 'open' | 'in_progress' | 'closed'\n\nResponse: { success, ticket: { id, status, ... } }"
+          }
+        },
+        {
+          "name": "List Error Logs",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{authToken}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/v1/a/admin/errors?limit=50",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "v1", "a", "admin", "errors"],
+              "query": [{ "key": "limit", "value": "50" }]
+            },
+            "description": "List client-side error logs submitted via /api/v1/a/error-log.\n\nResponse: { success, errors: [ { id, userId, error, stack, context, createdAt } ] }"
+          }
+        }
+      ]
+    },
+    {
+      "name": "Web-Only",
+      "item": [
+        {
+          "name": "Google Sign-In Config (Web)",
           "request": {
             "method": "GET",
             "url": {
-              "raw": "{{baseUrl}}/api/health",
+              "raw": "{{baseUrl}}/api/v1/wp/auth/google/config",
               "host": ["{{baseUrl}}"],
-              "path": ["api", "health"]
-            }
+              "path": ["api", "v1", "wp", "auth", "google", "config"]
+            },
+            "description": "Returns the Google Sign-In client ID for the web frontend (used to initialize the GSI button). Mobile uses a different flow.\n\nResponse: { clientId }"
           }
         }
       ]

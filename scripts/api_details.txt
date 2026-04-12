@@ -202,6 +202,46 @@ POST /api/v1/a/transcribe_l        [AUTH  - language-specific]
 --------------------------------------------------------------------------------
 
 --------------------------------------------------------------------------------
+POST /api/v1/a/mp/transcribe       [AUTH - multipart auto-detect, 1-6 snippets]
+  Purpose : Upload 1-6 pre-recorded 10-second audio snippets as multipart FormData.
+            Transcribes each snippet sequentially (auto-detect language) and returns
+            the concatenated text in chronological order.
+            Used by the mobile Snippet Recorder architecture.
+  Auth    : JWT (Bearer)
+  Request : multipart/form-data
+    snippet_0  ... snippet_N  : audio files (m4a/mp4), max 6
+    mimeType   : string (optional, default "audio/mp4")
+  Response 200:
+    {
+      "success":      true,
+      "originalText": "full concatenated transcription"
+    }
+  Error 400: No files, or no speech detected in any snippet
+  Notes:
+    - Files are sorted by fieldname (snippet_0 < snippet_1 …) before processing
+    - Each snippet is transcribed individually via transcribeAudioAuto()
+    - Empty snippets are skipped, non-empty are joined with a space
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
+POST /api/v1/a/mp/transcribe_l     [AUTH - multipart language-specific, 1-6 snippets]
+  Purpose : Same as /api/v1/a/mp/transcribe but language-specific.
+            Transcribes each snippet in the given language, ignoring other languages.
+  Auth    : JWT (Bearer)
+  Request : multipart/form-data
+    snippet_0  ... snippet_N  : audio files (m4a/mp4), max 6
+    language   : string (REQUIRED - BCP-47 code e.g. "en", "fr")
+    mimeType   : string (optional, default "audio/mp4")
+  Response 200:
+    {
+      "success":      true,
+      "originalText": "full concatenated transcription",
+      "language":     "en"
+    }
+  Error 400: No files, missing language, or no speech detected
+--------------------------------------------------------------------------------
+
+--------------------------------------------------------------------------------
 POST /api/v1/a/transcribe-url
   Purpose : Download audio from a URL and transcribe it
   Auth    : JWT
