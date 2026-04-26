@@ -91,6 +91,15 @@ const templateInstructions: Record<string, string> = {
 };
 
 // Helper function to check if error is rate limit or quota violation
+/** Thrown inside pRetry when Gemini returns a hallucinated result so the
+ *  call is retried automatically (not wrapped in AbortError). */
+class HallucinationError extends Error {
+  constructor(attempt: number) {
+    super(`Gemini hallucination detected on attempt ${attempt}, retrying`);
+    this.name = 'HallucinationError';
+  }
+}
+
 function isRateLimitError(error: any): boolean {
   const errorMsg = error?.message || String(error);
   return (
@@ -286,6 +295,8 @@ export async function transcribeAudio(
   const langName = languageNames[language] || language;
   const effectiveMimeType = normaliseMimeType(mimeType);
 
+  let hallucinationCount = 0;
+
   return pRetry(
     async () => {
       try {
@@ -395,7 +406,12 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
 
         //  Guard: hallucination patterns 
         if (isLikelyHallucination(text, audioBuffer.length)) {
-          console.log(`[Gemini] ${transcriptionId} - Hallucination detected, discarding`);
+          hallucinationCount++;
+          if (hallucinationCount <= 1) {
+            console.log(`[Gemini] ${transcriptionId} - Hallucination detected (attempt ${hallucinationCount}), retrying...`);
+            throw new HallucinationError(hallucinationCount);
+          }
+          console.log(`[Gemini] ${transcriptionId} - Hallucination detected again after retry, discarding`);
           return "";
         }
 
@@ -404,6 +420,7 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
         return text;
 
       } catch (error: any) {
+        if (error instanceof HallucinationError) throw error; // pRetry will retry
         console.error(`[Gemini] ${transcriptionId} - ERROR:`, error);
         if (isRateLimitError(error)) {
           throw error; // let p-retry back off and retry
@@ -445,6 +462,8 @@ export async function transcribeAudioAuto(
   }
 
   const effectiveMimeType = normaliseMimeType(mimeType);
+
+  let hallucinationCount = 0;
 
   return pRetry(
     async () => {
@@ -548,7 +567,12 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
         }
 
         if (isLikelyHallucination(text, audioBuffer.length)) {
-          console.log(`[Gemini] ${transcriptionId} - Hallucination detected, discarding`);
+          hallucinationCount++;
+          if (hallucinationCount <= 1) {
+            console.log(`[Gemini] ${transcriptionId} - Hallucination detected (attempt ${hallucinationCount}), retrying...`);
+            throw new HallucinationError(hallucinationCount);
+          }
+          console.log(`[Gemini] ${transcriptionId} - Hallucination detected again after retry, discarding`);
           return { text: "" };
         }
 
@@ -557,6 +581,7 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
         return { text, detectedLanguage: detectedLanguage || undefined };
 
       } catch (error: any) {
+        if (error instanceof HallucinationError) throw error; // pRetry will retry
         console.error(`[Gemini] ${transcriptionId} - ERROR:`, error);
         if (isRateLimitError(error)) throw error;
         throw new AbortError(error);

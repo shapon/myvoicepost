@@ -1057,6 +1057,13 @@ function isRateLimitError(error: any): boolean {
     errorMsg.toLowerCase().includes("quota") || errorMsg.toLowerCase().includes("rate limit");
 }
 
+class HallucinationError extends Error {
+  constructor(attempt: number) {
+    super(`Gemini hallucination detected on attempt ${attempt}, retrying`);
+    this.name = 'HallucinationError';
+  }
+}
+
 function safeJsonParse(text: string, fallback: any = {}): any {
   try {
     return JSON.parse(text);
@@ -1181,7 +1188,9 @@ async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promi
   const effectiveMimeType = normaliseMimeType(mimeType);
   console.log(`[TranscribeAuto] ${transcriptionId} - size=${audioBuffer.length}, mime=${mimeType}->${effectiveMimeType}`);
 
-  return aiRequestLimiter(() => pRetry(async () => {
+  return aiRequestLimiter(() => {
+    let hallucinationCount = 0;
+    return pRetry(async () => {
     try {
       const base64Data = audioBuffer.toString("base64");
 
@@ -1268,7 +1277,12 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
       }
 
       if (isLikelyHallucination(text, audioBuffer.length)) {
-        console.log(`[TranscribeAuto] ${transcriptionId} - Hallucination detected, discarding`);
+        hallucinationCount++;
+        if (hallucinationCount <= 1) {
+          console.log(`[TranscribeAuto] ${transcriptionId} - Hallucination detected (attempt ${hallucinationCount}), retrying...`);
+          throw new HallucinationError(hallucinationCount);
+        }
+        console.log(`[TranscribeAuto] ${transcriptionId} - Hallucination detected again after retry, discarding`);
         return { text: "" };
       }
 
@@ -1276,10 +1290,12 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
       return { text, detectedLanguage: detectedLanguage || undefined };
 
     } catch (error: any) {
+      if (error instanceof HallucinationError) throw error;
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
     }
-  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 });
+  });
 }
 
 // =============================================================================
@@ -1301,7 +1317,9 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string, language: 
   const langName = languageNames[language] || language;
   console.log(`[Transcribe] ${transcriptionId} - size=${audioBuffer.length}, mime=${mimeType}->${effectiveMimeType}, lang=${langName}`);
 
-  return aiRequestLimiter(() => pRetry(async () => {
+  return aiRequestLimiter(() => {
+    let hallucinationCount = 0;
+    return pRetry(async () => {
     try {
       const base64Data = audioBuffer.toString("base64");
 
@@ -1386,7 +1404,12 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
       }
 
       if (isLikelyHallucination(text, audioBuffer.length)) {
-        console.log(`[Transcribe] ${transcriptionId} - Hallucination detected, discarding`);
+        hallucinationCount++;
+        if (hallucinationCount <= 1) {
+          console.log(`[Transcribe] ${transcriptionId} - Hallucination detected (attempt ${hallucinationCount}), retrying...`);
+          throw new HallucinationError(hallucinationCount);
+        }
+        console.log(`[Transcribe] ${transcriptionId} - Hallucination detected again after retry, discarding`);
         return "";
       }
 
@@ -1394,10 +1417,12 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
       return text;
 
     } catch (error: any) {
+      if (error instanceof HallucinationError) throw error;
       if (isRateLimitError(error)) throw error;
       throw new AbortError(error);
     }
-  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 }));
+  }, { retries: 5, minTimeout: 2000, maxTimeout: 30000, factor: 2 });
+  });
 }
 
 function isPrivateOrReservedHost(hostname: string): boolean {
