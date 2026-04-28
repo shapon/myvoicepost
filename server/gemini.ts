@@ -308,7 +308,7 @@ export async function transcribeAudio(
   let hallucinationCount = 0;
 
   return pRetry(
-    async () => {
+    async (attemptNumber) => {
       try {
         const base64Data = audioBuffer.toString("base64");
         console.log(`[Gemini] ${transcriptionId} - Sending ${base64Data.length} chars of base64, lang=${langName}`);
@@ -352,7 +352,7 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
             ]
           }],
           config: {
-            temperature: 0,
+            temperature: attemptNumber > 1 ? 0.3 : 0,
             maxOutputTokens: 8192,
             responseMimeType: "application/json",
             responseSchema: {
@@ -485,7 +485,7 @@ export async function transcribeAudioAuto(
   let hallucinationCount = 0;
 
   return pRetry(
-    async () => {
+    async (attemptNumber) => {
       try {
         const base64Data = audioBuffer.toString("base64");
         console.log(`[Gemini] ${transcriptionId} - Sending ${base64Data.length} chars of base64 (auto-detect mode)`);
@@ -527,7 +527,7 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
             ]
           }],
           config: {
-            temperature: 0,
+            temperature: attemptNumber > 1 ? 0.3 : 0,
             maxOutputTokens: 8192,
             responseMimeType: "application/json",
             responseSchema: {

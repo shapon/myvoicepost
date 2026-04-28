@@ -1200,7 +1200,7 @@ async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promi
 
   return aiRequestLimiter(() => {
     let hallucinationCount = 0;
-    return pRetry(async () => {
+    return pRetry(async (attemptNumber) => {
     try {
       const base64Data = audioBuffer.toString("base64");
 
@@ -1241,7 +1241,7 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
           ]
         }],
         config: {
-          temperature: 0,
+          temperature: attemptNumber > 1 ? 0.3 : 0,
           maxOutputTokens: 8192,
           responseMimeType: "application/json",
           responseSchema: {
@@ -1339,7 +1339,7 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string, language: 
 
   return aiRequestLimiter(() => {
     let hallucinationCount = 0;
-    return pRetry(async () => {
+    return pRetry(async (attemptNumber) => {
     try {
       const base64Data = audioBuffer.toString("base64");
 
@@ -1379,7 +1379,7 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
           ]
         }],
         config: {
-          temperature: 0,
+          temperature: attemptNumber > 1 ? 0.3 : 0,
           maxOutputTokens: 8192,
           responseMimeType: "application/json",
           responseSchema: {
