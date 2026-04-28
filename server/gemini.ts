@@ -163,6 +163,16 @@ const HALLUCINATION_PATTERNS = [
   /mr\.\s+smith/i,
   /mrs?\.\s+john/i,
   /^\s*$/,
+  // Prompt leakage — Gemini returning our own prompt text as transcription
+  /you are a strict speech-to-text transcription engine/i,
+  /speech-to-text transcription engine/i,
+  /task:\s*transcribe/i,
+  /strict rules\s*--\s*you must follow/i,
+  /return\s+only\s+valid\s+json/i,
+  /do not\s+stop\s+early\s+or\s+truncate/i,
+  /never\s+invent,?\s+paraphrase,?\s+summar/i,
+  /confidence values:\s*"high"/i,
+  /\bdetectedlanguage\b.*\bbcp-47\b/i,
 ];
 
 // Check if transcription looks like a hallucination from noise/silence
