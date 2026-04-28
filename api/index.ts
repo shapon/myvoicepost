@@ -1272,7 +1272,17 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
 
       console.log(`[TranscribeAuto] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, detectedLang=${detectedLanguage}, text="${String(transcription).substring(0, 120)}"`);
 
-      if (!hasSpeech) return { text: "" };
+      if (!hasSpeech) {
+        if (audioBuffer.length > 100 * 1024) {
+          hallucinationCount++;
+          if (hallucinationCount <= 1) {
+            console.log(`[TranscribeAuto] ${transcriptionId} - hasSpeech=false on large audio (${audioBuffer.length} bytes), retrying...`);
+            throw new HallucinationError(hallucinationCount);
+          }
+          console.log(`[TranscribeAuto] ${transcriptionId} - hasSpeech=false again after retry, accepting as genuine silence`);
+        }
+        return { text: "" };
+      }
       if (confidence === "low") {
         console.log(`[TranscribeAuto] ${transcriptionId} - Low confidence, returning text with warning`);
       }
@@ -1399,7 +1409,17 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
 
       console.log(`[Transcribe] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, text="${String(transcription).substring(0, 120)}"`);
 
-      if (!hasSpeech) return "";
+      if (!hasSpeech) {
+        if (audioBuffer.length > 100 * 1024) {
+          hallucinationCount++;
+          if (hallucinationCount <= 1) {
+            console.log(`[Transcribe] ${transcriptionId} - hasSpeech=false on large audio (${audioBuffer.length} bytes), retrying...`);
+            throw new HallucinationError(hallucinationCount);
+          }
+          console.log(`[Transcribe] ${transcriptionId} - hasSpeech=false again after retry, accepting as genuine silence`);
+        }
+        return "";
+      }
       if (confidence === "low") {
         console.log(`[Transcribe] ${transcriptionId} - Low confidence, returning text with warning`);
       }
@@ -3351,10 +3371,10 @@ app.post("/api/v1/a/transcribe", mobileAuthMiddleware, async (req, res) => {
     console.log(`[DEBUG /a/transcribe] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}, detectedLanguage=${detectedLanguage}`);
 
     if (!originalText || originalText.trim() === "") {
-      console.log(`[DEBUG /a/transcribe] OUTPUT: FAILED - empty transcription`);
-      return res.status(400).json({
-        success: false,
-        error: "Could not transcribe audio. Please try speaking more clearly.",
+      console.log(`[DEBUG /a/transcribe] OUTPUT: no speech detected, returning empty`);
+      return res.status(200).json({
+        success: true,
+        originalText: "",
       });
     }
 
@@ -3414,10 +3434,10 @@ app.post("/api/v1/a/transcribe_l", mobileAuthMiddleware, async (req, res) => {
     console.log(`[DEBUG /a/transcribe_l] TRANSCRIBE RESULT: text="${originalText?.substring(0, 100)}...", length=${originalText?.length || 0}`);
 
     if (!originalText || originalText.trim() === "") {
-      console.log(`[DEBUG /a/transcribe_l] OUTPUT: FAILED - empty transcription`);
-      return res.status(400).json({
-        success: false,
-        error: "Could not transcribe audio. Please try speaking more clearly.",
+      console.log(`[DEBUG /a/transcribe_l] OUTPUT: no speech detected, returning empty`);
+      return res.status(200).json({
+        success: true,
+        originalText: "",
       });
     }
 

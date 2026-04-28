@@ -389,7 +389,16 @@ Confidence values: "high" (clearly audible), "medium" (mostly clear), "low" (har
 
         //  Guard: no speech detected 
         if (!hasSpeech) {
-          console.log(`[Gemini] ${transcriptionId} - No speech detected by model`);
+          if (audioBuffer.length > 100 * 1024) {
+            hallucinationCount++;
+            if (hallucinationCount <= 1) {
+              console.log(`[Gemini] ${transcriptionId} - hasSpeech=false on large audio (${audioBuffer.length} bytes), retrying...`);
+              throw new HallucinationError(hallucinationCount);
+            }
+            console.log(`[Gemini] ${transcriptionId} - hasSpeech=false again after retry, accepting as genuine silence`);
+          } else {
+            console.log(`[Gemini] ${transcriptionId} - No speech detected by model`);
+          }
           return "";
         }
 
@@ -553,7 +562,16 @@ For detectedLanguage: use BCP-47 code of the primary language spoken (e.g. "en",
         console.log(`[Gemini] ${transcriptionId} - hasSpeech=${hasSpeech}, confidence=${confidence}, detectedLang=${detectedLanguage}, text="${String(transcription).substring(0, 120)}"`);
 
         if (!hasSpeech) {
-          console.log(`[Gemini] ${transcriptionId} - No speech detected`);
+          if (audioBuffer.length > 100 * 1024) {
+            hallucinationCount++;
+            if (hallucinationCount <= 1) {
+              console.log(`[Gemini] ${transcriptionId} - hasSpeech=false on large audio (${audioBuffer.length} bytes), retrying...`);
+              throw new HallucinationError(hallucinationCount);
+            }
+            console.log(`[Gemini] ${transcriptionId} - hasSpeech=false again after retry, accepting as genuine silence`);
+          } else {
+            console.log(`[Gemini] ${transcriptionId} - No speech detected`);
+          }
           return { text: "" };
         }
 

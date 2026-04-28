@@ -1265,10 +1265,8 @@ export async function registerRoutes(
       const { text: originalText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, mimeType);
 
       if (!originalText || originalText.trim() === "") {
-        return res.status(400).json({
-          success: false,
-          error: "Could not transcribe audio. Please try speaking more clearly.",
-        });
+        console.log("[Mobile Transcribe Auto] No speech detected, returning empty");
+        return res.status(200).json({ success: true, originalText: "" });
       }
 
       console.log(
@@ -1330,10 +1328,8 @@ export async function registerRoutes(
       const originalText = await transcribeAudio(audioBuffer, mimeType, language);
 
       if (!originalText || originalText.trim() === "") {
-        return res.status(400).json({
-          success: false,
-          error: "Could not transcribe audio. Please try speaking more clearly.",
-        });
+        console.log("[Mobile Transcribe Lang] No speech detected, returning empty");
+        return res.status(200).json({ success: true, originalText: "" });
       }
 
       console.log(
