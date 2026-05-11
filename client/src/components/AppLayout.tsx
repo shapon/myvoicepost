@@ -17,19 +17,12 @@ import {
   LogOut,
   User,
   BarChart3,
-  Sparkles,
-  Languages,
-  FileAudio,
-  Bookmark,
   CreditCard,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
-const navItems = [
-  { label: "Polish", href: "/polish", icon: Sparkles },
-  { label: "Translate", href: "/translate", icon: Languages },
-  { label: "Transcribe", href: "/process", icon: FileAudio },
-  { label: "Saved", href: "/saved", icon: Bookmark },
+const navItems: { label: string; href: string }[] = [
+  // Add your app's navigation items here
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
@@ -60,25 +53,24 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 </span>
               </Link>
 
-              <nav className="hidden md:flex items-center gap-1">
-                {navItems.map((item) => {
-                  const isActive = location === item.href;
-                  const Icon = item.icon;
-                  return (
-                    <Link key={item.href} href={item.href}>
-                      <Button
-                        variant={isActive ? "secondary" : "ghost"}
-                        size="sm"
-                        className="gap-1.5"
-                        data-testid={`nav-${item.label.toLowerCase()}`}
-                      >
-                        <Icon className="w-4 h-4" />
-                        {item.label}
-                      </Button>
-                    </Link>
-                  );
-                })}
-              </nav>
+              {navItems.length > 0 && (
+                <nav className="hidden md:flex items-center gap-1">
+                  {navItems.map((item) => {
+                    const isActive = location === item.href;
+                    return (
+                      <Link key={item.href} href={item.href}>
+                        <Button
+                          variant={isActive ? "secondary" : "ghost"}
+                          size="sm"
+                          data-testid={`nav-${item.label.toLowerCase()}`}
+                        >
+                          {item.label}
+                        </Button>
+                      </Link>
+                    );
+                  })}
+                </nav>
+              )}
             </div>
 
             <div className="hidden md:flex items-center gap-2">
@@ -176,7 +168,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             <div className="px-4 py-3 space-y-1">
               {navItems.map((item) => {
                 const isActive = location === item.href;
-                const Icon = item.icon;
                 return (
                   <Link key={item.href} href={item.href}>
                     <Button
@@ -185,7 +176,6 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                       onClick={() => setIsMobileMenuOpen(false)}
                       data-testid={`nav-mobile-${item.label.toLowerCase()}`}
                     >
-                      <Icon className="w-4 h-4" />
                       {item.label}
                     </Button>
                   </Link>

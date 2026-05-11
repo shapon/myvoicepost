@@ -1,0 +1,63 @@
+{
+  "expo": {
+    "name": "MyVoicePost",
+    "slug": "myvoicepost",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "automatic",
+    "newArchEnabled": false,
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.myvoicepost.app",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "MyVoicePost needs microphone access to record your voice for transcription."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#6366f1"
+      },
+      "package": "com.myvoicepost.app",
+      "permissions": [
+        "android.permission.RECORD_AUDIO",
+        "android.permission.INTERNET"
+      ]
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Allow MyVoicePost to access your microphone for voice recording."
+        }
+      ],
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#6366f1"
+        }
+      ],
+      [
+        "expo-build-properties",
+        {
+          "android": {
+            "kotlinVersion": "1.9.25",
+            "suppressKotlinVersionCompatibilityCheck": true
+          }
+        }
+      ],
+      "./plugins/withNetworkSecurity"
+    ],
+    "scheme": "myvoicepost"
+  }
+}

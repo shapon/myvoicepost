@@ -1,0 +1,40 @@
+EXPO PREBUILD FIX - February 22, 2026
+======================================
+
+PROBLEM:
+--------
+Running `npx expo prebuild` was failing with error:
+"PluginError: Failed to resolve plugin for module "./plugins/withNetworkSecurity" relative to "D:\mvp_improved""
+
+CAUSE:
+------
+The app.json file referenced a custom Expo config plugin "./plugins/withNetworkSecurity" but:
+1. The plugins directory didn't exist
+2. The withNetworkSecurity.js plugin file didn't exist
+
+SOLUTION:
+---------
+1. Created the plugins directory at: D:\mvp_improved\plugins
+2. Created the withNetworkSecurity.js plugin file with the following functionality:
+   - Adds network security configuration to AndroidManifest.xml
+   - Required for proper network communication in Android apps
+
+FILES CREATED:
+--------------
+- D:\mvp_improved\plugins/withNetworkSecurity.js
+
+RESULT:
+-------
+✓ `npx expo prebuild --clean` now runs successfully
+✓ Native Android project regenerated without errors
+✓ The app can now be built using gradle
+
+VERIFICATION:
+-------------
+Run these commands to verify:
+1. npx expo prebuild --clean
+2. cd android
+3. .\gradlew clean assembleRelease
+
+The build should complete successfully and generate APK files in:
+android/app/build/outputs/apk/release/
