@@ -18,6 +18,8 @@ import Polish from "@/pages/Polish";
 import Translate from "@/pages/Translate";
 import SavedItems from "@/pages/SavedItems";
 import About from "@/pages/About";
+import Help from "@/pages/Help";
+import CookiePolicy from "@/pages/CookiePolicy";
 
 function Router() {
   return (
@@ -35,6 +37,8 @@ function Router() {
       <Route path="/translate" component={Translate} />
       <Route path="/saved" component={SavedItems} />
       <Route path="/about" component={About} />
+      <Route path="/help" component={Help} />
+      <Route path="/cookies" component={CookiePolicy} />
       <Route component={NotFound} />
     </Switch>
   );

@@ -1,12 +1,14 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { 
-  ArrowLeft, ArrowUp, Mail, Shield, Lock, Eye, Trash2, Download, 
+  ArrowUp, Mail, Shield, Lock, Eye, Trash2, Download, 
   Settings, Globe, Check, Languages, CheckCircle2, Clock, Users, 
   Database, Cpu, MapPin, Bell, Cookie, Baby, Link2, FileText,
   Phone, ChevronDown, ChevronRight, AlertCircle, Server, Scale,
   Fingerprint, HelpCircle, Bookmark
 } from "lucide-react";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -82,31 +84,10 @@ export default function PrivacyPolicy() {
   const collapseAll = () => setOpenSections([]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 bg-background/95 backdrop-blur-md border-b border-border">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <Link href="/">
-              <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-home">
-                <ArrowLeft className="w-4 h-4" />
-                Back to Home
-              </Button>
-            </Link>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="gap-1">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                GDPR Compliant
-              </Badge>
-              <Badge variant="outline" className="gap-1">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                CCPA Compliant
-              </Badge>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen flex flex-col bg-background">
+      <Header />
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 pt-24">
         <div className="mb-8">
           <div className="flex items-center gap-4 mb-4">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-primary via-purple-500 to-pink-500 flex items-center justify-center shadow-lg">
@@ -1178,6 +1159,7 @@ export default function PrivacyPolicy() {
           <ArrowUp className="w-4 h-4" />
         </Button>
       )}
+      <Footer />
     </div>
   );
 }

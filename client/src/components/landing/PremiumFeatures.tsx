@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { useLocation } from "wouter";
 import { Badge } from "@/components/ui/badge";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -111,6 +112,7 @@ const premiumCategories = [
 ];
 
 export default function PremiumFeatures() {
+  const [, setLocation] = useLocation();
   return (
     <section className="py-20 md:py-32 bg-muted/30" data-testid="premium-features-section">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -182,6 +184,7 @@ export default function PremiumFeatures() {
           <Button
             size="lg"
             className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 text-lg px-10"
+            onClick={() => setLocation("/pricing")}
             data-testid="button-upgrade-pro"
           >
             <Crown className="w-5 h-5 mr-2" />

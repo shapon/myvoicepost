@@ -8,12 +8,12 @@ const footerLinks = {
     { label: "Updates", href: "#" },
     { label: "Blog", href: "#" },
     { label: "Resources", href: "#" },
-    { label: "Support", href: "#" },
+    { label: "Help & Support", href: "/help", isRoute: true },
   ],
   legal: [
     { label: "Privacy Policy", href: "/privacy", isRoute: true },
     { label: "Terms of Service", href: "/terms", isRoute: true },
-    { label: "Cookie Preferences", href: "#" },
+    { label: "Cookie Policy", href: "/cookies", isRoute: true },
     { label: "Affiliate Program", href: "/affiliate", isRoute: true },
   ],
   download: [

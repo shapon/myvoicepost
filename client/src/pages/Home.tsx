@@ -19,7 +19,9 @@ export default function Home() {
       <Header />
       <main>
         <HeroSection />
-        <VoiceRecorder />
+        <div id="demo">
+          <VoiceRecorder />
+        </div>
         <HowItWorks />
         <TranslationHero />
         <HowTranslationWorks />

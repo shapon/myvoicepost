@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { useLocation } from "wouter";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { 
@@ -51,6 +52,8 @@ const rewriteOptions = [
 ];
 
 export default function RewriteOptions() {
+  const [, setLocation] = useLocation();
+
   return (
     <section className="py-20 md:py-32 relative overflow-hidden" data-testid="rewrite-options-section">
       <div className="absolute inset-0 bg-gradient-to-b from-transparent via-purple-500/5 to-transparent" />
@@ -111,6 +114,7 @@ export default function RewriteOptions() {
             </p>
             <Button
               className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90"
+              onClick={() => setLocation("/signup")}
               data-testid="button-get-now-rewrite"
             >
               Get now

@@ -1,11 +1,13 @@
 import { useState } from "react";
 import { Link } from "wouter";
 import { 
-  ArrowLeft, ArrowRight, Gift, Users, DollarSign, Share2, 
+  ArrowRight, Gift, Users, DollarSign, Share2, 
   CheckCircle2, Zap, TrendingUp, Star, Sparkles, Copy, Check,
   Mic, Globe, Clock, Shield, Heart, Award, Wallet, CreditCard,
   ChevronRight, Mail, Building
 } from "lucide-react";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -134,27 +136,10 @@ export default function AffiliateProgram() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-pink-50 via-purple-50 to-indigo-50 dark:from-gray-900 dark:via-purple-950/20 dark:to-gray-900">
-      <header className="sticky top-0 z-50 bg-white/80 dark:bg-gray-900/80 backdrop-blur-md border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between">
-            <Link href="/">
-              <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-home">
-                <ArrowLeft className="w-4 h-4" />
-                Back to Home
-              </Button>
-            </Link>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-400 flex items-center justify-center">
-                <Mic className="w-4 h-4 text-white" />
-              </div>
-              <span className="font-bold text-lg">MyVoicePost</span>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen flex flex-col bg-gradient-to-br from-pink-50 via-purple-50 to-indigo-50 dark:from-gray-900 dark:via-purple-950/20 dark:to-gray-900">
+      <Header />
 
-      <main>
+      <main className="flex-1 pt-20">
         <section className="relative overflow-hidden py-16 sm:py-24">
           <div className="absolute inset-0 overflow-hidden">
             <div className="absolute -top-40 -right-40 w-96 h-96 bg-gradient-to-br from-purple-400/30 to-pink-400/30 rounded-full blur-3xl" />
@@ -476,27 +461,8 @@ export default function AffiliateProgram() {
           </div>
         </section>
 
-        <footer className="py-8 border-t">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="flex flex-col sm:flex-row justify-between items-center gap-4">
-              <p className="text-sm text-muted-foreground">
-                (c) 2026 MyVoicePost. All rights reserved.
-              </p>
-              <div className="flex items-center gap-4">
-                <Link href="/privacy">
-                  <Button variant="ghost" size="sm">Privacy Policy</Button>
-                </Link>
-                <Link href="/terms">
-                  <Button variant="ghost" size="sm">Terms of Service</Button>
-                </Link>
-                <Link href="/">
-                  <Button variant="ghost" size="sm">Back to Home</Button>
-                </Link>
-              </div>
-            </div>
-          </div>
-        </footer>
       </main>
+      <Footer />
     </div>
   );
 }

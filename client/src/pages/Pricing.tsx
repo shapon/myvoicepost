@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Check, Mic } from "lucide-react";
 import { motion } from "framer-motion";
 import { Link } from "wouter";
+import Header from "@/components/landing/Header";
 
 const plans = [
   {
@@ -63,25 +64,7 @@ export default function Pricing() {
 
   return (
     <div className="min-h-screen bg-background">
-      <header className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-xl border-b border-border">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-center justify-between h-16 md:h-20">
-            <Link href="/">
-              <a className="flex items-center gap-2 text-foreground" data-testid="link-logo">
-                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-400 flex items-center justify-center">
-                  <Mic className="w-4 h-4 text-white" />
-                </div>
-                <span className="font-bold text-xl tracking-tight">MyVoicePost</span>
-              </a>
-            </Link>
-            <Link href="/">
-              <Button variant="ghost" data-testid="button-back-home">
-                Back to Home
-              </Button>
-            </Link>
-          </div>
-        </div>
-      </header>
+      <Header />
 
       <main className="pt-32 pb-20 px-4">
         <div className="max-w-7xl mx-auto">

@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
@@ -8,6 +9,7 @@ const rotatingWords = ["message", "note", "email", "post", "journal"];
 
 export default function HeroSection() {
   const [currentWordIndex, setCurrentWordIndex] = useState(0);
+  const [, setLocation] = useLocation();
 
   useEffect(() => {
     const interval = setInterval(() => {
@@ -15,6 +17,17 @@ export default function HeroSection() {
     }, 2500);
     return () => clearInterval(interval);
   }, []);
+
+  const handleGetNow = () => {
+    setLocation("/signup");
+  };
+
+  const handleTryDemo = () => {
+    const el = document.getElementById("demo");
+    if (el) {
+      el.scrollIntoView({ behavior: "smooth" });
+    }
+  };
 
   return (
     <section className="relative min-h-screen pt-24 pb-16 overflow-hidden" data-testid="hero-section">
@@ -67,6 +80,7 @@ export default function HeroSection() {
               <Button
                 size="lg"
                 className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 text-lg px-8"
+                onClick={handleGetNow}
                 data-testid="button-hero-get-now"
               >
                 Get now
@@ -75,6 +89,7 @@ export default function HeroSection() {
                 size="lg"
                 variant="outline"
                 className="text-lg px-8"
+                onClick={handleTryDemo}
                 data-testid="button-hero-try-demo"
               >
                 Try demo

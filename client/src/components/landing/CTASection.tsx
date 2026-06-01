@@ -1,8 +1,11 @@
 import { motion } from "framer-motion";
+import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Sparkles } from "lucide-react";
 
 export default function CTASection() {
+  const [, setLocation] = useLocation();
+
   return (
     <section className="py-20 md:py-32 relative overflow-hidden" data-testid="cta-section">
       <div className="absolute inset-0 bg-gradient-to-br from-primary/20 via-purple-500/10 to-pink-500/20" />
@@ -34,6 +37,7 @@ export default function CTASection() {
         <Button
           size="lg"
           className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 text-lg px-10 py-6"
+          onClick={() => setLocation("/signup")}
           data-testid="button-cta-get-now"
         >
           Get now

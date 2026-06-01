@@ -6,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Mic, Loader2, ArrowLeft, Mail, CheckCircle } from "lucide-react";
+import { Mic, Loader2, Mail, CheckCircle } from "lucide-react";
 import { Link } from "wouter";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 
 export default function Signup() {
   const [username, setUsername] = useState("");
@@ -71,7 +73,7 @@ export default function Signup() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    
+
     if (password !== confirmPassword) {
       toast({
         title: "Passwords don't match",
@@ -120,154 +122,154 @@ export default function Signup() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
-      <div className="w-full max-w-md">
-        <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-6" data-testid="link-back-home">
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to home
-        </Link>
-        <Card>
-          <CardHeader className="space-y-1 text-center">
-            <div className="flex justify-center mb-4">
-              <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
-                <Mic className="w-6 h-6 text-primary-foreground" />
+    <div className="min-h-screen flex flex-col bg-background">
+      <Header />
+      <main className="flex-1 flex items-center justify-center px-4 pt-24 pb-16 bg-gradient-to-br from-background via-background to-muted/30">
+        <div className="w-full max-w-md">
+          <Card>
+            <CardHeader className="space-y-1 text-center">
+              <div className="flex justify-center mb-4">
+                <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
+                  <Mic className="w-6 h-6 text-primary-foreground" />
+                </div>
               </div>
-            </div>
-            <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
-          <CardDescription>
-            Start transforming your voice into beautiful text
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="username">Username</Label>
-              <Input
-                id="username"
-                type="text"
-                placeholder="Choose a username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
-                required
-                minLength={3}
-                data-testid="input-username"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <div className="flex gap-2">
-                <Input
-                  id="email"
-                  type="email"
-                  placeholder="Enter your email"
-                  value={email}
-                  onChange={(e) => {
-                    setEmail(e.target.value);
-                    if (otpSent) setOtpSent(false);
-                  }}
-                  required
-                  className="flex-1"
-                  data-testid="input-email"
-                />
+              <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
+              <CardDescription>
+                Start transforming your voice into beautiful text
+              </CardDescription>
+            </CardHeader>
+            <form onSubmit={handleSubmit}>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="username">Username</Label>
+                  <Input
+                    id="username"
+                    type="text"
+                    placeholder="Choose a username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    required
+                    minLength={3}
+                    data-testid="input-username"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="Enter your email"
+                      value={email}
+                      onChange={(e) => {
+                        setEmail(e.target.value);
+                        if (otpSent) setOtpSent(false);
+                      }}
+                      required
+                      className="flex-1"
+                      data-testid="input-email"
+                    />
+                    <Button
+                      type="button"
+                      variant={otpSent ? "outline" : "default"}
+                      onClick={handleSendOtp}
+                      disabled={isSendingOtp || cooldown > 0 || !email}
+                      data-testid="button-send-otp"
+                    >
+                      {isSendingOtp ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : otpSent ? (
+                        <>
+                          <CheckCircle className="h-4 w-4 mr-1" />
+                          {cooldown > 0 ? `${cooldown}s` : "Resend"}
+                        </>
+                      ) : (
+                        <>
+                          <Mail className="h-4 w-4 mr-1" />
+                          Verify
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                  {otpSent && (
+                    <p className="text-xs text-muted-foreground" data-testid="text-otp-sent">
+                      A 6-digit code has been sent to your email
+                    </p>
+                  )}
+                </div>
+                {otpSent && (
+                  <div className="space-y-2">
+                    <Label htmlFor="otp">Verification Code</Label>
+                    <Input
+                      id="otp"
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Enter 6-digit code"
+                      value={otp}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/\D/g, "").slice(0, 6);
+                        setOtp(val);
+                      }}
+                      maxLength={6}
+                      required
+                      data-testid="input-otp"
+                    />
+                  </div>
+                )}
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="Create a password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    minLength={6}
+                    data-testid="input-password"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="confirmPassword">Confirm Password</Label>
+                  <Input
+                    id="confirmPassword"
+                    type="password"
+                    placeholder="Confirm your password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    required
+                    data-testid="input-confirm-password"
+                  />
+                </div>
+              </CardContent>
+              <CardFooter className="flex flex-col space-y-4">
                 <Button
-                  type="button"
-                  variant={otpSent ? "outline" : "default"}
-                  onClick={handleSendOtp}
-                  disabled={isSendingOtp || cooldown > 0 || !email}
-                  data-testid="button-send-otp"
+                  type="submit"
+                  className="w-full"
+                  disabled={isLoading || !otpSent || otp.length !== 6}
+                  data-testid="button-signup"
                 >
-                  {isSendingOtp ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : otpSent ? (
+                  {isLoading ? (
                     <>
-                      <CheckCircle className="h-4 w-4 mr-1" />
-                      {cooldown > 0 ? `${cooldown}s` : "Resend"}
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Creating account...
                     </>
                   ) : (
-                    <>
-                      <Mail className="h-4 w-4 mr-1" />
-                      Verify
-                    </>
+                    "Create account"
                   )}
                 </Button>
-              </div>
-              {otpSent && (
-                <p className="text-xs text-muted-foreground" data-testid="text-otp-sent">
-                  A 6-digit code has been sent to your email
+                <p className="text-sm text-muted-foreground text-center">
+                  Already have an account?{" "}
+                  <Link href="/login" className="text-primary hover:underline" data-testid="link-login">
+                    Sign in
+                  </Link>
                 </p>
-              )}
-            </div>
-            {otpSent && (
-              <div className="space-y-2">
-                <Label htmlFor="otp">Verification Code</Label>
-                <Input
-                  id="otp"
-                  type="text"
-                  inputMode="numeric"
-                  placeholder="Enter 6-digit code"
-                  value={otp}
-                  onChange={(e) => {
-                    const val = e.target.value.replace(/\D/g, "").slice(0, 6);
-                    setOtp(val);
-                  }}
-                  maxLength={6}
-                  required
-                  data-testid="input-otp"
-                />
-              </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="Create a password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                minLength={6}
-                data-testid="input-password"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="confirmPassword">Confirm Password</Label>
-              <Input
-                id="confirmPassword"
-                type="password"
-                placeholder="Confirm your password"
-                value={confirmPassword}
-                onChange={(e) => setConfirmPassword(e.target.value)}
-                required
-                data-testid="input-confirm-password"
-              />
-            </div>
-          </CardContent>
-          <CardFooter className="flex flex-col space-y-4">
-            <Button 
-              type="submit" 
-              className="w-full" 
-              disabled={isLoading || !otpSent || otp.length !== 6}
-              data-testid="button-signup"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating account...
-                </>
-              ) : (
-                "Create account"
-              )}
-            </Button>
-            <p className="text-sm text-muted-foreground text-center">
-              Already have an account?{" "}
-              <Link href="/login" className="text-primary hover:underline" data-testid="link-login">
-                Sign in
-              </Link>
-            </p>
-          </CardFooter>
-        </form>
-        </Card>
-      </div>
+              </CardFooter>
+            </form>
+          </Card>
+        </div>
+      </main>
+      <Footer />
     </div>
   );
 }

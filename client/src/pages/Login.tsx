@@ -6,8 +6,10 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Mic, Loader2, ArrowLeft } from "lucide-react";
+import { Mic, Loader2 } from "lucide-react";
 import { Link } from "wouter";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 
 declare global {
   interface Window {
@@ -70,7 +72,7 @@ export default function Login() {
     if (!googleClientId || !googleBtnRef.current) return;
 
     const existingScript = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
-    
+
     const initGoogle = () => {
       if (window.google?.accounts?.id && googleBtnRef.current) {
         window.google.accounts.id.initialize({
@@ -133,106 +135,106 @@ export default function Login() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-background via-background to-muted/30 p-4">
-      <div className="w-full max-w-md">
-        <Link href="/" className="inline-flex items-center text-sm text-muted-foreground hover:text-foreground mb-6" data-testid="link-back-home">
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to home
-        </Link>
-        <Card>
-          <CardHeader className="space-y-1 text-center">
-            <div className="flex justify-center mb-4">
-              <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
-                <Mic className="w-6 h-6 text-primary-foreground" />
-              </div>
-            </div>
-            <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
-          <CardDescription>
-            Sign in to your MyVoicePost account
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="Enter your email"
-                value={email}
-                onChange={(e) => {
-                  setEmail(e.target.value);
-                  if (emailError) setEmailError("");
-                }}
-                required
-                data-testid="input-email"
-              />
-              {emailError && (
-                <p className="text-sm text-destructive" data-testid="text-email-error">{emailError}</p>
-              )}
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                placeholder="Enter your password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-                data-testid="input-password"
-              />
-            </div>
-          </CardContent>
-          <CardFooter className="flex flex-col space-y-4">
-            <Button 
-              type="submit" 
-              className="w-full" 
-              disabled={isLoading || googleLoading}
-              data-testid="button-login"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Signing in...
-                </>
-              ) : (
-                "Sign in"
-              )}
-            </Button>
-
-            {googleClientId && (
-              <>
-                <div className="relative w-full">
-                  <div className="absolute inset-0 flex items-center">
-                    <span className="w-full border-t" />
-                  </div>
-                  <div className="relative flex justify-center text-xs uppercase">
-                    <span className="bg-card px-2 text-muted-foreground">or</span>
-                  </div>
+    <div className="min-h-screen flex flex-col bg-background">
+      <Header />
+      <main className="flex-1 flex items-center justify-center px-4 pt-24 pb-16 bg-gradient-to-br from-background via-background to-muted/30">
+        <div className="w-full max-w-md">
+          <Card>
+            <CardHeader className="space-y-1 text-center">
+              <div className="flex justify-center mb-4">
+                <div className="w-12 h-12 bg-primary rounded-xl flex items-center justify-center">
+                  <Mic className="w-6 h-6 text-primary-foreground" />
                 </div>
+              </div>
+              <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
+              <CardDescription>
+                Sign in to your MyVoicePost account
+              </CardDescription>
+            </CardHeader>
+            <form onSubmit={handleSubmit}>
+              <CardContent className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <Input
+                    id="email"
+                    type="email"
+                    placeholder="Enter your email"
+                    value={email}
+                    onChange={(e) => {
+                      setEmail(e.target.value);
+                      if (emailError) setEmailError("");
+                    }}
+                    required
+                    data-testid="input-email"
+                  />
+                  {emailError && (
+                    <p className="text-sm text-destructive" data-testid="text-email-error">{emailError}</p>
+                  )}
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="password">Password</Label>
+                  <Input
+                    id="password"
+                    type="password"
+                    placeholder="Enter your password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    data-testid="input-password"
+                  />
+                </div>
+              </CardContent>
+              <CardFooter className="flex flex-col space-y-4">
+                <Button
+                  type="submit"
+                  className="w-full"
+                  disabled={isLoading || googleLoading}
+                  data-testid="button-login"
+                >
+                  {isLoading ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Signing in...
+                    </>
+                  ) : (
+                    "Sign in"
+                  )}
+                </Button>
 
-                {googleLoading ? (
-                  <div className="flex items-center justify-center py-2">
-                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground mr-2" />
-                    <span className="text-sm text-muted-foreground">Signing in with Google...</span>
-                  </div>
-                ) : (
-                  <div ref={googleBtnRef} className="w-full" data-testid="button-google-login" />
+                {googleClientId && (
+                  <>
+                    <div className="relative w-full">
+                      <div className="absolute inset-0 flex items-center">
+                        <span className="w-full border-t" />
+                      </div>
+                      <div className="relative flex justify-center text-xs uppercase">
+                        <span className="bg-card px-2 text-muted-foreground">or</span>
+                      </div>
+                    </div>
+
+                    {googleLoading ? (
+                      <div className="flex items-center justify-center py-2">
+                        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground mr-2" />
+                        <span className="text-sm text-muted-foreground">Signing in with Google...</span>
+                      </div>
+                    ) : (
+                      <div ref={googleBtnRef} className="w-full" data-testid="button-google-login" />
+                    )}
+                  </>
                 )}
-              </>
-            )}
 
-            <p className="text-sm text-muted-foreground text-center">
-              Don't have an account?{" "}
-              <Link href="/signup" className="text-primary hover:underline" data-testid="link-signup">
-                Create one
-              </Link>
-            </p>
-          </CardFooter>
-        </form>
-        </Card>
-      </div>
+                <p className="text-sm text-muted-foreground text-center">
+                  Don't have an account?{" "}
+                  <Link href="/signup" className="text-primary hover:underline" data-testid="link-signup">
+                    Create one
+                  </Link>
+                </p>
+              </CardFooter>
+            </form>
+          </Card>
+        </div>
+      </main>
+      <Footer />
     </div>
   );
 }

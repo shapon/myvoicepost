@@ -1,11 +1,14 @@
 import { useState, useEffect } from "react";
 import { Link } from "wouter";
 import { 
-  ArrowLeft, ArrowUp, FileText, Users, CreditCard, Shield, Scale, Phone, 
+  ArrowUp, FileText, Users, CreditCard, Shield, Scale, Phone, 
   Check, CheckCircle2, Clock, AlertCircle, Lock, Globe, Mail, 
   Bookmark, Ban, Zap, RefreshCw, XCircle, HelpCircle, Gavel,
-  UserCheck, Settings, FileCheck, Building, AlertTriangle, MessageSquare
+  UserCheck, Settings, FileCheck, Building, AlertTriangle, MessageSquare,
+  Database, Server, MapPin, Info
 } from "lucide-react";
+import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
@@ -40,6 +43,7 @@ const quickNavItems: QuickNavItem[] = [
   { id: "section-20", label: "Changes", icon: RefreshCw },
   { id: "section-21", label: "General", icon: FileText },
   { id: "section-22", label: "Contact", icon: Mail },
+  { id: "section-dpa", label: "Data Processing (DPA)", icon: Database },
 ];
 
 export default function TermsOfService() {
@@ -73,31 +77,10 @@ export default function TermsOfService() {
   const collapseAll = () => setOpenSections([]);
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="sticky top-0 z-50 bg-background/95 backdrop-blur-md border-b border-border">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <Link href="/">
-              <Button variant="ghost" size="sm" className="gap-2" data-testid="button-back-home">
-                <ArrowLeft className="w-4 h-4" />
-                Back to Home
-              </Button>
-            </Link>
-            <div className="flex items-center gap-2">
-              <Badge variant="outline" className="gap-1">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                Legally Binding
-              </Badge>
-              <Badge variant="outline" className="gap-1">
-                <CheckCircle2 className="w-3 h-3 text-green-500" />
-                Plain Language
-              </Badge>
-            </div>
-          </div>
-        </div>
-      </header>
+    <div className="min-h-screen flex flex-col bg-background">
+      <Header />
 
-      <main className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 pt-24">
         <div className="mb-8">
           <div className="flex items-center gap-4 mb-4">
             <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-blue-500 via-indigo-500 to-purple-500 flex items-center justify-center shadow-lg">
@@ -1098,6 +1081,218 @@ export default function TermsOfService() {
           </AccordionItem>
         </Accordion>
 
+        {/* -- Data Processing Addendum -- */}
+        <div id="section-dpa" className="mt-10 scroll-mt-24">
+          <div className="flex items-center gap-3 mb-6">
+            <div className="w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center shadow-md">
+              <Database className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2 flex-wrap">
+                <h2 className="text-2xl font-bold">Data Processing Addendum (DPA)</h2>
+                <Badge variant="outline" className="gap-1">
+                  <Clock className="w-3 h-3" />
+                  Effective: March 24, 2026
+                </Badge>
+              </div>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Binding agreement between MyVoicePost (Processor) and you (Controller) regarding personal data processing.
+              </p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-indigo-500/20 bg-indigo-500/5 flex gap-3 p-4 mb-6 text-sm">
+            <Info className="w-4 h-4 text-indigo-400 shrink-0 mt-0.5" />
+            <p className="text-foreground/80">
+              We recognise the immense trust you place in us with your voice data. This addendum outlines how we handle your information transparently, cleanly, and securely in full compliance with modern data privacy regulations.
+            </p>
+          </div>
+
+          <div className="space-y-8">
+
+            {/* 1. Framework */}
+            <div>
+              <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-bold">1</span>
+                Framework of Data Handling
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                This section defines the guardrails of how your data flows through the MyVoicePost ecosystem.
+              </p>
+              <div className="grid sm:grid-cols-2 gap-3 mb-5">
+                {[
+                  { label: "Subject Matter", value: "Capture, audio recording, automated transcription, and AI-driven processing of customer-submitted voice notes." },
+                  { label: "Duration of Processing", value: "Active for the entire lifecycle of the user's account up until service termination or deletion requests are executed." },
+                  { label: "Target Data Subjects", value: "Any registered user or authorised collaborator interacting with the MyVoicePost application." },
+                  { label: "Core Purpose", value: "Exclusively providing, maintaining, and refining the core audio transcription features requested by the user." },
+                ].map(item => (
+                  <div key={item.label} className="p-3 rounded-lg border border-border bg-muted/20">
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-1">{item.label}</p>
+                    <p className="text-sm">{item.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              <h4 className="font-semibold text-sm mb-2">Data Collection Categories</h4>
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-muted/50 border-b border-border">
+                      <th className="text-left px-4 py-3 font-semibold">Data Category</th>
+                      <th className="text-left px-4 py-3 font-semibold">Specific Elements Captured</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { cat: "Profile Metadata", elements: "Account holder name, registered email address, and credential profiles." },
+                      { cat: "Media Assets", elements: "Raw audio recordings captured or uploaded through the mobile/web application." },
+                      { cat: "Processed Information", elements: "AI-generated text transcripts, structural notes, and edited document summaries." },
+                      { cat: "System Telemetry", elements: "IP addresses, unique device fingerprints, OS versions, and localised language preferences." },
+                    ].map((row, i) => (
+                      <tr key={row.cat} className={`border-b border-border last:border-0 ${i % 2 === 0 ? "" : "bg-muted/10"}`}>
+                        <td className="px-4 py-3 font-medium whitespace-nowrap">{row.cat}</td>
+                        <td className="px-4 py-3 text-muted-foreground">{row.elements}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* 2. Commitments */}
+            <div>
+              <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-bold">2</span>
+                Our Commitments &amp; Protection Standards
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                As your data processor, MyVoicePost operates under strict security and compliance mandates.
+              </p>
+              <div className="space-y-3">
+                {[
+                  { icon: Shield, color: "text-green-500", bg: "bg-green-500/10", title: "Processing Rules", desc: "We handle personal data strictly according to your documented application parameters and configurations, unless explicitly required to deviate under applicable statutes." },
+                  { icon: Lock, color: "text-blue-500", bg: "bg-blue-500/10", title: "Team Confidentiality", desc: "Every staff member with access to user data is legally bound by rigorous, enforceable non-disclosure and privacy protocols." },
+                  { icon: Server, color: "text-purple-500", bg: "bg-purple-500/10", title: "Security Countermeasures", desc: "Enterprise-grade protection: all data is encrypted at rest and in transit. We enforce strict access parameters and execute routine vulnerability assessments." },
+                  { icon: CheckCircle2, color: "text-indigo-500", bg: "bg-indigo-500/10", title: "Data Rights Support", desc: "We provide native tools to help you respond to requests for data access, correction, transfer, or deletion instantly." },
+                  { icon: AlertTriangle, color: "text-amber-500", bg: "bg-amber-500/10", title: "Breach Reporting", desc: "In the unlikely event of an unauthorised security exposure, VoicePost will alert you without undue delay so corrective actions can be synchronised." },
+                  { icon: XCircle, color: "text-red-500", bg: "bg-red-500/10", title: "On-Demand Deletion", desc: "Audio recordings and summaries can be purged at any point within the app. Upon account closure, all records are permanently wiped unless regulations dictate otherwise." },
+                  { icon: FileCheck, color: "text-teal-500", bg: "bg-teal-500/10", title: "Compliance Verification", desc: "We maintain complete structural logs to verify compliance with this DPA and will participate in transparent verification check-ins upon reasonable prior notification." },
+                ].map(item => {
+                  const Icon = item.icon;
+                  return (
+                    <div key={item.title} className="flex gap-3 p-3 rounded-lg border border-border">
+                      <div className={`w-8 h-8 rounded-lg ${item.bg} flex items-center justify-center shrink-0`}>
+                        <Icon className={`w-4 h-4 ${item.color}`} />
+                      </div>
+                      <div>
+                        <p className="font-medium text-sm">{item.title}</p>
+                        <p className="text-sm text-muted-foreground">{item.desc}</p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* 3. Sub-Processors */}
+            <div>
+              <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-bold">3</span>
+                Approved Sub-Processors
+              </h3>
+              <p className="text-sm text-muted-foreground mb-3">
+                To ensure high-performance processing and cloud stability, MyVoicePost collaborates with the following third-party service providers. You grant general authorisation for us to utilise these infrastructure partners.
+              </p>
+              <div className="rounded-lg border border-amber-500/20 bg-amber-500/5 flex gap-3 p-3 mb-4 text-sm">
+                <Info className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <p className="text-foreground/80">
+                  <strong>Our Accountability Guarantee:</strong> MyVoicePost enforces strict privacy obligations on every sub-processor that are at least as restrictive as those outlined in this DPA. We remain entirely accountable for their performance and compliance.
+                </p>
+              </div>
+              <div className="overflow-x-auto rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-muted/50 border-b border-border">
+                      <th className="text-left px-4 py-3 font-semibold">Entity</th>
+                      <th className="text-left px-4 py-3 font-semibold hidden md:table-cell">Core Purpose</th>
+                      <th className="text-left px-4 py-3 font-semibold hidden lg:table-cell">Data Shared</th>
+                      <th className="text-left px-4 py-3 font-semibold">Location</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {[
+                      { entity: "Microsoft Azure", purpose: "Core speech recognition & processing", data: "Voice recordings, parsed text strings", location: "EU" },
+                      { entity: "ElevenLabs", purpose: "Custom audio voice styling features", data: "Direct audio recordings", location: "US / EU" },
+                      { entity: "Google LLC (Gemini)", purpose: "AI linguistic summary compilation", data: "Text transcripts", location: "US / EU" },
+                      { entity: "Google Cloud Platform", purpose: "Primary protected cloud data hosting", data: "Full ecosystem data spectrum", location: "EU" },
+                      { entity: "Stripe", purpose: "Payment settlement gateway", data: "Profile emails, billing transactions", location: "US / EU" },
+                      { entity: "Adapty", purpose: "Digital mobile membership infrastructure", data: "Account profiles, transaction codes", location: "US / EU" },
+                      { entity: "Amplitude", purpose: "Systems performance & usage profiling", data: "Aggregated app engagement logs", location: "US / EU" },
+                      { entity: "Apple Inc. (App Store)", purpose: "Digital software delivery & purchase flows", data: "Raw purchase transactional identifiers", location: "US" },
+                      { entity: "Google LLC (Play Store)", purpose: "Digital software delivery & purchase flows", data: "Raw purchase transactional identifiers", location: "US" },
+                    ].map((row, i) => (
+                      <tr key={row.entity} className={`border-b border-border last:border-0 hover:bg-muted/30 transition-colors ${i % 2 === 0 ? "" : "bg-muted/10"}`}>
+                        <td className="px-4 py-3 font-medium whitespace-nowrap">{row.entity}</td>
+                        <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{row.purpose}</td>
+                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{row.data}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant="outline" className="text-xs whitespace-nowrap">{row.location}</Badge>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-muted-foreground mt-3">
+                <strong>Registry Modifications:</strong> If we add or swap any sub-processors, we will broadcast updates via our website or in-app dashboard alerts. Users have 14 days from the notice release date to file an objection based on verifiable data protection concerns.
+              </p>
+            </div>
+
+            {/* 4. Cross-Border */}
+            <div>
+              <h3 className="text-lg font-semibold mb-1 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-bold">4</span>
+                Cross-Border &amp; International Transfers
+              </h3>
+              <p className="text-sm text-muted-foreground leading-relaxed">
+                When MyVoicePost routes personal data outside of the European Economic Area (EEA), the UK, or matching strict geographic jurisdictions, we ensure structural safeguards protect its transit. This includes the integration of European Commission-approved <strong className="text-foreground">Standard Contractual Clauses (SCCs)</strong> or reliance on accredited cross-border data protection validation frameworks to keep your data safe globally.
+              </p>
+            </div>
+
+            {/* 5. Contact */}
+            <div>
+              <h3 className="text-lg font-semibold mb-3 flex items-center gap-2">
+                <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs flex items-center justify-center font-bold">5</span>
+                Contact &amp; Support Escalations
+              </h3>
+              <p className="text-sm text-muted-foreground mb-4">
+                For deep inquiries, data protection impact assessment reviews, or compliance discussions, please contact our infrastructure oversight team:
+              </p>
+              <div className="grid sm:grid-cols-2 gap-3">
+                <div className="flex items-start gap-3 p-4 rounded-lg border border-border">
+                  <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <Mail className="w-4 h-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Email</p>
+                    <a href="mailto:support@myvoicepost.com" className="text-primary hover:underline text-sm">support@myvoicepost.com</a>
+                  </div>
+                </div>
+                <div className="flex items-start gap-3 p-4 rounded-lg border border-border">
+                  <div className="w-8 h-8 rounded-lg bg-primary/10 flex items-center justify-center shrink-0">
+                    <MapPin className="w-4 h-4 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-medium text-sm">Corporate Hub</p>
+                    <p className="text-sm text-muted-foreground">MyVoicePost, Plantation, FL, United States</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
         <Card className="mt-8 bg-gradient-to-br from-blue-500/5 to-indigo-500/5 border-blue-500/20">
           <CardContent className="p-6">
             <h3 className="font-semibold mb-4">Quick Reference</h3>
@@ -1147,6 +1342,7 @@ export default function TermsOfService() {
           <ArrowUp className="w-4 h-4" />
         </Button>
       )}
+      <Footer />
     </div>
   );
 }

@@ -31,10 +31,10 @@ export default function Header() {
   };
 
   const navLinks = [
-    { label: "How it works", href: "#how" },
-    { label: "Features", href: "#features" },
-    { label: "Use Cases", href: "#usecases" },
-    { label: "Reviews", href: "#reviews" },
+    { label: "How it works", href: "/#how" },
+    { label: "Features", href: "/#features" },
+    { label: "Use Cases", href: "/#usecases" },
+    { label: "Reviews", href: "/#reviews" },
     { label: "About", href: "/about", isRoute: true },
     { label: "Pricing", href: "/pricing", isRoute: true },
   ];
@@ -51,7 +51,7 @@ export default function Header() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-16 md:h-20">
           <a
-            href="#"
+            href="/"
             className="flex items-center gap-2 text-foreground"
             data-testid="link-logo"
           >
@@ -117,7 +117,7 @@ export default function Header() {
                     </>
                   )}
                   <DropdownMenuSeparator />
-                  <DropdownMenuItem 
+                  <DropdownMenuItem
                     className="gap-2 text-destructive focus:text-destructive"
                     onClick={handleLogout}
                     data-testid="button-logout"
@@ -205,9 +205,9 @@ export default function Header() {
                         </Button>
                       </Link>
                     )}
-                    <Button 
-                      variant="outline" 
-                      className="w-full gap-2" 
+                    <Button
+                      variant="outline"
+                      className="w-full gap-2"
                       onClick={() => {
                         handleLogout();
                         setIsMobileMenuOpen(false);
