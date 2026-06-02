@@ -35,7 +35,8 @@ const PROCESS_AUDIO_CFG = {
     'mp4', 'mp3', 'mpeg', 'wav', 'webm', 'ogg', 'aac', 'm4a', 'flac',
   ] as const,
   isAudioTypeSupported(mimeType: string): boolean {
-    return (this.PROCESS_AUDIO_SUPPORTED_TYPES as readonly string[]).includes(mimeType);
+    const normalized = mimeType.split(';')[0].trim().toLowerCase();
+    return (this.PROCESS_AUDIO_SUPPORTED_TYPES as readonly string[]).includes(normalized);
   },
   formatMaxSize(): string {
     return `${this.PROCESS_AUDIO_MAX_SIZE_MB}MB`;
@@ -7566,8 +7567,13 @@ app.post("/api/v1/a/process-audio", mobileAuthMiddleware, async (req, res) => {
     console.log(`[DEBUG /m/process-audio] INPUT: userId=${userId}, targetLanguage=${targetLanguage}, audioLength=${audioBase64.length}, mimeType=${audioMimeType}`);
 
     const audioBuffer = Buffer.from(audioBase64, "base64");
-    const transcribedText = await transcribeAudio(audioBuffer, audioMimeType);
-    const sourceLanguage = await detectTextLanguage(transcribedText);
+    const { text: transcribedText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, audioMimeType);
+
+    if (!transcribedText || transcribedText.trim() === "") {
+      return res.status(400).json({ success: false, error: "Could not transcribe audio. Please speak clearly or check the file format." });
+    }
+
+    const sourceLanguage = detectedLanguage || await detectTextLanguage(transcribedText);
 
     let translatedText = transcribedText;
     if (sourceLanguage !== targetLanguage) {

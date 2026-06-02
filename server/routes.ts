@@ -204,12 +204,22 @@ const GOOGLE_SSO_CONFIG = {
 };
 
 const PROCESS_AUDIO_CFG = {
-  PROCESS_AUDIO_SUPPORTED_TYPES: ["audio/webm", "audio/mp4", "audio/wav", "audio/ogg", "audio/mpeg", "audio/m4a"],
-  PROCESS_AUDIO_MAX_SIZE_BYTES: 20 * 1024 * 1024,
-  isAudioTypeSupported(mimeType: string) {
-    return this.PROCESS_AUDIO_SUPPORTED_TYPES.some((t) => mimeType.startsWith(t));
+  PROCESS_AUDIO_MAX_SIZE_MB: 5,
+  PROCESS_AUDIO_MAX_SIZE_BYTES: 5 * 1024 * 1024,
+  PROCESS_AUDIO_SUPPORTED_TYPES: [
+    'audio/mp4', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
+    'audio/webm', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/m4a', 'audio/flac',
+  ] as const,
+  PROCESS_AUDIO_SUPPORTED_EXTENSIONS: [
+    'mp4', 'mp3', 'mpeg', 'wav', 'webm', 'ogg', 'aac', 'm4a', 'flac',
+  ] as const,
+  isAudioTypeSupported(mimeType: string): boolean {
+    const normalized = mimeType.split(';')[0].trim().toLowerCase();
+    return (this.PROCESS_AUDIO_SUPPORTED_TYPES as readonly string[]).includes(normalized);
   },
-  formatMaxSize() { return "20MB"; },
+  formatMaxSize(): string {
+    return `${this.PROCESS_AUDIO_MAX_SIZE_MB}MB`;
+  },
 };
 
 const crashReportRateLimit: Record<string, { count: number; resetAt: number }> = {};
@@ -4674,76 +4684,6 @@ export async function registerRoutes(
   });
 
   // ============================================================
-  // SAVED TEXTS — individual record CRUD
-  // ============================================================
-
-  app.get("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
-      const result = await db.select().from(savedTexts).where(and(eq(savedTexts.id, req.params.id), eq(savedTexts.userId, userId)));
-      if (result.length === 0) return res.status(404).json({ success: false, error: "Saved text not found" });
-      res.json({ success: true, savedText: result[0] });
-    } catch (error: any) {
-      console.error("[Get Saved Text] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch saved text" });
-    }
-  });
-
-  app.put("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
-      const { id } = req.params;
-
-      const existing = await db.select().from(savedTexts).where(and(eq(savedTexts.id, id), eq(savedTexts.userId, userId)));
-      if (existing.length === 0) return res.status(404).json({ success: false, error: "Saved text not found" });
-
-      const schema = z.object({
-        type: z.enum(["polish", "translate"]).optional(),
-        originalText: z.string().optional(),
-        polishedText: z.string().optional(),
-        translatedText: z.string().nullable().optional(),
-        sourceLanguage: z.string().optional(),
-        targetLanguage: z.string().nullable().optional(),
-        outputFormat: z.string().optional(),
-        outputType: z.string().nullable().optional(),
-      });
-
-      const parseResult = schema.safeParse(req.body);
-      if (!parseResult.success) return res.status(400).json({ success: false, error: "Invalid request" });
-
-      const updates: any = {};
-      const data = parseResult.data;
-      if (data.type) updates.type = data.type;
-      if (data.originalText) updates.originalText = data.originalText;
-      if (data.polishedText) updates.polishedText = data.polishedText;
-      if (data.translatedText !== undefined) updates.translatedText = data.translatedText;
-      if (data.sourceLanguage) updates.sourceLanguage = data.sourceLanguage;
-      if (data.targetLanguage !== undefined) updates.targetLanguage = data.targetLanguage;
-      if (data.outputFormat) updates.outputFormat = data.outputFormat;
-      if (data.outputType !== undefined) updates.outputType = data.outputType;
-
-      const result = await db.update(savedTexts).set(updates).where(eq(savedTexts.id, id)).returning();
-      res.json({ success: true, savedText: result[0] });
-    } catch (error: any) {
-      console.error("[Update Saved Text] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to update saved text" });
-    }
-  });
-
-  app.delete("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
-      const existing = await db.select().from(savedTexts).where(and(eq(savedTexts.id, req.params.id), eq(savedTexts.userId, userId)));
-      if (existing.length === 0) return res.status(404).json({ success: false, error: "Saved text not found" });
-      await db.delete(savedTexts).where(eq(savedTexts.id, req.params.id));
-      res.json({ success: true, message: "Saved text deleted successfully" });
-    } catch (error: any) {
-      console.error("[Delete Saved Text] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to delete saved text" });
-    }
-  });
-
-  // ============================================================
   // SUBSCRIPTION: PRE-SUBSCRIBE CHECK, TOPUP, CONFIRM, REACTIVATE, UPDATE PAYMENT
   // ============================================================
 
@@ -5365,8 +5305,13 @@ export async function registerRoutes(
 
       const userId = req.jwtUser?.userId || req.jwtUser?.id;
       const audioBuffer = Buffer.from(audioBase64, "base64");
-      const transcribedText = await transcribeAudio(audioBuffer, audioMimeType);
-      const sourceLanguage = await detectTextLanguage(transcribedText);
+      const { text: transcribedText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, audioMimeType);
+
+      if (!transcribedText || transcribedText.trim() === "") {
+        return res.status(400).json({ success: false, error: "Could not transcribe audio. Please speak clearly or check the file format." });
+      }
+
+      const sourceLanguage = detectedLanguage || await detectTextLanguage(transcribedText);
 
       let translatedText = transcribedText;
       if (sourceLanguage !== targetLanguage) {

@@ -22,7 +22,8 @@ export const PROCESS_AUDIO_SUPPORTED_EXTENSIONS = [
 export type SupportedAudioType = typeof PROCESS_AUDIO_SUPPORTED_TYPES[number];
 
 export function isAudioTypeSupported(mimeType: string): boolean {
-  return PROCESS_AUDIO_SUPPORTED_TYPES.includes(mimeType as SupportedAudioType);
+  const normalized = mimeType.split(';')[0].trim().toLowerCase();
+  return PROCESS_AUDIO_SUPPORTED_TYPES.includes(normalized as SupportedAudioType);
 }
 
 export function formatMaxSize(): string {
