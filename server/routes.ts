@@ -204,8 +204,8 @@ const GOOGLE_SSO_CONFIG = {
 };
 
 const PROCESS_AUDIO_CFG = {
-  PROCESS_AUDIO_MAX_SIZE_MB: 10,
-  PROCESS_AUDIO_MAX_SIZE_BYTES: 10 * 1024 * 1024,
+  PROCESS_AUDIO_MAX_SIZE_MB: 4,
+  PROCESS_AUDIO_MAX_SIZE_BYTES: 4 * 1024 * 1024,
   PROCESS_AUDIO_SUPPORTED_TYPES: [
     'audio/mp4', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
     'audio/webm', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/m4a', 'audio/flac',

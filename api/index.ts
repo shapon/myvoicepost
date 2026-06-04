@@ -25,8 +25,8 @@ import * as os from "os";
 import * as path from "path";
 
 const PROCESS_AUDIO_CFG = {
-  PROCESS_AUDIO_MAX_SIZE_MB: 10,
-  PROCESS_AUDIO_MAX_SIZE_BYTES: 10 * 1024 * 1024,
+  PROCESS_AUDIO_MAX_SIZE_MB: 4,
+  PROCESS_AUDIO_MAX_SIZE_BYTES: 4 * 1024 * 1024,
   PROCESS_AUDIO_SUPPORTED_TYPES: [
     'audio/mp4', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
     'audio/webm', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/m4a', 'audio/flac',
@@ -1713,7 +1713,7 @@ app.use(express.urlencoded({ extended: false, limit: '50mb' }));
 
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 25 * 1024 * 1024 },
+  limits: { fileSize: PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES },
   fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
     if (file.mimetype.startsWith("audio/")) cb(null, true);
     else cb(new Error("Only audio files are allowed"));
