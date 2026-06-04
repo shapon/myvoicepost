@@ -7536,17 +7536,17 @@ app.post("/api/v1/a/transcribe-url", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-app.post("/api/v1/a/process-audio", mobileAuthMiddleware, async (req, res) => {
+app.post("/api/v1/a/process-audio", mobileAuthMiddleware, upload.single("audio"), async (req: any, res) => {
   try {
-    const { audioBase64, mimeType, targetLanguage } = req.body || {};
+    const { mimeType, targetLanguage } = req.body || {};
     if (!targetLanguage) {
       return res.status(400).json({ success: false, error: "Target language is required" });
     }
-    if (!audioBase64) {
+    if (!req.file) {
       return res.status(400).json({ success: false, error: "Audio data is required" });
     }
 
-    const audioMimeType = mimeType || "audio/webm";
+    const audioMimeType = mimeType || req.file.mimetype || "audio/mp4";
     if (!PROCESS_AUDIO_CFG.isAudioTypeSupported(audioMimeType)) {
       return res.status(400).json({
         success: false,
@@ -7554,8 +7554,7 @@ app.post("/api/v1/a/process-audio", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const rawByteLength = Math.ceil(audioBase64.length * 3 / 4);
-    if (rawByteLength > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
+    if (req.file.size > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
       return res.status(400).json({
         success: false,
         error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.`,
@@ -7564,9 +7563,9 @@ app.post("/api/v1/a/process-audio", mobileAuthMiddleware, async (req, res) => {
 
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
-    console.log(`[DEBUG /m/process-audio] INPUT: userId=${userId}, targetLanguage=${targetLanguage}, audioLength=${audioBase64.length}, mimeType=${audioMimeType}`);
+    console.log(`[DEBUG /m/process-audio] INPUT: userId=${userId}, targetLanguage=${targetLanguage}, fileSize=${req.file.size}, mimeType=${audioMimeType}`);
 
-    const audioBuffer = Buffer.from(audioBase64, "base64");
+    const audioBuffer = req.file.buffer;
     const { text: transcribedText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, audioMimeType);
 
     if (!transcribedText || transcribedText.trim() === "") {

@@ -5284,13 +5284,13 @@ export async function registerRoutes(
   // PROCESS AUDIO (transcribe + translate in one call)
   // ============================================================
 
-  app.post("/api/v1/a/process-audio", mobileAuthMiddleware, async (req: any, res) => {
+  app.post("/api/v1/a/process-audio", mobileAuthMiddleware, upload.single("audio"), async (req: any, res) => {
     try {
-      const { audioBase64, mimeType, targetLanguage } = req.body || {};
+      const { mimeType, targetLanguage } = req.body || {};
       if (!targetLanguage) return res.status(400).json({ success: false, error: "Target language is required" });
-      if (!audioBase64) return res.status(400).json({ success: false, error: "Audio data is required" });
+      if (!req.file) return res.status(400).json({ success: false, error: "Audio data is required" });
 
-      const audioMimeType = mimeType || "audio/webm";
+      const audioMimeType = mimeType || req.file.mimetype || "audio/mp4";
       if (!PROCESS_AUDIO_CFG.isAudioTypeSupported(audioMimeType)) {
         return res.status(400).json({
           success: false,
@@ -5298,13 +5298,12 @@ export async function registerRoutes(
         });
       }
 
-      const rawByteLength = Math.ceil(audioBase64.length * 3 / 4);
-      if (rawByteLength > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
+      if (req.file.size > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
         return res.status(400).json({ success: false, error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.` });
       }
 
       const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      const audioBuffer = Buffer.from(audioBase64, "base64");
+      const audioBuffer = req.file.buffer;
       const { text: transcribedText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, audioMimeType);
 
       if (!transcribedText || transcribedText.trim() === "") {
