@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
+import { apiRequest, removeAuthToken } from "@/lib/queryClient";
 import {
   Sidebar,
   SidebarContent,
@@ -25,6 +26,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { useToast } from "@/hooks/use-toast";
 import {
   Mic,
   Sparkles,
@@ -34,6 +36,8 @@ import {
   LogOut,
   BarChart3,
   Globe,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -46,12 +50,34 @@ const navItems = [
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const { user, logout, isAdmin } = useAuth();
+  const { toast } = useToast();
   const [location] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   const handleLogout = async () => {
     setShowDialog(false);
     await logout();
+  };
+
+  const handleDeleteAccount = async () => {
+    setIsDeleting(true);
+    try {
+      const res = await apiRequest("DELETE", "/api/auth/account", {});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to delete account");
+      }
+      removeAuthToken();
+      toast({ title: "Account deleted", description: "Your account and all data have been permanently deleted." });
+      await logout();
+    } catch (err: any) {
+      toast({ title: "Error", description: err.message || "Failed to delete account. Please try again.", variant: "destructive" });
+    } finally {
+      setIsDeleting(false);
+      setShowDeleteDialog(false);
+    }
   };
 
   const sidebarStyle = {
@@ -142,12 +168,25 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
+                {user && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      onClick={() => setShowDeleteDialog(true)}
+                      tooltip="Delete account"
+                      data-testid="button-delete-account"
+                      className="text-destructive hover:text-destructive"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                      <span>Delete Account</span>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
                 <SidebarMenuItem>
                   <SidebarMenuButton
                     onClick={handleLogout}
                     tooltip="Log out"
                     data-testid="button-logout"
-                    className="text-destructive hover:text-destructive"
+                    className="text-muted-foreground"
                   >
                     <LogOut className="w-4 h-4" />
                     <span>Log out</span>
@@ -221,6 +260,40 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               data-testid="button-dialog-logout"
             >
               Log out
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="w-5 h-5" />
+              Delete Account
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              By this your account will be deleted along with your data. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-delete-dialog-cancel" disabled={isDeleting}>
+              Cancel
+            </AlertDialogCancel>
+            <AlertDialogAction
+              onClick={handleDeleteAccount}
+              disabled={isDeleting}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              data-testid="button-delete-dialog-confirm"
+            >
+              {isDeleting ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  Deleting...
+                </>
+              ) : (
+                "Delete Account"
+              )}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

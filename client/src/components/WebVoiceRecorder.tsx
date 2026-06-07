@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
 import { Mic, Square, Loader2 } from "lucide-react";
-import { apiRequest, getAuthToken } from "@/lib/queryClient";
+import { apiRequest } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
 import { useToast } from "@/hooks/use-toast";
 import { useLocation } from "wouter";
@@ -76,13 +76,9 @@ export default function WebVoiceRecorder({
 
   async function transcribeBlob(blob: Blob): Promise<string> {
     const audio = await blobToBase64(blob);
-    const token = getAuthToken();
-    const endpoint = token ? "/api/v1/a/transcribe" : "/api/v1/p/transcribe";
-    const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (token) headers["Authorization"] = `Bearer ${token}`;
-    const res = await fetch(endpoint, {
+    const res = await fetch("/api/v1/p/transcribe", {
       method: "POST",
-      headers,
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         audio,
         mimeType: blob.type || "audio/webm",

@@ -46,11 +46,12 @@ export default function Translate() {
 
   const translateMutation = useMutation({
     mutationFn: async () => {
-      const endpoint = user ? "/api/v1/a/translate" : "/api/v1/p/translate";
-      const body = user
-        ? { originalText: text.trim(), sourceLanguage, targetLanguage, outputFormat }
-        : { text: text.trim(), sourceLanguage, targetLanguage, outputFormat };
-      const res = await apiRequest("POST", endpoint, body);
+      const res = await apiRequest("POST", "/api/v1/p/translate", {
+        text: text.trim(),
+        sourceLanguage,
+        targetLanguage,
+        outputFormat,
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to translate");

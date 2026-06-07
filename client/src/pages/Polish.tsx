@@ -48,11 +48,12 @@ export default function Polish() {
 
   const polishMutation = useMutation({
     mutationFn: async (text: string) => {
-      const endpoint = user ? "/api/v1/a/polish" : "/api/v1/p/polish";
-      const body = user
-        ? { originalText: text, language, outputFormat, outputType }
-        : { text, language, outputFormat, outputType };
-      const res = await apiRequest("POST", endpoint, body);
+      const res = await apiRequest("POST", "/api/v1/p/polish", {
+        text,
+        language,
+        outputFormat,
+        outputType,
+      });
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to polish text");
