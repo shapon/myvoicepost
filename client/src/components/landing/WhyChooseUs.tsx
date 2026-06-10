@@ -68,7 +68,7 @@ export default function WhyChooseUs() {
           </Badge>
           <h2 className="text-3xl md:text-5xl font-bold mb-4">
             Major Gaps & Pain Points
-            <span className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"> We Address</span>
+            <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent"> We Address</span>
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             See how MyVoicePost solves the problems other voice-to-text apps can't
@@ -85,7 +85,7 @@ export default function WhyChooseUs() {
               transition={{ delay: categoryIndex * 0.1 }}
             >
               <h3 className="text-xl md:text-2xl font-bold mb-6 flex items-center gap-3">
-                <span className="w-2 h-8 rounded-full bg-gradient-to-b from-primary to-purple-500" />
+                <span className="w-2 h-8 rounded-full bg-primary" />
                 {category.category}
               </h3>
 

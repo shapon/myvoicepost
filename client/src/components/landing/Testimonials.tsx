@@ -90,7 +90,7 @@ export default function Testimonials() {
                 <div className="flex items-center gap-3 mb-4">
                   <Avatar className="w-12 h-12">
                     <AvatarImage src="" />
-                    <AvatarFallback className="bg-gradient-to-br from-primary to-purple-500 text-white font-medium">
+                    <AvatarFallback className="bg-primary text-primary-foreground font-medium">
                       {testimonial.avatar}
                     </AvatarFallback>
                   </Avatar>

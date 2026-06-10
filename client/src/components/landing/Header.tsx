@@ -55,7 +55,7 @@ export default function Header() {
             className="flex items-center gap-2 text-foreground"
             data-testid="link-logo"
           >
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-400 flex items-center justify-center">
+            <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
               <Mic className="w-4 h-4 text-white" />
             </div>
             <span className="font-bold text-xl tracking-tight">MyVoicePost</span>
@@ -136,7 +136,6 @@ export default function Header() {
                 </Link>
                 <Link href="/signup">
                   <Button
-                    className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90"
                     data-testid="button-get-started"
                   >
                     Get Started
@@ -227,7 +226,6 @@ export default function Header() {
                     </Link>
                     <Link href="/signup" onClick={() => setIsMobileMenuOpen(false)}>
                       <Button
-                        className="w-full bg-gradient-to-r from-primary to-purple-500"
                         data-testid="button-get-started-mobile"
                       >
                         Get Started

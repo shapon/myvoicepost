@@ -18,7 +18,7 @@ const useCases: UseCase[] = [
     tags: ["ideas", "to-dos", "shopping lists", "plans"],
     description: "Easily capture the moments that matter! Never let a thought slip away again.",
     icon: StickyNote,
-    gradient: "from-orange-500/20 to-pink-500/20",
+    gradient: "from-amber-500/20 to-blue-400/20",
     iconColor: "text-orange-500",
   },
   {
@@ -34,15 +34,15 @@ const useCases: UseCase[] = [
     tags: ["social media", "articles", "newsletters", "scripts"],
     description: "Say goodbye to writer's block. Create compelling content with ease and inspiration.",
     icon: PenTool,
-    gradient: "from-purple-500/20 to-pink-500/20",
-    iconColor: "text-purple-500",
+    gradient: "from-teal-500/20 to-blue-400/20",
+    iconColor: "text-blue-600 dark:text-cyan-400",
   },
   {
     title: "Journaling",
     tags: ["thoughts", "emotions", "memories", "gratitude"],
     description: "Keep a voice journal to reflect on your experiences and track what matters most.",
     icon: BookOpen,
-    gradient: "from-green-500/20 to-emerald-500/20",
+    gradient: "from-green-500/20 to-blue-400/20",
     iconColor: "text-green-500",
   },
 ];

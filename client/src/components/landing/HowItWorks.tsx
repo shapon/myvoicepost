@@ -13,14 +13,14 @@ const steps = [
     icon: Sparkles,
     title: "Magic",
     description: "AI processes and structures your speech instantly",
-    color: "from-primary to-purple-500",
+    color: "from-primary to-blue-400",
     isCenter: true,
   },
   {
     icon: FileText,
     title: "Amazing text",
     description: "Get polished, ready-to-use content in seconds",
-    color: "from-green-500 to-emerald-500",
+    color: "from-green-500 to-blue-400",
   },
 ];
 
@@ -80,9 +80,9 @@ export default function HowItWorks() {
           className="flex justify-center"
         >
           <div className="relative">
-            <div className="absolute inset-0 bg-gradient-to-br from-primary/30 to-purple-500/30 rounded-3xl blur-2xl" />
+            <div className="absolute inset-0 bg-gradient-to-br from-primary/20 to-sky-400/20 rounded-3xl blur-2xl" />
             <div 
-              className="relative w-64 md:w-80 h-48 md:h-64 rounded-3xl bg-gradient-to-br from-primary/20 to-purple-500/20 border border-primary/30 flex items-center justify-center"
+              className="relative w-64 md:w-80 h-48 md:h-64 rounded-3xl bg-gradient-to-br from-primary/15 to-sky-400/15 border border-primary/20 flex items-center justify-center"
               data-testid="img-how-it-works"
             >
               <div className="flex items-center gap-4">

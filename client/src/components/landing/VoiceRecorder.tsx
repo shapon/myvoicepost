@@ -1026,7 +1026,7 @@ function PolishRecorder() {
         </Badge>
         <h2 className="text-3xl md:text-4xl font-bold mb-4">
           Turn your speech into
-          <span className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"> well-written</span>
+          <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent"> well-written</span>
         </h2>
         <p className="text-muted-foreground max-w-2xl mx-auto">
           Quickly capture your voice. Let AI do the writing. Get polished messages, notes, emails, and more.
@@ -1034,7 +1034,7 @@ function PolishRecorder() {
       </div>
 
       <Card className="relative overflow-visible bg-card border-border p-6 md:p-8 max-w-4xl mx-auto">
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-purple-500/5 rounded-xl" />
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-sky-400/5 rounded-xl" />
         
         <div className="relative">
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
@@ -1152,7 +1152,7 @@ function PolishRecorder() {
               {waveformBars.map((height, i) => (
                 <motion.div
                   key={i}
-                  className={`w-1.5 rounded-full ${isPaused ? "bg-yellow-400/50" : "bg-gradient-to-t from-primary to-purple-400"}`}
+                  className={`w-1.5 rounded-full ${isPaused ? "bg-yellow-400/50" : "bg-gradient-to-t from-primary to-sky-400"}`}
                   animate={{ height: isPaused ? "20%" : `${height * 100}%` }}
                   transition={{ duration: 0.1 }}
                 />
@@ -1184,7 +1184,7 @@ function PolishRecorder() {
                 className={`w-20 h-20 rounded-full ${
                   isRecording
                     ? "bg-red-500 hover:bg-red-600"
-                    : "bg-gradient-to-br from-primary to-purple-500 hover:opacity-90"
+                    : "bg-primary"
                 }`}
                 data-testid="button-polish-record"
               >
@@ -1257,7 +1257,7 @@ function PolishRecorder() {
                               size="sm"
                               onClick={handlePolishText}
                               disabled={isPolishingText || !editableText.trim()}
-                              className="bg-gradient-to-r from-primary to-purple-500"
+                              className="bg-gradient-to-r from-primary to-blue-400"
                               data-testid="button-polish-again"
                             >
                               {isPolishingText ? (
@@ -1318,10 +1318,10 @@ function PolishRecorder() {
                   </TabsContent>
                   
                   <TabsContent value="polished" className="mt-4">
-                    <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20">
+                    <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-sky-400/10 border border-primary/20">
                       <div className="flex items-center justify-between p-2 border-b border-border">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <Badge className="bg-gradient-to-r from-primary to-purple-500">
+                          <Badge className="bg-gradient-to-r from-primary to-blue-400">
                             <Sparkles className="w-3 h-3 mr-1" />
                             AI Polished
                           </Badge>
@@ -1418,7 +1418,7 @@ function PolishRecorder() {
                             size="sm"
                             onClick={handleRepolish}
                             disabled={isRepolishing || !editablePolishedText.trim() || (selectedTone === outputFormat && selectedTemplate === "none")}
-                            className="bg-gradient-to-r from-primary to-purple-500 ml-auto"
+                            className="bg-gradient-to-r from-primary to-blue-400 ml-auto"
                             data-testid="button-repolish"
                           >
                             {isRepolishing ? (
@@ -1484,7 +1484,7 @@ function PolishRecorder() {
                       variant="default"
                       onClick={handleSaveText}
                       disabled={isSaving || !editableText.trim() || !editablePolishedText.trim()}
-                      className="bg-gradient-to-r from-green-500 to-emerald-500"
+                      className="bg-gradient-to-r from-green-500 to-blue-400"
                       data-testid="button-save-polish"
                     >
                       {isSaving ? (
@@ -2286,7 +2286,7 @@ function TranslateRecorder() {
         </Badge>
         <h2 className="text-3xl md:text-4xl font-bold mb-4">
           Speak in any language, 
-          <span className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"> translate instantly</span>
+          <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent"> translate instantly</span>
         </h2>
         <p className="text-muted-foreground max-w-2xl mx-auto">
           Record your voice in your native language and get polished translations for your target audience.
@@ -2294,7 +2294,7 @@ function TranslateRecorder() {
       </div>
 
       <Card className="relative overflow-visible bg-card border-border p-6 md:p-8 max-w-4xl mx-auto">
-        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-purple-500/5 rounded-xl" />
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-sky-400/5 rounded-xl" />
         
         <div className="relative">
           <div className="flex flex-col sm:flex-row items-center justify-center gap-3 mb-8">
@@ -2422,7 +2422,7 @@ function TranslateRecorder() {
               {waveformBars.map((height, i) => (
                 <motion.div
                   key={i}
-                  className={`w-1.5 rounded-full ${isPaused ? "bg-yellow-400/50" : "bg-gradient-to-t from-primary to-purple-400"}`}
+                  className={`w-1.5 rounded-full ${isPaused ? "bg-yellow-400/50" : "bg-gradient-to-t from-primary to-sky-400"}`}
                   animate={{ height: isPaused ? "20%" : `${height * 100}%` }}
                   transition={{ duration: 0.1 }}
                 />
@@ -2454,7 +2454,7 @@ function TranslateRecorder() {
                 className={`w-20 h-20 rounded-full ${
                   isRecording
                     ? "bg-red-500 hover:bg-red-600"
-                    : "bg-gradient-to-br from-primary to-purple-500 hover:opacity-90"
+                    : "bg-primary"
                 }`}
                 data-testid="button-record"
               >
@@ -2530,7 +2530,7 @@ function TranslateRecorder() {
                               size="sm"
                               onClick={handleTranslateText}
                               disabled={isTranslatingText || !editableText.trim()}
-                              className="bg-gradient-to-r from-primary to-purple-500"
+                              className="bg-gradient-to-r from-primary to-blue-400"
                               data-testid="button-translate-again"
                             >
                               {isTranslatingText ? (
@@ -2641,10 +2641,10 @@ function TranslateRecorder() {
                   </TabsContent>
                   
                   <TabsContent value="polished" className="mt-4">
-                    <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-purple-500/10 border border-primary/20">
+                    <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-sky-400/10 border border-primary/20">
                       <div className="flex items-center justify-between p-2 border-b border-border">
                         <div className="flex items-center gap-2 flex-wrap">
-                          <Badge className="bg-gradient-to-r from-primary to-purple-500">
+                          <Badge className="bg-gradient-to-r from-primary to-blue-400">
                             <Sparkles className="w-3 h-3 mr-1" />
                             AI Polished
                           </Badge>
@@ -2753,7 +2753,7 @@ function TranslateRecorder() {
                       variant="default"
                       onClick={handleSaveText}
                       disabled={isSaving || !editableText.trim() || !editablePolishedText.trim()}
-                      className="bg-gradient-to-r from-green-500 to-emerald-500"
+                      className="bg-gradient-to-r from-green-500 to-blue-400"
                       data-testid="button-save-translate"
                     >
                       {isSaving ? (

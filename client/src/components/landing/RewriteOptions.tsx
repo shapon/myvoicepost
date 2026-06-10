@@ -29,13 +29,13 @@ const rewriteOptions = [
     icon: Mail,
     title: "Formal email",
     description: "Compose a clear professional email",
-    color: "from-primary to-purple-500",
+    color: "from-primary to-blue-400",
   },
   {
     icon: MessageSquare,
     title: "Friendly message",
     description: "Write text as if to a friend",
-    color: "from-green-500 to-emerald-500",
+    color: "from-green-500 to-blue-400",
   },
   {
     icon: CheckSquare,
@@ -56,14 +56,14 @@ export default function RewriteOptions() {
 
   return (
     <section className="py-20 md:py-32 relative overflow-hidden" data-testid="rewrite-options-section">
-      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-purple-500/5 to-transparent" />
+      <div className="absolute inset-0 bg-gradient-to-b from-transparent via-sky-400/5 to-transparent" />
       
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="text-center mb-16">
           <h2 className="text-3xl md:text-5xl font-bold mb-4">
             Use rewrite options.
             <br />
-            <span className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent">
+            <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">
               Turn your voice into anything
             </span>
           </h2>
@@ -104,7 +104,7 @@ export default function RewriteOptions() {
           viewport={{ once: true }}
           className="text-center"
         >
-          <Card className="inline-block p-8 bg-gradient-to-br from-primary/10 to-purple-500/10 border-primary/20">
+          <Card className="inline-block p-8 bg-gradient-to-br from-primary/10 to-sky-400/10 border-primary/20">
             <div className="flex items-center gap-2 mb-4 justify-center">
               <Sparkles className="w-6 h-6 text-primary" />
               <h3 className="text-xl font-bold">...or create your own rewrite option!</h3>
@@ -113,7 +113,7 @@ export default function RewriteOptions() {
               You can ask AI to write anything. What do you want your voice to become? Try it out now!
             </p>
             <Button
-              className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90"
+              className=""
               onClick={() => setLocation("/signup")}
               data-testid="button-get-now-rewrite"
             >

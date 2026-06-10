@@ -32,8 +32,8 @@ export default function HeroSection() {
   return (
     <section className="relative min-h-screen pt-24 pb-16 overflow-hidden" data-testid="hero-section">
       <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
-      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/20 rounded-full blur-3xl opacity-50" />
-      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-purple-500/20 rounded-full blur-3xl opacity-50" />
+      <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/15 rounded-full blur-3xl opacity-40" />
+      <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-400/15 rounded-full blur-3xl opacity-40" />
 
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="grid lg:grid-cols-2 gap-12 items-center">
@@ -60,7 +60,7 @@ export default function HeroSection() {
                     animate={{ y: 0, opacity: 1 }}
                     exit={{ y: -30, opacity: 0 }}
                     transition={{ duration: 0.3 }}
-                    className="bg-gradient-to-r from-primary via-purple-500 to-pink-500 bg-clip-text text-transparent"
+                    className="bg-gradient-to-r from-primary via-sky-400 to-blue-500 bg-clip-text text-transparent"
                     data-testid="text-rotating-word"
                   >
                     {rotatingWords[currentWordIndex]}
@@ -79,7 +79,7 @@ export default function HeroSection() {
             <div className="flex flex-col sm:flex-row gap-4 justify-center lg:justify-start mb-8">
               <Button
                 size="lg"
-                className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 text-lg px-8"
+                className="text-lg px-8"
                 onClick={handleGetNow}
                 data-testid="button-hero-get-now"
               >
@@ -123,7 +123,7 @@ export default function HeroSection() {
               transition={{ duration: 0.8, delay: 0.2 }}
               className="relative"
             >
-              <div className="absolute inset-0 bg-gradient-to-br from-primary/30 to-purple-500/30 rounded-3xl blur-2xl" />
+              <div className="absolute inset-0 bg-gradient-to-br from-primary/25 to-sky-400/20 rounded-3xl blur-2xl" />
               <div
                 className="relative w-64 md:w-80 h-96 md:h-[28rem] rounded-3xl shadow-2xl bg-gradient-to-br from-background to-muted border border-border overflow-hidden"
                 data-testid="img-hero-phone"
@@ -132,7 +132,7 @@ export default function HeroSection() {
                   <div className="w-16 h-1 bg-muted-foreground/30 rounded-full" />
                 </div>
                 <div className="flex flex-col items-center justify-center h-full p-6 gap-6">
-                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-primary to-purple-500 flex items-center justify-center animate-pulse">
+                  <div className="w-24 h-24 rounded-full bg-gradient-to-br from-primary to-sky-400 flex items-center justify-center animate-pulse">
                     <Mic className="w-12 h-12 text-white" />
                   </div>
                   <div className="flex items-center gap-3">

@@ -13,14 +13,14 @@ const steps = [
     icon: Sparkles,
     title: "Magic",
     description: "AI transcribes, translates, and polishes instantly",
-    color: "from-primary to-purple-500",
+    color: "from-primary to-blue-400",
     isCenter: true,
   },
   {
     icon: Languages,
     title: "Perfect translation",
     description: "Get fluent, natural translations in seconds",
-    color: "from-green-500 to-emerald-500",
+    color: "from-green-500 to-blue-400",
   },
 ];
 
@@ -33,7 +33,7 @@ export default function HowTranslationWorks() {
         <div className="text-center mb-16">
           <h2 className="text-3xl md:text-5xl font-bold mb-4">
             Voice-to-voice translation made 
-            <span className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"> effortless</span>
+            <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent"> effortless</span>
           </h2>
           <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
             Break language barriers instantly. Speak in your language and get polished, 

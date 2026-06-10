@@ -51,7 +51,7 @@ export default function TranslationHero() {
                 animate={{ opacity: 1, y: 0 }}
                 exit={{ opacity: 0, y: -20 }}
                 transition={{ duration: 0.3 }}
-                className="bg-gradient-to-r from-primary to-purple-500 bg-clip-text text-transparent"
+                className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent"
                 data-testid="text-rotating-language"
               >
                 {languages[languageIndex]}
@@ -67,7 +67,7 @@ export default function TranslationHero() {
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Button
               size="lg"
-              className="bg-gradient-to-r from-primary to-purple-500 hover:opacity-90 px-8"
+              className="px-8"
               onClick={scrollToDemo}
               data-testid="button-translation-get-now"
             >

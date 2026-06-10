@@ -2372,6 +2372,25 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
   app.handle(req, res);
 });
 
+app.delete("/api/auth/account", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.jwtUser?.userId;
+    if (!userId) {
+      return res.status(401).json({ success: false, error: "Not authenticated" });
+    }
+    console.log(`[DeleteAccount] Starting account deletion for user: ${userId}`);
+    await db.delete(savedTexts).where(eq(savedTexts.userId, userId));
+    await db.delete(userSettings).where(eq(userSettings.userId, userId));
+    await db.delete(userSubscriptions).where(eq(userSubscriptions.userId, userId));
+    await db.delete(users).where(eq(users.id, userId));
+    console.log(`[DeleteAccount] Account deleted successfully for user: ${userId}`);
+    res.json({ success: true, message: "Account deleted successfully" });
+  } catch (err) {
+    console.error("[DeleteAccount] Error:", err);
+    res.status(500).json({ success: false, error: "Failed to delete account" });
+  }
+});
+
 // ============================================================
 // GOOGLE SSO ENDPOINTS - /api/v1/p/auth/google
 // Aggregator approach: Backend handles full OAuth flow

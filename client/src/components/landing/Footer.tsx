@@ -37,7 +37,7 @@ export default function Footer() {
         <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-12">
           <div className="lg:col-span-2">
             <a href="#" className="flex items-center gap-2 text-foreground mb-4">
-              <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-primary to-purple-400 flex items-center justify-center">
+              <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center">
                 <Mic className="w-4 h-4 text-white" />
               </div>
               <span className="font-bold text-xl tracking-tight">MyVoicePost</span>

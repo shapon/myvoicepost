@@ -1217,7 +1217,7 @@ export async function registerRoutes(
       // Delete all user data in order (child records first)
       await db.delete(savedTexts).where(eq(savedTexts.userId, userId));
       await db.delete(userSettings).where(eq(userSettings.userId, userId));
-      // await db.delete(userSubscriptions).where(eq(userSubscriptions.userId, userId));
+      await db.delete(userSubscriptions).where(eq(userSubscriptions.userId, userId));
       await db.delete(users).where(eq(users.id, userId));
 
       console.log(`[DeleteAccount] Account deleted successfully for user: ${userId}`);
