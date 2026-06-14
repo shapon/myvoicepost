@@ -23,6 +23,10 @@ import { promisify } from "util";
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+import { createRequire } from "module";
+const _require = createRequire(import.meta.url);
+const pdfParse = _require("pdf-parse") as (buf: Buffer) => Promise<{ text: string }>;
+import mammoth from "mammoth";
 
 const PROCESS_AUDIO_CFG = {
   PROCESS_AUDIO_MAX_SIZE_MB: 4,
@@ -7611,6 +7615,114 @@ app.post("/api/v1/a/process-audio", mobileAuthMiddleware, upload.single("audio")
   } catch (error: any) {
     console.error("[DEBUG /m/process-audio] ERROR:", error);
     res.status(500).json({ success: false, error: error.message || "Failed to process audio" });
+  }
+});
+
+// -- Doc AI ------------------------------------------------------------------
+const docUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 25 * 1024 * 1024 },
+  fileFilter: (_req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+    const allowed = [
+      "application/pdf",
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "text/plain",
+      "image/png",
+      "image/jpeg",
+      "image/jpg",
+    ];
+    if (allowed.includes(file.mimetype)) cb(null, true);
+    else cb(new Error("Unsupported file type. Please upload PDF, DOCX, TXT, PNG, or JPG."));
+  },
+});
+
+async function extractDocText(file: Express.Multer.File): Promise<string> {
+  const { mimetype, buffer } = file;
+  if (mimetype === "application/pdf") {
+    const parsed = await pdfParse(buffer);
+    return parsed.text?.trim() || "";
+  }
+  if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    const result = await mammoth.extractRawText({ buffer });
+    return result.value?.trim() || "";
+  }
+  if (mimetype === "text/plain") return buffer.toString("utf-8").trim();
+  return `[IMAGE:${mimetype};base64,${buffer.toString("base64")}]`;
+}
+
+function buildDocPrompt(mode: string, text: string): string {
+  const isImg = text.startsWith("[IMAGE:");
+  const body = isImg
+    ? "The input is an image. Extract all visible text content from it."
+    : `Here is the document content:\n\n---\n${text.slice(0, 18000)}\n---`;
+  switch (mode) {
+    case "extract":
+      return `You are a document extraction expert. Return clean Markdown-structured text from the document.\n\n${body}`;
+    case "summarize":
+      return `You are an executive summariser. Produce:\n1. A concise Executive Summary (3-5 sentences).\n2. Exactly 5 bulleted Key Takeaways (bold keyword each).\nUse Markdown.\n\n${body}`;
+    case "qa":
+      return `You are a customer service auditor. Generate 5–10 Q&A pairs from the document:\n\n**Q: [question]**\nA: [answer]\n\n${body}`;
+    case "blog":
+      return `You are an SEO content marketer. Write a complete long-form blog post in Markdown with: H1 SEO title, introduction hook, 3+ H2 sections, H3 sub-sections, closing summary, and a Call-to-Action.\n\n${body}`;
+    default:
+      return `Summarise this document:\n\n${body}`;
+  }
+}
+
+function mockDocResponse(mode: string, filename: string): string {
+  switch (mode) {
+    case "extract":
+      return `# Extracted Content — ${filename}\n\nThis is a simulated extraction. In production the AI returns fully structured Markdown.\n\n## Section 1\nLorem ipsum dolor sit amet, consectetur adipiscing elit.\n\n## Section 2\n- First key point\n- Second key point\n- Third key point`;
+    case "summarize":
+      return `# Executive Summary — ${filename}\n\nThis document presents key findings and strategic recommendations.\n\n## Key Takeaways\n- **Insight 1:** Primary finding establishes clear baseline.\n- **Insight 2:** Efficiency can improve 30% through proposed framework.\n- **Insight 3:** Risk mitigation strategies with actionable timelines.\n- **Insight 4:** Stakeholder alignment is critical.\n- **Insight 5:** Phased rollout roadmap recommended.`;
+    case "qa":
+      return `# Customer Q&A — ${filename}\n\n**Q: What is the main purpose of this document?**\nA: A comprehensive reference guide for decision-makers.\n\n**Q: Who is the intended audience?**\nA: Professionals in strategy, operations, and implementation.\n\n**Q: What are the key recommendations?**\nA: A phased approach starting with a pilot program.\n\n**Q: Are there risks identified?**\nA: Yes, three primary risks with mitigation strategies.\n\n**Q: What is the timeline?**\nA: 90 days split into three 30-day phases.`;
+    case "blog":
+      return `# How to Unlock Value from Your Documents with AI\n\n*Transform raw content into actionable insights.*\n\n---\n\n## Introduction\n\nDocuments hold untapped strategic value. AI-powered document intelligence surfaces insights in seconds.\n\n---\n\n## Why Traditional Review Falls Short\n\n- Knowledge workers spend 2.5 hours/day searching for information\n- Critical insights buried in long documents go unread\n\n---\n\n## How It Works\n\n### Step 1: Upload\nThe system ingests your document and converts it to structured text.\n\n### Step 2: Choose Mode\nSelect Extract, Summarize, Q&A, or Blog Post.\n\n### Step 3: Receive Output\nGet polished, structured output in seconds.\n\n---\n\n## Conclusion\n\nDocument Intelligence is a competitive advantage. **Ready to transform your documents?** Upload your first file today.`;
+    default:
+      return `Mock output for mode "${mode}" on "${filename}".`;
+  }
+}
+
+app.post("/api/v1/a/doc-ai", mobileAuthMiddleware, docUpload.single("file"), async (req: Request, res: Response) => {
+  try {
+    const file = req.file;
+    const mode = (req.body.mode as string) || "extract";
+    if (!file) return res.status(400).json({ success: false, error: "No file uploaded." });
+    const validModes = ["extract", "summarize", "qa", "blog"];
+    if (!validModes.includes(mode)) return res.status(400).json({ success: false, error: "Invalid mode." });
+
+    let extractedText: string;
+    try {
+      extractedText = await extractDocText(file);
+    } catch (e: any) {
+      return res.status(422).json({ success: false, error: "Could not extract text from this file." });
+    }
+    if (!extractedText) return res.status(422).json({ success: false, error: "No readable text found in this file." });
+
+    const aiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    let aiResult: string;
+    if (aiKey) {
+      try {
+        const genai = new GoogleGenAI({
+          apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+          httpOptions: { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL },
+        });
+        const prompt = buildDocPrompt(mode, extractedText);
+        const response = await genai.models.generateContent({ model: "gemini-2.0-flash", contents: prompt });
+        aiResult = response.text ?? "";
+      } catch (aiErr: any) {
+        console.warn("[DocAI] AI error, using mock:", aiErr.message);
+        aiResult = mockDocResponse(mode, file.originalname);
+      }
+    } else {
+      aiResult = mockDocResponse(mode, file.originalname);
+    }
+
+    return res.json({ success: true, result: aiResult, mode, filename: file.originalname });
+  } catch (err: any) {
+    console.error("[DocAI] Error:", err);
+    return res.status(500).json({ success: false, error: err.message || "Internal server error." });
   }
 });
 

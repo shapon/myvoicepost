@@ -5361,9 +5361,7 @@ export async function registerRoutes(
     }
   });
 
-  // --------------------------------------------------------------------------
   // POST /api/v1/a/doc-ai — Document Intelligence & Q&A Engine
-  // --------------------------------------------------------------------------
 
   const docUpload = multer({
     storage: multer.memoryStorage(),
