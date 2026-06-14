@@ -2347,15 +2347,189 @@ app.post("/api/v1/p/register", async (req, res) => {
   }
 });
 
-// Alias routes for unified web/mobile auth paths
+// Auth login - full inline handler (do NOT use app.handle() re-dispatch; body already parsed)
 app.post("/api/v1/p/auth/login", async (req, res) => {
-  req.url = "/api/v1/p/login";
-  app.handle(req, res);
+  try {
+    const loginSchema = z.object({
+      identifier: z.string().min(1, "Username or email is required"),
+      password: z.string().min(1, "Password is required"),
+    });
+
+    const parseResult = loginSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { identifier, password } = parseResult.data;
+    const isEmail = identifier.includes('@');
+
+    let result;
+    if (isEmail) {
+      result = await db.select().from(users).where(eq(users.email, identifier)).limit(1);
+    } else {
+      result = await db.select().from(users).where(eq(users.username, identifier)).limit(1);
+    }
+
+    const user = result[0];
+    if (!user) {
+      return res.status(401).json({
+        success: false,
+        error: "No account found with this email. Please check your email or sign up.",
+      });
+    }
+
+    const isValidPassword = await bcrypt.compare(password, user.passwordHash);
+    if (!isValidPassword) {
+      return res.status(401).json({
+        success: false,
+        error: "Incorrect password. Please try again or reset your password.",
+      });
+    }
+
+    const sessionId = generateSessionId();
+    await storeSessionId(user.id, sessionId);
+
+    const token = jwt.sign(
+      { userId: user.id, email: user.email, username: user.username, sessionId },
+      JWT_SECRET,
+      { expiresIn: "60d" }
+    );
+
+    let trialExpired = false;
+    if (user.trialEndsAt) {
+      const now = new Date();
+      const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+      const trialMinutesTotal = user.trialMinutesTotal || 90;
+      if (now > user.trialEndsAt || trialMinutesTotal - trialMinutesUsed <= 0) {
+        trialExpired = true;
+      }
+    }
+
+    const currentRole = await refreshUserRole(user.id);
+    console.log(`[Auth Login] User ${user.username} logged in, role=${currentRole}`);
+
+    res.json({
+      success: true,
+      token,
+      expiresIn: 60 * 24 * 60 * 60,
+      user: {
+        id: user.id,
+        email: user.email,
+        username: user.username,
+        role: currentRole,
+      },
+      trial_expired: trialExpired,
+    });
+  } catch (error: any) {
+    console.error("[Auth Login] Error:", error);
+    res.status(500).json({ success: false, error: "Login failed" });
+  }
 });
 
+// Auth signup - full inline handler (do NOT use app.handle() re-dispatch; body already parsed)
 app.post("/api/v1/p/auth/signup", async (req, res) => {
-  req.url = "/api/v1/p/register";
-  app.handle(req, res);
+  try {
+    const registerSchema = z.object({
+      username: z.string().min(3, "Username must be at least 3 characters"),
+      email: z.string().email("Valid email is required"),
+      password: z.string().min(6, "Password must be at least 6 characters"),
+      confirmPassword: z.string(),
+      otp: z.string().length(6, "6-digit verification code is required"),
+    }).refine((data) => data.password === data.confirmPassword, {
+      message: "Passwords don't match",
+      path: ["confirmPassword"],
+    });
+
+    const parseResult = registerSchema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { username, email, password, otp } = parseResult.data;
+    const normalizedEmail = email.toLowerCase().trim();
+
+    const otpRecords = await db.select().from(emailOtps)
+      .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
+      .limit(1);
+
+    if (otpRecords.length === 0) {
+      return res.status(400).json({ success: false, error: "Invalid verification code" });
+    }
+
+    const otpRecord = otpRecords[0];
+    if (new Date() > otpRecord.expiresAt) {
+      return res.status(400).json({
+        success: false,
+        error: "Verification code has expired. Please request a new one.",
+      });
+    }
+
+    const existingUser = await db.select().from(users).where(eq(users.username, username)).limit(1);
+    if (existingUser.length > 0) {
+      return res.status(409).json({ success: false, error: "Username already exists" });
+    }
+
+    const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
+    if (existingEmail.length > 0) {
+      return res.status(409).json({ success: false, error: "Email already exists" });
+    }
+
+    await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
+
+    const hashedPassword = await bcrypt.hash(password, 10);
+    const trialStartsAt = new Date();
+    const trialEndsAt = new Date();
+    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+
+    const inserted = await db.insert(users).values({
+      username,
+      email: normalizedEmail,
+      passwordHash: hashedPassword,
+      trialStartsAt,
+      trialEndsAt,
+      trialUsed: false,
+      trialMinutesTotal: 90,
+      trialMinutesUsed: "0",
+    }).returning();
+
+    const newUser = inserted[0];
+    const sessionId = generateSessionId();
+    await storeSessionId(newUser.id, sessionId);
+
+    const token = jwt.sign(
+      { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId },
+      JWT_SECRET,
+      { expiresIn: "60d" }
+    );
+
+    console.log(`[Auth Signup] User ${newUser.username} created with 7-day trial`);
+
+    res.status(201).json({
+      success: true,
+      message: "Account created successfully",
+      token,
+      expiresIn: 60 * 24 * 60 * 60,
+      user: { id: newUser.id, email: newUser.email, username: newUser.username },
+      trial: {
+        starts_at: trialStartsAt.toISOString(),
+        ends_at: trialEndsAt.toISOString(),
+        minutes_total: 90,
+        minutes_used: 0,
+        minutes_remaining: 90,
+      },
+    });
+  } catch (error: any) {
+    console.error("[Auth Signup] Error:", error);
+    res.status(500).json({ success: false, error: "Failed to create account" });
+  }
 });
 
 app.post("/api/v1/a/auth/logout", mobileAuthMiddleware, async (req, res) => {
@@ -2372,8 +2546,34 @@ app.post("/api/v1/a/auth/logout", mobileAuthMiddleware, async (req, res) => {
 });
 
 app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
-  req.url = "/api/v1/a/me";
-  app.handle(req, res);
+  try {
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    let trialData: any = {};
+    if (userId) {
+      const userResult = await db.select({
+        trialMinutesTotal: users.trialMinutesTotal,
+        trialMinutesUsed: users.trialMinutesUsed,
+        trialStartsAt: users.trialStartsAt,
+        trialEndsAt: users.trialEndsAt,
+        trialUsed: users.trialUsed,
+      }).from(users).where(eq(users.id, userId)).limit(1);
+      if (userResult.length > 0) {
+        const u = userResult[0];
+        trialData = {
+          trialMinutesTotal: u.trialMinutesTotal || 90,
+          trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
+          trialStartsAt: u.trialStartsAt,
+          trialEndsAt: u.trialEndsAt,
+          trialUsed: u.trialUsed,
+        };
+      }
+    }
+    res.json({ success: true, user: { id: userId, email: jwtUser?.email, username: jwtUser?.username, ...trialData } });
+  } catch (error: any) {
+    const jwtUser = (req as any).jwtUser;
+    res.json({ success: true, user: { id: jwtUser?.userId || jwtUser?.id, email: jwtUser?.email, username: jwtUser?.username } });
+  }
 });
 
 app.delete("/api/auth/account", mobileAuthMiddleware, async (req: any, res) => {
