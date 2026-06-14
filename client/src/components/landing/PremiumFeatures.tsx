@@ -19,6 +19,7 @@ import {
   Zap,
   Building2,
   Accessibility,
+  Files,
 } from "lucide-react";
 
 const premiumCategories = [
@@ -42,6 +43,11 @@ const premiumCategories = [
         icon: FileText,
         name: "Depth & Length Processing",
         description: "Generate long-form content: 500+ word messages, full blog drafts from voice notes, and multi-paragraph reports.",
+      },
+      {
+        icon: Files,
+        name: "Multimodal File Processing",
+        description: "Upload your data beyond audio. Seamlessly process PDF documents, text files, and images up to 25MB directly into the intelligence engine.",
       },
     ],
   },

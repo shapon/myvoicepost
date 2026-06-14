@@ -4,6 +4,7 @@ import VoiceRecorder from "@/components/landing/VoiceRecorder";
 import HowItWorks from "@/components/landing/HowItWorks";
 import TranslationHero from "@/components/landing/TranslationHero";
 import HowTranslationWorks from "@/components/landing/HowTranslationWorks";
+import FileInsights from "@/components/landing/FileInsights";
 import WhyChooseUs from "@/components/landing/WhyChooseUs";
 import UseCases from "@/components/landing/UseCases";
 import RewriteOptions from "@/components/landing/RewriteOptions";
@@ -25,6 +26,7 @@ export default function Home() {
         <HowItWorks />
         <TranslationHero />
         <HowTranslationWorks />
+        <FileInsights />
         <WhyChooseUs />
         <UseCases />
         <RewriteOptions />

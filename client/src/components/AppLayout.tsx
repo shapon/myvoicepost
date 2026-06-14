@@ -38,6 +38,7 @@ import {
   Globe,
   Trash2,
   Loader2,
+  BrainCircuit,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -45,6 +46,7 @@ const navItems = [
   { label: "Polish", href: "/polish", icon: Sparkles },
   { label: "Translate", href: "/translate", icon: Languages },
   { label: "Transcribe", href: "/process", icon: FileAudio },
+  { label: "Doc AI", href: "/doc-ai", icon: BrainCircuit },
   { label: "Saved", href: "/saved", icon: Bookmark },
 ];
 

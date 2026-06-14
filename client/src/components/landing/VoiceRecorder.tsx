@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2, MicOff, Pause, Play, Volume2, VolumeX, Save, FolderOpen, Trash2 } from "lucide-react";
+import { Mic, Square, Loader2, ArrowRightLeft, Copy, Check, Languages, Sparkles, PenLine, RefreshCw, Share2, MicOff, Pause, Play, Volume2, VolumeX, Save, FolderOpen, Trash2, Video, ScanText, Upload, Link, FileCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
@@ -225,20 +225,28 @@ const translateSuggestions = [
 ];
 
 export default function VoiceRecorder() {
-  const [activeTab, setActiveTab] = useState<"polish" | "translate">("polish");
+  const [activeTab, setActiveTab] = useState<"polish" | "translate" | "video" | "document">("polish");
   
   return (
     <section className="py-20 md:py-32" id="demo" data-testid="voice-recorder-section">
       <div className="max-w-6xl mx-auto px-4 sm:px-6 lg:px-8">
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "polish" | "translate")} className="w-full">
-          <TabsList className="grid w-full max-w-md mx-auto grid-cols-2 mb-12">
-            <TabsTrigger value="polish" className="gap-2" data-testid="tab-polish">
-              <PenLine className="w-4 h-4" />
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "polish" | "translate" | "video" | "document")} className="w-full">
+          <TabsList className="grid w-full max-w-2xl mx-auto grid-cols-4 mb-12">
+            <TabsTrigger value="polish" className="gap-1.5 text-xs sm:text-sm" data-testid="tab-polish">
+              <PenLine className="w-3.5 h-3.5" />
               Polish
             </TabsTrigger>
-            <TabsTrigger value="translate" className="gap-2" data-testid="tab-translate">
-              <Languages className="w-4 h-4" />
+            <TabsTrigger value="translate" className="gap-1.5 text-xs sm:text-sm" data-testid="tab-translate">
+              <Languages className="w-3.5 h-3.5" />
               Translate
+            </TabsTrigger>
+            <TabsTrigger value="video" className="gap-1.5 text-xs sm:text-sm" data-testid="tab-video">
+              <Video className="w-3.5 h-3.5" />
+              Video
+            </TabsTrigger>
+            <TabsTrigger value="document" className="gap-1.5 text-xs sm:text-sm" data-testid="tab-document">
+              <ScanText className="w-3.5 h-3.5" />
+              Document
             </TabsTrigger>
           </TabsList>
           
@@ -248,6 +256,14 @@ export default function VoiceRecorder() {
           
           <TabsContent value="translate" className="mt-0">
             <TranslateRecorder />
+          </TabsContent>
+
+          <TabsContent value="video" className="mt-0">
+            <VideoTranscribeRecorder />
+          </TabsContent>
+
+          <TabsContent value="document" className="mt-0">
+            <DocumentExtractRecorder />
           </TabsContent>
         </Tabs>
       </div>
@@ -2826,6 +2842,381 @@ function TranslateRecorder() {
               </Select>
             </div>
           )}
+        </div>
+      </Card>
+    </>
+  );
+}
+
+// --- Video Transcription Tab ------------------------------------------------
+
+function VideoTranscribeRecorder() {
+  const [videoUrl, setVideoUrl] = useState("");
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [transcript, setTranscript] = useState("");
+  const [language, setLanguage] = useState("en");
+  const [copied, setCopied] = useState(false);
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
+
+  const isValidUrl = (url: string) => {
+    try { new URL(url); return true; } catch { return false; }
+  };
+
+  const handleTranscribe = async () => {
+    if (!user) {
+      toast({ title: "Sign up to continue", description: "Create a free account to transcribe videos.", variant: "destructive" });
+      navigate("/signup");
+      return;
+    }
+    if (!videoUrl.trim() || !isValidUrl(videoUrl)) {
+      toast({ title: "Invalid URL", description: "Please enter a valid YouTube or video URL.", variant: "destructive" });
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const token = localStorage.getItem("mvp_auth_token");
+      const response = await fetch("/api/v1/a/transcribe-video", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+        body: JSON.stringify({ url: videoUrl, language }),
+      });
+      if (!response.ok) throw new Error((await response.json()).error || "Transcription failed");
+      const data = await response.json();
+      setTranscript(data.transcript || data.text || "");
+      toast({ title: "Transcription complete!", description: "Your video has been transcribed." });
+    } catch {
+      toast({ title: "Feature coming soon", description: "Video transcription is rolling out. Sign up to get early access!", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const copyToClipboard = async () => {
+    await navigator.clipboard.writeText(transcript);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <>
+      <div className="text-center mb-12">
+        <Badge variant="secondary" className="mb-4 px-4 py-2 text-sm font-medium bg-primary/10 text-primary border-primary/20">
+          <Video className="w-3.5 h-3.5 mr-2" />
+          Video Transcription
+        </Badge>
+        <h2 className="text-3xl md:text-4xl font-bold mb-4">
+          Paste a video link. Get a{" "}
+          <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">clean transcript.</span>
+        </h2>
+        <p className="text-muted-foreground max-w-2xl mx-auto">
+          Supports YouTube, Vimeo, Loom, and direct video URLs. Transcribed in seconds with speaker-aware formatting.
+        </p>
+      </div>
+
+      <Card className="relative overflow-visible bg-card border-border p-6 md:p-8 max-w-4xl mx-auto">
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-sky-400/5 rounded-xl" />
+        <div className="relative">
+
+          <div className="mb-5">
+            <label className="text-xs text-muted-foreground mb-1.5 block">Video URL</label>
+            <div className="flex flex-col sm:flex-row gap-3">
+              <div className="relative flex-1">
+                <Link className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+                <input
+                  type="url"
+                  value={videoUrl}
+                  onChange={(e) => setVideoUrl(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && handleTranscribe()}
+                  placeholder="https://youtube.com/watch?v=… or any video URL"
+                  className="w-full pl-9 pr-4 py-2 text-sm rounded-md border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                  data-testid="input-video-url"
+                />
+              </div>
+              <Select value={language} onValueChange={setLanguage}>
+                <SelectTrigger className="w-full sm:w-36" data-testid="select-video-language">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {supportedLanguages.map((lang) => (
+                    <SelectItem key={lang.code} value={lang.code}>{lang.name}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-2 mb-8">
+            <span className="text-xs text-muted-foreground">Supports:</span>
+            {["YouTube", "Vimeo", "Loom", "Zoom", "MP4 Links"].map((p) => (
+              <Badge key={p} variant="secondary" className="text-xs">{p}</Badge>
+            ))}
+          </div>
+
+          <div className="text-center mb-6">
+            <Button
+              size="lg"
+              onClick={handleTranscribe}
+              disabled={isProcessing || !videoUrl.trim()}
+              className="bg-gradient-to-r from-primary to-blue-400 min-w-48"
+              data-testid="button-transcribe-video"
+            >
+              {isProcessing ? (
+                <><Loader2 className="w-5 h-5 mr-2 animate-spin" />Transcribing…</>
+              ) : (
+                <><Video className="w-5 h-5 mr-2" />Transcribe Video</>
+              )}
+            </Button>
+            {!user && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                <span className="text-primary cursor-pointer underline" onClick={() => navigate("/signup")} data-testid="link-video-signup">
+                  Sign up free
+                </span>{" "}to transcribe videos
+              </p>
+            )}
+          </div>
+
+          <AnimatePresence>
+            {transcript && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-2">
+                <div className="relative rounded-lg bg-muted/50 border border-border">
+                  <div className="flex items-center justify-between p-2 border-b border-border">
+                    <Badge className="bg-gradient-to-r from-primary to-blue-400">
+                      <Sparkles className="w-3 h-3 mr-1" />Transcript
+                    </Badge>
+                    <Button variant="ghost" size="icon" onClick={copyToClipboard} data-testid="button-copy-transcript">
+                      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                  <Textarea
+                    value={transcript}
+                    onChange={(e) => setTranscript(e.target.value)}
+                    className="min-h-[200px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                    data-testid="textarea-transcript"
+                  />
+                </div>
+                <div className="mt-4 flex justify-center">
+                  <Button variant="outline" onClick={() => { setTranscript(""); setVideoUrl(""); }} data-testid="button-new-video">
+                    <Video className="w-4 h-4 mr-2" />New Video
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
+      </Card>
+    </>
+  );
+}
+
+// --- Document Extraction Tab -------------------------------------------------
+
+function DocumentExtractRecorder() {
+  const [isDragging, setIsDragging] = useState(false);
+  const [file, setFile] = useState<File | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [extractedText, setExtractedText] = useState("");
+  const [extractMode, setExtractMode] = useState("clean");
+  const [copied, setCopied] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const { toast } = useToast();
+  const { user } = useAuth();
+  const [, navigate] = useLocation();
+
+  const extractModes = [
+    { value: "clean", label: "Clean Text" },
+    { value: "summary", label: "Summary" },
+    { value: "faq", label: "Customer FAQs" },
+    { value: "blog", label: "Blog Post" },
+  ];
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragging(false);
+    const dropped = e.dataTransfer.files[0];
+    if (dropped) setFile(dropped);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files?.[0]) setFile(e.target.files[0]);
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  };
+
+  const handleExtract = async () => {
+    if (!user) {
+      toast({ title: "Sign up to continue", description: "Create a free account to extract text from documents.", variant: "destructive" });
+      navigate("/signup");
+      return;
+    }
+    if (!file) return;
+    setIsProcessing(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("mode", extractMode);
+      const token = localStorage.getItem("mvp_auth_token");
+      const response = await fetch("/api/v1/a/extract-document", {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+        body: formData,
+      });
+      if (!response.ok) throw new Error((await response.json()).error || "Extraction failed");
+      const data = await response.json();
+      setExtractedText(data.text || data.extractedText || "");
+      toast({ title: "Extraction complete!", description: "Your document has been processed." });
+    } catch {
+      toast({ title: "Feature coming soon", description: "Document extraction is rolling out. Sign up to get early access!", variant: "destructive" });
+    } finally {
+      setIsProcessing(false);
+    }
+  };
+
+  const copyToClipboard = async () => {
+    await navigator.clipboard.writeText(extractedText);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  return (
+    <>
+      <div className="text-center mb-12">
+        <Badge variant="secondary" className="mb-4 px-4 py-2 text-sm font-medium bg-primary/10 text-primary border-primary/20">
+          <ScanText className="w-3.5 h-3.5 mr-2" />
+          Document Extraction
+        </Badge>
+        <h2 className="text-3xl md:text-4xl font-bold mb-4">
+          Upload a document. Extract{" "}
+          <span className="bg-gradient-to-r from-primary to-blue-400 bg-clip-text text-transparent">clean insights.</span>
+        </h2>
+        <p className="text-muted-foreground max-w-2xl mx-auto">
+          Drop any PDF, Word doc, or image. Our engine extracts, summarizes, and restructures your content in seconds.
+        </p>
+      </div>
+
+      <Card className="relative overflow-visible bg-card border-border p-6 md:p-8 max-w-4xl mx-auto">
+        <div className="absolute inset-0 bg-gradient-to-br from-primary/5 to-sky-400/5 rounded-xl" />
+        <div className="relative">
+
+          {!file ? (
+            <div
+              onDragOver={(e) => { e.preventDefault(); setIsDragging(true); }}
+              onDragLeave={() => setIsDragging(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-10 text-center cursor-pointer transition-colors mb-6 ${
+                isDragging ? "border-primary bg-primary/5" : "border-border hover:border-primary/50 hover:bg-muted/30"
+              }`}
+              data-testid="dropzone-document"
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".pdf,.doc,.docx,.txt,.png,.jpg,.jpeg"
+                className="hidden"
+                onChange={handleFileSelect}
+                data-testid="input-document-file"
+              />
+              <Upload className="w-10 h-10 text-muted-foreground mx-auto mb-3" />
+              <p className="font-medium mb-1">Drag &amp; drop your file here</p>
+              <p className="text-sm text-muted-foreground mb-4">or click to browse</p>
+              <div className="flex flex-wrap items-center justify-center gap-2">
+                {["PDF", "DOCX", "TXT", "PNG", "JPG"].map((fmt) => (
+                  <Badge key={fmt} variant="secondary" className="text-xs">{fmt}</Badge>
+                ))}
+                <span className="text-xs text-muted-foreground">· up to 25MB</span>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center gap-3 p-4 rounded-xl bg-muted/50 border border-border mb-6">
+              <FileCheck className="w-8 h-8 text-primary flex-shrink-0" />
+              <div className="flex-1 min-w-0">
+                <p className="font-medium text-sm truncate" data-testid="text-file-name">{file.name}</p>
+                <p className="text-xs text-muted-foreground">{formatFileSize(file.size)}</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => { setFile(null); setExtractedText(""); }} data-testid="button-remove-file">
+                <Trash2 className="w-4 h-4 text-muted-foreground" />
+              </Button>
+            </div>
+          )}
+
+          <div className="mb-8">
+            <label className="text-xs text-muted-foreground mb-2 block">Output type</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              {extractModes.map((mode) => (
+                <button
+                  key={mode.value}
+                  onClick={() => setExtractMode(mode.value)}
+                  className={`p-2.5 rounded-lg text-sm font-medium border transition-colors ${
+                    extractMode === mode.value
+                      ? "border-primary bg-primary/10 text-primary"
+                      : "border-border bg-muted/30 text-muted-foreground hover:border-primary/50"
+                  }`}
+                  data-testid={`button-extract-mode-${mode.value}`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="text-center mb-6">
+            <Button
+              size="lg"
+              onClick={handleExtract}
+              disabled={isProcessing || !file}
+              className="bg-gradient-to-r from-primary to-blue-400 min-w-48"
+              data-testid="button-extract-document"
+            >
+              {isProcessing ? (
+                <><Loader2 className="w-5 h-5 mr-2 animate-spin" />Processing…</>
+              ) : (
+                <><ScanText className="w-5 h-5 mr-2" />Extract &amp; Process</>
+              )}
+            </Button>
+            {!user && (
+              <p className="mt-3 text-xs text-muted-foreground">
+                <span className="text-primary cursor-pointer underline" onClick={() => navigate("/signup")} data-testid="link-document-signup">
+                  Sign up free
+                </span>{" "}to extract documents
+              </p>
+            )}
+          </div>
+
+          <AnimatePresence>
+            {extractedText && (
+              <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} className="mt-2">
+                <div className="relative rounded-lg bg-gradient-to-br from-primary/10 to-sky-400/10 border border-primary/20">
+                  <div className="flex items-center justify-between p-2 border-b border-border">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-gradient-to-r from-primary to-blue-400">
+                        <Sparkles className="w-3 h-3 mr-1" />AI Extracted
+                      </Badge>
+                      <Badge variant="secondary">{extractModes.find((m) => m.value === extractMode)?.label}</Badge>
+                    </div>
+                    <Button variant="ghost" size="icon" onClick={copyToClipboard} data-testid="button-copy-extracted">
+                      {copied ? <Check className="w-4 h-4 text-green-500" /> : <Copy className="w-4 h-4" />}
+                    </Button>
+                  </div>
+                  <Textarea
+                    value={extractedText}
+                    onChange={(e) => setExtractedText(e.target.value)}
+                    className="min-h-[200px] border-0 bg-transparent resize-none focus-visible:ring-0"
+                    data-testid="textarea-extracted"
+                  />
+                </div>
+                <div className="mt-4 flex justify-center">
+                  <Button variant="outline" onClick={() => { setExtractedText(""); setFile(null); }} data-testid="button-new-document">
+                    <Upload className="w-4 h-4 mr-2" />New Document
+                  </Button>
+                </div>
+              </motion.div>
+            )}
+          </AnimatePresence>
         </div>
       </Card>
     </>

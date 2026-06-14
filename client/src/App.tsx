@@ -21,6 +21,7 @@ import SavedItems from "@/pages/SavedItems";
 import About from "@/pages/About";
 import Help from "@/pages/Help";
 import CookiePolicy from "@/pages/CookiePolicy";
+import DocAI from "@/pages/DocAI";
 
 function ProtectedRoute({ component: Component }: { component: React.ComponentType }) {
   const { user, isLoading } = useAuth();
@@ -95,6 +96,9 @@ function Router() {
       </Route>
       <Route path="/saved">
         {() => <ProtectedRoute component={SavedItems} />}
+      </Route>
+      <Route path="/doc-ai">
+        {() => <ProtectedRoute component={DocAI} />}
       </Route>
       <Route component={NotFound} />
     </Switch>

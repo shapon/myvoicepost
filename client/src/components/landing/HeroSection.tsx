@@ -3,7 +3,7 @@ import { useLocation } from "wouter";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
-import { Sparkles, Apple, Smartphone, Globe, Monitor, Mic, FileText, Wand2 } from "lucide-react";
+import { Sparkles, Apple, Smartphone, Globe, Monitor, Mic, FileText, Wand2, Image } from "lucide-react";
 
 const rotatingWords = ["message", "note", "email", "post", "journal"];
 
@@ -70,7 +70,7 @@ export default function HeroSection() {
             </h1>
 
             <p className="text-lg md:text-xl text-muted-foreground mb-8 max-w-xl mx-auto lg:mx-0">
-              Quickly capture your voice. Let AI do the writing.
+              Quickly capture your voice or upload files. Let AI transcribe, summarize, and rewrite your media instantly.
               <span className="inline-block ml-1">
                 <Sparkles className="w-5 h-5 text-yellow-500 inline" />
               </span>
@@ -96,7 +96,7 @@ export default function HeroSection() {
               </Button>
             </div>
 
-            <div className="flex items-center justify-center lg:justify-start gap-6 text-sm text-muted-foreground">
+            <div className="flex flex-wrap items-center justify-center lg:justify-start gap-6 text-sm text-muted-foreground mb-4">
               <div className="flex items-center gap-1.5">
                 <Apple className="w-4 h-4" />
                 <span>iOS</span>
@@ -112,6 +112,23 @@ export default function HeroSection() {
               <div className="flex items-center gap-1.5">
                 <Monitor className="w-4 h-4" />
                 <span>macOS</span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-center lg:justify-start gap-3" data-testid="input-format-badges">
+              <div className="flex items-center gap-1.5 bg-primary/10 text-primary text-xs font-medium px-3 py-1.5 rounded-full border border-primary/20">
+                <Mic className="w-3.5 h-3.5" />
+                <span>Voice Notes</span>
+              </div>
+              <span className="text-muted-foreground/40 text-xs select-none">•</span>
+              <div className="flex items-center gap-1.5 bg-primary/10 text-primary text-xs font-medium px-3 py-1.5 rounded-full border border-primary/20">
+                <FileText className="w-3.5 h-3.5" />
+                <span>PDFs &amp; DOCX</span>
+              </div>
+              <span className="text-muted-foreground/40 text-xs select-none">•</span>
+              <div className="flex items-center gap-1.5 bg-primary/10 text-primary text-xs font-medium px-3 py-1.5 rounded-full border border-primary/20">
+                <Image className="w-3.5 h-3.5" />
+                <span>Image OCR</span>
               </div>
             </div>
           </div>

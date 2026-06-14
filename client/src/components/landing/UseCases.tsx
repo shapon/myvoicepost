@@ -15,7 +15,7 @@ interface UseCase {
 const useCases: UseCase[] = [
   {
     title: "Note-taking",
-    tags: ["ideas", "to-dos", "shopping lists", "plans"],
+    tags: ["ideas", "to-dos", "shopping lists", "plans", "PDF briefs", "Doc extraction"],
     description: "Easily capture the moments that matter! Never let a thought slip away again.",
     icon: StickyNote,
     gradient: "from-amber-500/20 to-blue-400/20",
@@ -32,7 +32,7 @@ const useCases: UseCase[] = [
   {
     title: "Content creation",
     tags: ["social media", "articles", "newsletters", "scripts"],
-    description: "Say goodbye to writer's block. Create compelling content with ease and inspiration.",
+    description: "Say goodbye to writer's block. Turn structured audio notes or uploaded documentation into compelling articles, social posts, or long-form blogs seamlessly.",
     icon: PenTool,
     gradient: "from-teal-500/20 to-blue-400/20",
     iconColor: "text-blue-600 dark:text-cyan-400",

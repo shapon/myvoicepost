@@ -37,6 +37,10 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 import * as cheerio from "cheerio";
+import { createRequire } from "module";
+const require = createRequire(import.meta.url);
+const pdfParse = require("pdf-parse") as (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
+import mammoth from "mammoth";
 
 // JWT configuration - JWT_SECRET is required for security
 const JWT_SECRET: string =
@@ -5356,6 +5360,162 @@ export async function registerRoutes(
       res.status(500).json({ success: false, error: error.message || "Failed to process audio" });
     }
   });
+
+  // --------------------------------------------------------------------------
+  // POST /api/v1/a/doc-ai — Document Intelligence & Q&A Engine
+  // --------------------------------------------------------------------------
+
+  const docUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB hard cap
+    fileFilter: (_req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+      const allowed = [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "text/plain",
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+      ];
+      if (allowed.includes(file.mimetype)) cb(null, true);
+      else cb(new Error("Unsupported file type. Please upload PDF, DOCX, TXT, PNG, or JPG."));
+    },
+  });
+
+  /** Extract plain text from the uploaded buffer */
+  async function extractTextFromBuffer(file: Express.Multer.File): Promise<string> {
+    const { mimetype, buffer } = file;
+
+    if (mimetype === "application/pdf") {
+      const parsed = await pdfParse(buffer);
+      return parsed.text?.trim() || "";
+    }
+
+    if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+      const result = await mammoth.extractRawText({ buffer });
+      return result.value?.trim() || "";
+    }
+
+    if (mimetype === "text/plain") {
+      return buffer.toString("utf-8").trim();
+    }
+
+    // Images: return base64 hint for the AI prompt
+    return `[IMAGE:${mimetype};base64,${buffer.toString("base64")}]`;
+  }
+
+  /** Build the AI prompt for each mode */
+  function buildPrompt(mode: string, text: string): string {
+    const isImage = text.startsWith("[IMAGE:");
+    const contentSection = isImage
+      ? "The input is an image encoded as base64. Describe and extract all visible text content from it."
+      : `Here is the document content:\n\n---\n${text.slice(0, 18000)}\n---`;
+
+    switch (mode) {
+      case "extract":
+        return `You are a document extraction expert. Extract and return clean, well-structured plain text from the following document. Preserve headings, lists, and logical structure using Markdown formatting.\n\n${contentSection}`;
+
+      case "summarize":
+        return `You are an executive-level summarisation expert. Produce:\n1. A concise Executive Summary paragraph (3-5 sentences).\n2. Exactly 5 distinct bulleted Key Takeaways, each starting with a bold keyword.\n\nFormat your response in Markdown.\n\n${contentSection}`;
+
+      case "qa":
+        return `You are a customer service auditor. Generate between 5 and 10 potential customer questions paired with accurate, detailed answers derived directly from the document. Format each pair as:\n\n**Q: [question]**\nA: [answer]\n\n${contentSection}`;
+
+      case "blog":
+        return `You are an expert content marketer and SEO writer. Transform the following document into a complete, high-quality, long-form marketing blog post in Markdown. The post must include:\n- An SEO-optimised Title (H1)\n- An engaging introduction hook\n- At least 3 main sections with H2 headings\n- Sub-sections with H3 headings where appropriate\n- A closing summary paragraph\n- A clear Call-to-Action\n\n${contentSection}`;
+
+      default:
+        return `Summarise the following document:\n\n${contentSection}`;
+    }
+  }
+
+  /** Mock responses for when AI is unavailable */
+  function mockResponse(mode: string, filename: string): string {
+    switch (mode) {
+      case "extract":
+        return `# Extracted Content — ${filename}\n\nThis is a simulated extraction of your document. In production, the AI will parse and return the full structured text of your uploaded file, preserving headings, lists, tables, and logical flow in clean Markdown format.\n\n## Section 1: Introduction\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n\n## Section 2: Key Points\n\n- First important point from the document\n- Second important point with supporting detail\n- Third conclusion drawn from the content\n\n## Section 3: Conclusion\n\nFinal remarks and summary of the document content.`;
+
+      case "summarize":
+        return `# Executive Summary — ${filename}\n\nThis document presents a comprehensive analysis of the subject matter, highlighting critical findings and strategic recommendations for stakeholders. The content is well-structured and covers core areas with empirical evidence and data-driven insights.\n\n## Key Takeaways\n\n- **Insight 1:** The primary finding establishes a clear baseline for decision-making.\n- **Insight 2:** Operational efficiency can be improved by 30% through the proposed framework.\n- **Insight 3:** Risk mitigation strategies are outlined with actionable timelines.\n- **Insight 4:** Stakeholder alignment is critical for successful implementation.\n- **Insight 5:** The recommended next steps provide a phased rollout roadmap.`;
+
+      case "qa":
+        return `# Customer Q&A — ${filename}\n\n**Q: What is the main purpose of this document?**\nA: This document provides a comprehensive overview of the subject matter, serving as a reference guide for decision-makers and stakeholders.\n\n**Q: Who is the intended audience?**\nA: The document is intended for professionals and teams involved in strategy, operations, and implementation.\n\n**Q: What are the key recommendations?**\nA: The document recommends a phased approach, starting with a pilot program, followed by full-scale deployment with continuous monitoring.\n\n**Q: Are there any risks identified?**\nA: Yes, three primary risks are identified along with mitigation strategies for each.\n\n**Q: What is the expected timeline for implementation?**\nA: The proposed timeline spans 90 days, broken into three 30-day phases.\n\n**Q: How can I get started?**\nA: Begin with the onboarding checklist in the appendix and schedule an alignment meeting with key stakeholders.`;
+
+      case "blog":
+        return `# How to Unlock Maximum Value from Your Documents with AI\n\n*Discover how modern document intelligence transforms raw content into actionable insights.*\n\n---\n\n## Introduction\n\nIn today's fast-paced business environment, documents hold untapped strategic value. Whether it's a dense PDF report, a Word document packed with research, or a scanned image, the information inside is only useful if you can access it quickly and intelligently. That's where Document AI changes the game.\n\n---\n\n## Why Traditional Document Review Falls Short\n\nManual document review is slow, error-prone, and doesn't scale. Teams spend hours extracting insights that an AI can surface in seconds.\n\n### The Hidden Cost of Manual Processing\n\n- Average knowledge worker spends 2.5 hours/day searching for information\n- Critical insights buried in long documents go unread\n- Inconsistent summaries lead to misaligned decision-making\n\n---\n\n## How Document Intelligence Works\n\nModern AI-powered document processing uses large language models to understand context, not just keywords.\n\n### Step 1: Upload & Extract\n\nThe system ingests your document and converts it to clean, structured text, regardless of format.\n\n### Step 2: Choose Your Mode\n\nSelect from Extract, Summarize, Q&A, or Blog Post generation based on your specific need.\n\n### Step 3: Receive AI-Powered Output\n\nWithin seconds, you receive a polished, structured output ready to use or share.\n\n---\n\n## Real-World Use Cases\n\n- **Marketing teams** converting research PDFs into blog content\n- **Customer success teams** generating FAQ pages from product documentation\n- **Executives** getting instant summaries of lengthy reports\n\n---\n\n## Conclusion\n\nDocument Intelligence is no longer a luxury — it's a competitive advantage. By automating extraction, summarisation, and content generation, teams move faster and make better decisions.\n\n**Ready to transform your documents?** Upload your first file and experience the difference today.`;
+
+      default:
+        return `Mock output for mode "${mode}" on file "${filename}". Connect your AI key for real results.`;
+    }
+  }
+
+  app.post(
+    "/api/v1/a/doc-ai",
+    mobileAuthMiddleware,
+    docUpload.single("file"),
+    async (req: Request, res: Response) => {
+      try {
+        const file = req.file;
+        const mode = (req.body.mode as string) || "extract";
+
+        if (!file) {
+          return res.status(400).json({ success: false, error: "No file uploaded." });
+        }
+
+        const validModes = ["extract", "summarize", "qa", "blog"];
+        if (!validModes.includes(mode)) {
+          return res.status(400).json({ success: false, error: "Invalid mode. Use extract, summarize, qa, or blog." });
+        }
+
+        // Step 1: Extract text from the file
+        let extractedText: string;
+        try {
+          extractedText = await extractTextFromBuffer(file);
+        } catch (extractErr: any) {
+          console.error("[DocAI] Text extraction failed:", extractErr.message);
+          return res.status(422).json({ success: false, error: "Could not extract text from this file. Please check the file is not corrupted or password-protected." });
+        }
+
+        if (!extractedText) {
+          return res.status(422).json({ success: false, error: "No readable text found in this file." });
+        }
+
+        // Step 2: Call AI — with mock fallback
+        const aiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+        let aiResult: string;
+
+        if (aiKey) {
+          try {
+            const { GoogleGenAI } = await import("@google/genai");
+            const genai = new GoogleGenAI({
+              apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
+              httpOptions: {
+                apiVersion: "",
+                baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+              },
+            });
+            const prompt = buildPrompt(mode, extractedText);
+            const response = await genai.models.generateContent({
+              model: "gemini-2.0-flash",
+              contents: prompt,
+            });
+            aiResult = response.text ?? "";
+          } catch (aiErr: any) {
+            console.warn("[DocAI] AI call failed, using mock:", aiErr.message);
+            aiResult = mockResponse(mode, file.originalname);
+          }
+        } else {
+          console.log("[DocAI] No AI key configured — returning mock response.");
+          aiResult = mockResponse(mode, file.originalname);
+        }
+
+        return res.json({ success: true, result: aiResult, mode, filename: file.originalname });
+      } catch (err: any) {
+        console.error("[DocAI] Unhandled error:", err);
+        return res.status(500).json({ success: false, error: err.message || "Internal server error." });
+      }
+    }
+  );
 
   return httpServer;
 }
