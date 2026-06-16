@@ -2576,7 +2576,7 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-app.delete("/api/auth/account", mobileAuthMiddleware, async (req: any, res) => {
+app.delete("/api/v1/a/account", mobileAuthMiddleware, async (req: any, res) => {
   try {
     const userId = req.jwtUser?.userId;
     if (!userId) {
@@ -3176,15 +3176,16 @@ app.post("/api/v1/p/reset-password", async (req, res) => {
 });
 
 // ============================================================
-// DEEP LINK REDIRECT ENDPOINT - /api/v1/auth/reset-password
+// DEEP LINK REDIRECT ENDPOINT - /api/v1/p/reset-password (GET)
 // This endpoint handles Universal Links (iOS) and App Links (Android)
 // When clicked from email, it redirects to the mobile app or web fallback
+// NOTE: POST /api/v1/p/reset-password (set new password) coexists on same path
 // ============================================================
 
-// GET /api/v1/auth/reset-password?token=XYZ
+// GET /api/v1/p/reset-password?token=XYZ
 // This endpoint is called when user clicks the reset password link from email
 // It attempts to open the mobile app, falls back to web if app not installed
-app.get("/api/v1/auth/reset-password", async (req, res) => {
+app.get("/api/v1/p/reset-password", async (req, res) => {
   const { token } = req.query;
 
   if (!token || typeof token !== 'string') {

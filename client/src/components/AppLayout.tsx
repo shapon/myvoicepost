@@ -66,7 +66,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
   const handleDeleteAccount = async () => {
     setIsDeleting(true);
     try {
-      const res = await apiRequest("DELETE", "/api/auth/account", {});
+      const res = await apiRequest("DELETE", "/api/v1/a/account", {});
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to delete account");

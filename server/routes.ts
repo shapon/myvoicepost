@@ -1209,7 +1209,7 @@ export async function registerRoutes(
   });
 
   // Delete account: removes all user data and the user record
-  app.delete("/api/auth/account", mobileAuthMiddleware, async (req, res) => {
+  app.delete("/api/v1/a/account", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
@@ -4479,8 +4479,9 @@ export async function registerRoutes(
     }
   });
 
-  // Web deep-link redirect page for password reset
-  app.get("/api/v1/auth/reset-password", async (req, res) => {
+  // Web deep-link redirect page for password reset (GET - no auth, public)
+  // NOTE: POST /api/v1/p/reset-password (set new password) coexists on same path
+  app.get("/api/v1/p/reset-password", async (req, res) => {
     const { token } = req.query;
 
     if (!token || typeof token !== "string") {
@@ -5361,7 +5362,9 @@ export async function registerRoutes(
     }
   });
 
+  // --------------------------------------------------------------------------
   // POST /api/v1/a/doc-ai — Document Intelligence & Q&A Engine
+  // --------------------------------------------------------------------------
 
   const docUpload = multer({
     storage: multer.memoryStorage(),
