@@ -7838,65 +7838,29 @@ const docUpload = multer({
 async function extractDocText(file: Express.Multer.File): Promise<string> {
   const { mimetype, buffer } = file;
   if (mimetype === "application/pdf") {
-    // pdfjs-dist (used internally by pdf-parse v2) needs these DOM globals for canvas
-    // rendering. In Vercel's serverless environment they don't exist — stub them so
-    // text extraction (which never actually renders) works without crashing.
-    const g = globalThis as any;
-    if (typeof g.DOMMatrix === "undefined") {
-      g.DOMMatrix = class DOMMatrix {
-        a=1; b=0; c=0; d=1; e=0; f=0;
-        m11=1; m12=0; m13=0; m14=0; m21=0; m22=1; m23=0; m24=0;
-        m31=0; m32=0; m33=1; m34=0; m41=0; m42=0; m43=0; m44=1;
-        is2D=true; isIdentity=true;
-        constructor(init?: string | number[]) {
-          if (Array.isArray(init) && init.length === 6) {
-            [this.a, this.b, this.c, this.d, this.e, this.f] = init as number[];
-            this.m11=this.a; this.m12=this.b; this.m21=this.c;
-            this.m22=this.d; this.m41=this.e; this.m42=this.f;
-          }
-        }
-        static fromMatrix() { return new g.DOMMatrix(); }
-        static fromFloat32Array() { return new g.DOMMatrix(); }
-        static fromFloat64Array() { return new g.DOMMatrix(); }
-        multiply() { return new g.DOMMatrix(); }
-        multiplySelf() { return this; }
-        preMultiplySelf() { return this; }
-        translateSelf(tx=0,ty=0) { this.e+=tx; this.f+=ty; this.m41=this.e; this.m42=this.f; return this; }
-        scaleSelf() { return this; }
-        scale3dSelf() { return this; }
-        rotateSelf() { return this; }
-        rotateFromVectorSelf() { return this; }
-        rotateAxisAngleSelf() { return this; }
-        skewXSelf() { return this; }
-        skewYSelf() { return this; }
-        invertSelf() { return this; }
-        setMatrixValue() { return this; }
-        transformPoint(p: any) { return p ?? {x:0,y:0,z:0,w:1}; }
-        toFloat32Array() { return new Float32Array([this.a,this.b,this.c,this.d,this.e,this.f]); }
-        toFloat64Array() { return new Float64Array([this.a,this.b,this.c,this.d,this.e,this.f]); }
-        toJSON() { return {a:this.a,b:this.b,c:this.c,d:this.d,e:this.e,f:this.f}; }
-        toString() { return `matrix(${this.a},${this.b},${this.c},${this.d},${this.e},${this.f})`; }
-      };
+    // pdf-parse v2 uses pdfjs-dist which requires @napi-rs/canvas (a native binary
+    // not available in Vercel's serverless runtime). Instead, send the PDF directly
+    // to Gemini as inline data — Gemini natively understands PDFs, no native deps needed.
+    const pdfApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!pdfApiKey) throw new Error("No Gemini API key configured for PDF text extraction.");
+    const pdfGenaiOpts: any = { apiKey: pdfApiKey };
+    if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+      pdfGenaiOpts.httpOptions = { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL };
     }
-    if (typeof g.ImageData === "undefined") {
-      g.ImageData = class ImageData {
-        data: Uint8ClampedArray; width: number; height: number; colorSpace = "srgb";
-        constructor(w: number|Uint8ClampedArray, h: number, _opts?: any) {
-          if (w instanceof Uint8ClampedArray) { this.data=w; this.width=h; this.height=_opts??0; }
-          else { this.width=w as number; this.height=h; this.data=new Uint8ClampedArray((w as number)*h*4); }
-        }
-      };
-    }
-    if (typeof g.Path2D === "undefined") {
-      g.Path2D = class Path2D {
-        constructor(_path?: any) {}
-        addPath() {} arc() {} arcTo() {} bezierCurveTo() {} closePath() {}
-        ellipse() {} lineTo() {} moveTo() {} quadraticCurveTo() {} rect() {}
-      };
-    }
-    const pdfParse = _require("pdf-parse") as (buf: Buffer) => Promise<{ text: string }>;
-    const parsed = await pdfParse(buffer);
-    return parsed.text?.trim() || "";
+    const pdfGenai = new GoogleGenAI(pdfGenaiOpts);
+    const pdfResponse = await pdfGenai.models.generateContent({
+      model: "gemini-2.0-flash",
+      contents: [{
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: "application/pdf", data: buffer.toString("base64") } },
+          { text: "Extract all text content from this PDF document verbatim. Return only the raw text, preserving paragraphs and line breaks. Do not add summaries, commentary, or extra formatting." },
+        ],
+      }],
+    });
+    const pdfText = pdfResponse.text?.trim() || "";
+    if (!pdfText) throw new Error("Gemini returned empty text from PDF.");
+    return pdfText;
   }
   if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     const mammoth = _require("mammoth") as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
@@ -7953,6 +7917,7 @@ app.post("/api/v1/a/doc-ai", mobileAuthMiddleware, docUpload.single("file"), asy
     try {
       extractedText = await extractDocText(file);
     } catch (e: any) {
+      console.error("[DocAI] Text extraction failed:", e?.message || e);
       return res.status(422).json({ success: false, error: "Could not extract text from this file." });
     }
     if (!extractedText) return res.status(422).json({ success: false, error: "No readable text found in this file." });
@@ -7961,10 +7926,11 @@ app.post("/api/v1/a/doc-ai", mobileAuthMiddleware, docUpload.single("file"), asy
     let aiResult: string;
     if (aiKey) {
       try {
-        const genai = new GoogleGenAI({
-          apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-          httpOptions: { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL },
-        });
+        const docGenaiOpts: any = { apiKey: aiKey };
+        if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+          docGenaiOpts.httpOptions = { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL };
+        }
+        const genai = new GoogleGenAI(docGenaiOpts);
         const prompt = buildDocPrompt(mode, extractedText);
         const response = await genai.models.generateContent({ model: "gemini-2.0-flash", contents: prompt });
         aiResult = response.text ?? "";
