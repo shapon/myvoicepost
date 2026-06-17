@@ -25,8 +25,6 @@ import * as os from "os";
 import * as path from "path";
 import { createRequire } from "module";
 const _require = createRequire(import.meta.url);
-const pdfParse = _require("pdf-parse") as (buf: Buffer) => Promise<{ text: string }>;
-import mammoth from "mammoth";
 
 const PROCESS_AUDIO_CFG = {
   PROCESS_AUDIO_MAX_SIZE_MB: 4,
@@ -7840,10 +7838,12 @@ const docUpload = multer({
 async function extractDocText(file: Express.Multer.File): Promise<string> {
   const { mimetype, buffer } = file;
   if (mimetype === "application/pdf") {
+    const pdfParse = _require("pdf-parse") as (buf: Buffer) => Promise<{ text: string }>;
     const parsed = await pdfParse(buffer);
     return parsed.text?.trim() || "";
   }
   if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    const mammoth = _require("mammoth") as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
     const result = await mammoth.extractRawText({ buffer });
     return result.value?.trim() || "";
   }
