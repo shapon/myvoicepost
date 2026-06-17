@@ -5488,16 +5488,14 @@ export async function registerRoutes(
         if (aiKey) {
           try {
             const { GoogleGenAI } = await import("@google/genai");
-            const genai = new GoogleGenAI({
-              apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-              httpOptions: {
-                apiVersion: "",
-                baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
-              },
-            });
+            const routesGenaiOpts: any = { apiKey: aiKey };
+            if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+              routesGenaiOpts.httpOptions = { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL };
+            }
+            const genai = new GoogleGenAI(routesGenaiOpts);
             const prompt = buildPrompt(mode, extractedText);
             const response = await genai.models.generateContent({
-              model: "gemini-2.0-flash",
+              model: "gemini-2.5-flash",
               contents: prompt,
             });
             aiResult = response.text ?? "";

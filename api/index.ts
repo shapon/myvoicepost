@@ -7849,7 +7849,7 @@ async function extractDocText(file: Express.Multer.File): Promise<string> {
     }
     const pdfGenai = new GoogleGenAI(pdfGenaiOpts);
     const pdfResponse = await pdfGenai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: "gemini-2.5-flash",
       contents: [{
         role: "user",
         parts: [
@@ -7865,7 +7865,28 @@ async function extractDocText(file: Express.Multer.File): Promise<string> {
   if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
     const mammoth = _require("mammoth") as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> };
     const result = await mammoth.extractRawText({ buffer });
-    return result.value?.trim() || "";
+    const docxText = result.value?.trim() || "";
+    if (docxText) return docxText;
+    // mammoth returned empty — fall back to Gemini (handles complex/image-heavy DOCX)
+    console.warn("[DocAI] mammoth returned empty text for DOCX, falling back to Gemini");
+    const docxApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+    if (!docxApiKey) throw new Error("No Gemini API key configured and mammoth returned empty text.");
+    const docxGenaiOpts: any = { apiKey: docxApiKey };
+    if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
+      docxGenaiOpts.httpOptions = { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL };
+    }
+    const docxGenai = new GoogleGenAI(docxGenaiOpts);
+    const docxResponse = await docxGenai.models.generateContent({
+      model: "gemini-2.5-flash",
+      contents: [{
+        role: "user",
+        parts: [
+          { inlineData: { mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", data: buffer.toString("base64") } },
+          { text: "Extract all text content from this Word document verbatim. Return only the raw text, preserving paragraphs and line breaks. Do not add summaries, commentary, or extra formatting." },
+        ],
+      }],
+    });
+    return docxResponse.text?.trim() || "";
   }
   if (mimetype === "text/plain") return buffer.toString("utf-8").trim();
   return `[IMAGE:${mimetype};base64,${buffer.toString("base64")}]`;
@@ -7932,7 +7953,7 @@ app.post("/api/v1/a/doc-ai", mobileAuthMiddleware, docUpload.single("file"), asy
         }
         const genai = new GoogleGenAI(docGenaiOpts);
         const prompt = buildDocPrompt(mode, extractedText);
-        const response = await genai.models.generateContent({ model: "gemini-2.0-flash", contents: prompt });
+        const response = await genai.models.generateContent({ model: "gemini-2.5-flash", contents: prompt });
         aiResult = response.text ?? "";
       } catch (aiErr: any) {
         console.warn("[DocAI] AI error, using mock:", aiErr.message);
