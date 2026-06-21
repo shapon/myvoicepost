@@ -21,7 +21,7 @@ import {
   notificationLog,
 } from "@shared/schema";
 import type { UserRole } from "@shared/schema";
-import nodemailer from "nodemailer";
+import { sendPasswordResetEmail, buildResetResponse, RESET_TOKEN_EXPIRY_HOURS } from "./email";
 import { transcribeAudio, transcribeAudioAuto, translateAndPolish, polishText, transformTextWithTone, transcribeAudioFromUrl, toneCategories } from "./gemini";
 import { db } from "./supabase-db";
 import { eq, and, gte, desc, sql, count, lt, lte } from "drizzle-orm";
@@ -105,8 +105,8 @@ function generateSessionId(): string {
 }
 
 // Helper to generate JWT token with sessionId for single-device enforcement
-function generateToken(userId: string, username: string, role: UserRole = "GUEST", sessionId?: string): string {
-  return jwt.sign({ userId, username, role, sessionId }, JWT_SECRET, {
+function generateToken(userId: string, username: string, role: UserRole = "GUEST", sessionId?: string, email?: string): string {
+  return jwt.sign({ userId, username, role, sessionId, ...(email ? { email } : {}) }, JWT_SECRET, {
     expiresIn: JWT_EXPIRES_IN,
   });
 }
@@ -197,7 +197,6 @@ function checkRole(...allowedRoles: UserRole[]) {
 
 const APP_SCHEME = process.env.APP_SCHEME || "myvoicepost";
 const WEB_APP_URL = process.env.WEB_APP_URL || "https://myvoicepost.com";
-const RESET_TOKEN_EXPIRY_HOURS = 1;
 const TOPUP_MINUTES = 60;
 
 const GOOGLE_SSO_CONFIG = {
@@ -1233,6 +1232,100 @@ export async function registerRoutes(
     }
   });
 
+  // PUT /api/v1/a/profile - Update username and/or email
+  app.put("/api/v1/a/profile", mobileAuthMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.jwtUser?.userId;
+      if (!userId) return res.status(401).json({ success: false, error: "Not authenticated" });
+
+      const bodySchema = z.object({
+        username: z.string().min(3).max(64).optional(),
+        email: z.string().email().optional(),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ success: false, error: "Invalid input" });
+      }
+
+      const { username, email } = parsed.data;
+      if (!username && !email) {
+        return res.status(400).json({ success: false, error: "Nothing to update" });
+      }
+
+      if (username) {
+        const existing = await db.select({ id: users.id }).from(users)
+          .where(and(eq(users.username, username), sql`${users.id} != ${userId}`)).limit(1);
+        if (existing.length > 0) {
+          return res.status(409).json({ success: false, error: "Username already taken" });
+        }
+      }
+
+      if (email) {
+        const existing = await db.select({ id: users.id }).from(users)
+          .where(and(eq(users.email, email), sql`${users.id} != ${userId}`)).limit(1);
+        if (existing.length > 0) {
+          return res.status(409).json({ success: false, error: "Email already in use" });
+        }
+      }
+
+      const updates: Record<string, any> = {};
+      if (username) updates.username = username;
+      if (email) updates.email = email;
+      await db.update(users).set(updates).where(eq(users.id, userId));
+
+      const updated = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role })
+        .from(users).where(eq(users.id, userId)).limit(1);
+
+      const freshToken = generateToken(
+        userId,
+        updated[0].username,
+        (updated[0].role as UserRole) ?? req.jwtUser?.role ?? "GUEST",
+        req.jwtUser?.sessionId,
+        updated[0].email ?? undefined,
+      );
+
+      res.json({ success: true, user: updated[0], token: freshToken });
+    } catch (err: any) {
+      console.error("[Profile Update] Error:", err);
+      res.status(500).json({ success: false, error: "Failed to update profile" });
+    }
+  });
+
+  // PUT /api/v1/a/change-password - Change user password
+  app.put("/api/v1/a/change-password", mobileAuthMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.jwtUser?.userId;
+      if (!userId) return res.status(401).json({ success: false, error: "Not authenticated" });
+
+      const bodySchema = z.object({
+        currentPassword: z.string().min(1),
+        newPassword: z.string().min(6),
+      });
+      const parsed = bodySchema.safeParse(req.body);
+      if (!parsed.success) {
+        return res.status(400).json({ success: false, error: "Invalid input" });
+      }
+
+      const { currentPassword, newPassword } = parsed.data;
+      const userResult = await db.select({ passwordHash: users.passwordHash })
+        .from(users).where(eq(users.id, userId)).limit(1);
+
+      if (userResult.length === 0) return res.status(404).json({ success: false, error: "User not found" });
+
+      const bcryptjs = await import("bcryptjs");
+      const isValid = await bcryptjs.default.compare(currentPassword, userResult[0].passwordHash);
+      if (!isValid) return res.status(400).json({ success: false, error: "Current password is incorrect" });
+
+      const hashed = await bcryptjs.default.hash(newPassword, 10);
+      await db.update(users).set({ passwordHash: hashed }).where(eq(users.id, userId));
+
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error("[Change Password] Error:", err);
+      res.status(500).json({ success: false, error: "Failed to change password" });
+    }
+  });
+
   // Mobile Auth: Verify token and get user info (with live role refresh)
   app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
     try {
@@ -1241,12 +1334,18 @@ export async function registerRoutes(
         return res.status(401).json({ success: false, error: "Not authenticated" });
       }
       const currentRole = await refreshUserRole(userId);
+      const userRecord = await db
+        .select({ username: users.username, email: users.email })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
+      const freshUser = userRecord[0];
       res.json({
         success: true,
         user: {
-          id: req.jwtUser?.userId,
-          email: req.jwtUser?.email,
-          username: req.jwtUser?.username,
+          id: userId,
+          email: freshUser?.email ?? req.jwtUser?.email,
+          username: freshUser?.username ?? req.jwtUser?.username,
           role: currentRole,
         },
       });
@@ -4138,56 +4237,6 @@ export async function registerRoutes(
     }
   });
 
-  async function sendPasswordResetEmail(email: string, resetLink: string, isDeepLink = false): Promise<void> {
-    const smtpHost = process.env.SMTP_HOST;
-    const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
-    const smtpSecure = process.env.SMTP_SECURE === "true";
-    const smtpUser = process.env.SMTP_USER;
-    const smtpPass = process.env.SMTP_PASS;
-    const emailFrom = process.env.EMAIL_FROM || smtpUser;
-
-    if (!smtpHost || !smtpUser || !smtpPass) throw new Error("Email service not configured properly");
-
-    const transporter = nodemailer.createTransport({
-      host: smtpHost,
-      port: smtpPort,
-      secure: smtpSecure,
-      auth: { user: smtpUser, pass: smtpPass },
-      ...(smtpPort === 587 && !smtpSecure && {
-        requireTLS: true,
-        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
-      }),
-    });
-
-    await transporter.verify();
-
-    const linkType = isDeepLink ? "mobile app" : "web browser";
-    const htmlContent = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Reset Your Password</title></head>
-      <body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;">
-        <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
-          <h1 style="color:white;margin:0;">MyVoicePost</h1></div>
-        <div style="background:#fff;padding:30px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
-          <h2>Reset Your Password</h2><p>We received a request to reset your password.</p>
-          <div style="text-align:center;margin:30px 0;">
-            <a href="${resetLink}" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 30px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Reset Password</a>
-          </div>
-          <p style="color:#666;font-size:14px;">Or copy and paste this link into your ${linkType}:</p>
-          <p style="background:#f5f5f5;padding:12px;border-radius:6px;word-break:break-all;font-size:13px;">${resetLink}</p>
-          <p style="color:#888;font-size:13px;"><strong>This link will expire in ${RESET_TOKEN_EXPIRY_HOURS} hour(s).</strong></p>
-          <p style="color:#888;font-size:13px;">If you didn't request this, you can safely ignore this email.</p>
-        </div>
-      </body></html>`;
-
-    await transporter.sendMail({
-      from: emailFrom,
-      to: email,
-      subject: "Reset Your MyVoicePost Password",
-      text: `Reset your MyVoicePost password: ${resetLink}\n\nThis link expires in ${RESET_TOKEN_EXPIRY_HOURS} hour(s).`,
-      html: htmlContent,
-    });
-
-    console.log("[EMAIL SERVICE] Password reset email sent to", email);
-  }
 
   function generateErrorPage(title: string, message: string): string {
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - MyVoicePost</title>
@@ -4426,10 +4475,7 @@ export async function registerRoutes(
         true
       );
 
-      const response: any = { success: true, message: "If an account with that email exists, a password reset code has been sent." };
-      if (process.env.NODE_ENV !== "production") response.code = code;
-
-      res.json(response);
+      res.json(buildResetResponse(code));
     } catch (error: any) {
       console.error("[Forgot Password] Error:", error);
       res.status(500).json({ success: false, error: "Failed to process password reset request" });

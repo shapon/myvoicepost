@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Link, useLocation } from "wouter";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 import { apiRequest, removeAuthToken } from "@/lib/queryClient";
 import {
   Sidebar,
@@ -26,6 +27,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
 import { useToast } from "@/hooks/use-toast";
 import {
   Mic,
@@ -39,6 +41,11 @@ import {
   Trash2,
   Loader2,
   BrainCircuit,
+  HelpCircle,
+  Sun,
+  Moon,
+  Settings,
+  Shield,
 } from "lucide-react";
 import type { ReactNode } from "react";
 
@@ -48,10 +55,12 @@ const navItems = [
   { label: "Transcribe", href: "/process", icon: FileAudio },
   { label: "Doc AI", href: "/doc-ai", icon: BrainCircuit },
   { label: "Saved", href: "/saved", icon: Bookmark },
+  { label: "Help", href: "/help", icon: HelpCircle },
 ];
 
 export default function AppLayout({ children }: { children: ReactNode }) {
   const { user, logout, isAdmin } = useAuth();
+  const { theme, toggleTheme } = useTheme();
   const { toast } = useToast();
   const [location] = useLocation();
   const [showDialog, setShowDialog] = useState(false);
@@ -123,7 +132,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                             asChild
                             isActive={isActive}
                             tooltip={item.label}
-                            data-testid={`nav-${item.label.toLowerCase()}`}
+                            data-testid={`nav-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
                           >
                             <Link href={item.href}>
                               <Icon className="w-4 h-4" />
@@ -158,15 +167,49 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                 {user && (
                   <SidebarMenuItem>
                     <SidebarMenuButton
-                      tooltip={user.email || user.username}
-                      data-testid="button-user-info"
+                      asChild
+                      isActive={location === "/profile"}
+                      tooltip="Profile"
+                      data-testid="nav-profile"
                     >
-                      <Avatar className="w-5 h-5 flex-shrink-0">
-                        <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                          {user.username.substring(0, 2).toUpperCase()}
-                        </AvatarFallback>
-                      </Avatar>
-                      <span className="truncate text-sm">{user.username}</span>
+                      <Link href="/profile">
+                        <Avatar className="w-5 h-5 flex-shrink-0">
+                          <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                            {user.username.substring(0, 2).toUpperCase()}
+                          </AvatarFallback>
+                        </Avatar>
+                        <span className="truncate text-sm">{user.username}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {user && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/account-settings"}
+                      tooltip="Account Settings"
+                      data-testid="nav-account-settings"
+                    >
+                      <Link href="/account-settings">
+                        <Shield className="w-4 h-4" />
+                        <span>Account Settings</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                )}
+                {user && (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton
+                      asChild
+                      isActive={location === "/settings"}
+                      tooltip="App Settings"
+                      data-testid="nav-app-settings"
+                    >
+                      <Link href="/settings">
+                        <Settings className="w-4 h-4" />
+                        <span>App Settings</span>
+                      </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
                 )}
@@ -202,15 +245,27 @@ export default function AppLayout({ children }: { children: ReactNode }) {
             <header className="h-12 border-b flex items-center px-3 gap-2 bg-background shrink-0">
               <SidebarTrigger data-testid="button-sidebar-trigger" />
               <div className="flex-1" />
+              <Button
+                size="icon"
+                variant="ghost"
+                onClick={toggleTheme}
+                title={theme === "dark" ? "Switch to light mode" : "Switch to dark mode"}
+                data-testid="button-theme-toggle"
+              >
+                {theme === "dark" ? (
+                  <Sun className="w-4 h-4" />
+                ) : (
+                  <Moon className="w-4 h-4" />
+                )}
+              </Button>
               {user && (
-                <div className="flex items-center gap-1.5 text-sm text-muted-foreground md:hidden">
-                  <Avatar className="w-6 h-6">
+                <Link href="/profile" data-testid="button-user-avatar-header">
+                  <Avatar className="w-7 h-7 cursor-pointer">
                     <AvatarFallback className="bg-primary text-primary-foreground text-xs">
                       {user.username.substring(0, 2).toUpperCase()}
                     </AvatarFallback>
                   </Avatar>
-                  <span className="truncate max-w-24">{user.username}</span>
-                </div>
+                </Link>
               )}
             </header>
 
@@ -222,7 +277,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
               className="md:hidden shrink-0 border-t bg-background flex items-stretch"
               data-testid="nav-bottom-tabs"
             >
-              {navItems.map((item) => {
+              {navItems.slice(0, 5).map((item) => {
                 const isActive = location === item.href;
                 const Icon = item.icon;
                 return (
@@ -232,7 +287,7 @@ export default function AppLayout({ children }: { children: ReactNode }) {
                     className={`flex-1 flex flex-col items-center justify-center gap-1 py-2.5 text-xs transition-colors ${
                       isActive ? "text-primary" : "text-muted-foreground"
                     }`}
-                    data-testid={`bottom-tab-${item.label.toLowerCase()}`}
+                    data-testid={`bottom-tab-${item.label.toLowerCase().replace(/\s+/g, "-")}`}
                   >
                     <Icon className="w-5 h-5" />
                     <span>{item.label}</span>

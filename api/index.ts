@@ -342,6 +342,7 @@ const JWT_EXPIRES_IN = "60d";
 interface JwtPayload {
   userId: string;
   username: string;
+  email?: string;
   sessionId?: string;
 }
 
@@ -2548,8 +2549,12 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
     let trialData: any = {};
+    let freshEmail = jwtUser?.email;
+    let freshUsername = jwtUser?.username;
     if (userId) {
       const userResult = await db.select({
+        username: users.username,
+        email: users.email,
         trialMinutesTotal: users.trialMinutesTotal,
         trialMinutesUsed: users.trialMinutesUsed,
         trialStartsAt: users.trialStartsAt,
@@ -2558,6 +2563,8 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
       }).from(users).where(eq(users.id, userId)).limit(1);
       if (userResult.length > 0) {
         const u = userResult[0];
+        freshEmail = u.email ?? freshEmail;
+        freshUsername = u.username ?? freshUsername;
         trialData = {
           trialMinutesTotal: u.trialMinutesTotal || 90,
           trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
@@ -2567,7 +2574,7 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
         };
       }
     }
-    res.json({ success: true, user: { id: userId, email: jwtUser?.email, username: jwtUser?.username, ...trialData } });
+    res.json({ success: true, user: { id: userId, email: freshEmail, username: freshUsername, ...trialData } });
   } catch (error: any) {
     const jwtUser = (req as any).jwtUser;
     res.json({ success: true, user: { id: jwtUser?.userId || jwtUser?.id, email: jwtUser?.email, username: jwtUser?.username } });
@@ -2590,6 +2597,98 @@ app.delete("/api/v1/a/account", mobileAuthMiddleware, async (req: any, res) => {
   } catch (err) {
     console.error("[DeleteAccount] Error:", err);
     res.status(500).json({ success: false, error: "Failed to delete account" });
+  }
+});
+
+// PUT /api/v1/a/profile - Update username and/or email
+app.put("/api/v1/a/profile", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.jwtUser?.userId;
+    if (!userId) return res.status(401).json({ success: false, error: "Not authenticated" });
+
+    const bodySchema = z.object({
+      username: z.string().min(3).max(64).optional(),
+      email: z.string().email().optional(),
+    });
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Invalid input", details: parsed.error.errors });
+    }
+
+    const { username, email } = parsed.data;
+    if (!username && !email) {
+      return res.status(400).json({ success: false, error: "Nothing to update" });
+    }
+
+    if (username) {
+      const existing = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.username, username), sql`${users.id} != ${userId}`)).limit(1);
+      if (existing.length > 0) {
+        return res.status(409).json({ success: false, error: "Username already taken" });
+      }
+    }
+
+    if (email) {
+      const existing = await db.select({ id: users.id }).from(users)
+        .where(and(eq(users.email, email), sql`${users.id} != ${userId}`)).limit(1);
+      if (existing.length > 0) {
+        return res.status(409).json({ success: false, error: "Email already in use" });
+      }
+    }
+
+    const updates: Record<string, any> = {};
+    if (username) updates.username = username;
+    if (email) updates.email = email;
+    await db.update(users).set(updates).where(eq(users.id, userId));
+
+    const updated = await db.select({ id: users.id, username: users.username, email: users.email })
+      .from(users).where(eq(users.id, userId)).limit(1);
+
+    const freshToken = generateToken({
+      userId,
+      username: updated[0].username,
+      email: updated[0].email ?? undefined,
+      sessionId: req.jwtUser?.sessionId,
+    });
+
+    res.json({ success: true, user: updated[0], token: freshToken });
+  } catch (err: any) {
+    console.error("[Profile Update] Error:", err);
+    res.status(500).json({ success: false, error: "Failed to update profile" });
+  }
+});
+
+// PUT /api/v1/a/change-password - Change user password
+app.put("/api/v1/a/change-password", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.jwtUser?.userId;
+    if (!userId) return res.status(401).json({ success: false, error: "Not authenticated" });
+
+    const bodySchema = z.object({
+      currentPassword: z.string().min(1),
+      newPassword: z.string().min(6),
+    });
+    const parsed = bodySchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({ success: false, error: "Invalid input", details: parsed.error.errors });
+    }
+
+    const { currentPassword, newPassword } = parsed.data;
+    const userResult = await db.select({ passwordHash: users.passwordHash })
+      .from(users).where(eq(users.id, userId)).limit(1);
+
+    if (userResult.length === 0) return res.status(404).json({ success: false, error: "User not found" });
+
+    const isValid = await bcrypt.compare(currentPassword, userResult[0].passwordHash);
+    if (!isValid) return res.status(400).json({ success: false, error: "Current password is incorrect" });
+
+    const hashed = await bcrypt.hash(newPassword, 10);
+    await db.update(users).set({ passwordHash: hashed }).where(eq(users.id, userId));
+
+    res.json({ success: true });
+  } catch (err: any) {
+    console.error("[Change Password] Error:", err);
+    res.status(500).json({ success: false, error: "Failed to change password" });
   }
 });
 

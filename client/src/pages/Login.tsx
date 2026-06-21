@@ -224,6 +224,11 @@ export default function Login() {
                 )}
 
                 <p className="text-sm text-muted-foreground text-center">
+                  <Link href="/forgot-password" className="text-primary hover:underline" data-testid="link-forgot-password">
+                    Forgot your password?
+                  </Link>
+                </p>
+                <p className="text-sm text-muted-foreground text-center">
                   Don't have an account?{" "}
                   <Link href="/signup" className="text-primary hover:underline" data-testid="link-signup">
                     Create one
