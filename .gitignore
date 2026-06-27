@@ -5,3 +5,8 @@ server/public
 vite.config.ts.*
 *.tar.gz
 package-lock.json
+
+# Playwright
+test-results/
+playwright-report/
+.playwright/

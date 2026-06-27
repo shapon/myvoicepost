@@ -6150,7 +6150,7 @@ app.post("/api/v1/a/update-payment-method", mobileAuthMiddleware, async (req: an
   await handleUpdatePaymentMethod(req, res, userId);
 });
 
-// POST /api/stripe-webhook + /api/v1/a/stripe-webhook
+// POST /api/stripe-webhook + /api/v1/p/stripe-webhook
 async function handleStripeWebhook(req: Request, res: Response) {
   try {
     const stripe = await getStripeClient();
@@ -6618,7 +6618,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
     res.status(400).json({ error: "Webhook processing failed" });
   }
 }
-app.post("/api/v1/a/stripe-webhook", handleStripeWebhook);
+app.post("/api/v1/p/stripe-webhook", handleStripeWebhook);
 
 // ============ PUSH NOTIFICATIONS ============
 

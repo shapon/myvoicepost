@@ -3345,7 +3345,7 @@ export async function registerRoutes(
     await handleCancelSubscription(req, res, userId);
   });
 
-  // POST /api/stripe-webhook + /api/v1/a/stripe-webhook - Stripe webhook handler
+  // POST /api/stripe-webhook + /api/v1/p/stripe-webhook - Stripe webhook handler
   async function handleStripeWebhook(req: Request, res: Response) {
     try {
       const stripe = await getUncachableStripeClient();
@@ -3600,7 +3600,7 @@ export async function registerRoutes(
     }
   }
 
-  app.post("/api/v1/a/stripe-webhook", handleStripeWebhook);
+  app.post("/api/v1/p/stripe-webhook", handleStripeWebhook);
 
   // Stripe Sync: Initialize Stripe schema and sync data
   async function initStripeSync() {
