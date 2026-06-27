@@ -5276,11 +5276,13 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
     const normalizedBody = {
       email: body.email,
       priceId: body.priceId || body.price_id || body.stripePriceId || body.stripe_price_id,
+      autoRenew: body.autoRenew !== undefined ? body.autoRenew : true,
     };
 
     const schema = z.object({
       email: z.string().email("Valid email is required"),
       priceId: z.string().min(1, "Price ID is required"),
+      autoRenew: z.boolean().default(true),
     });
 
     const parseResult = schema.safeParse(normalizedBody);
@@ -5292,7 +5294,7 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
       });
     }
 
-    const { email, priceId } = parseResult.data;
+    const { email, priceId, autoRenew } = parseResult.data;
     const stripe = await getStripeClient();
 
     const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
@@ -5358,6 +5360,11 @@ async function handleCreateSubscription(req: Request, res: Response, userId: str
       { customer: customerId },
       { apiVersion: "2024-06-20" }
     );
+
+    if (!autoRenew) {
+      await stripe.subscriptions.update(subscription.id, { cancel_at_period_end: true });
+      console.log(`[Stripe Create Subscription] Set cancel_at_period_end=true for ${subscription.id} (manual renewal)`);
+    }
 
     await db.update(users)
       .set({ stripeSubscriptionId: subscription.id, updatedAt: new Date() })
@@ -5816,12 +5823,60 @@ app.get("/api/v1/a/payment-history", mobileAuthMiddleware, async (req: any, res)
   await handlePaymentHistory(req, res, userId);
 });
 
-// Web endpoint
-
 // Mobile endpoint
 app.post("/api/v1/a/create-subscription", mobileAuthMiddleware, async (req: any, res) => {
   const userId = req.jwtUser?.userId;
   await handleCreateSubscription(req, res, userId);
+});
+
+// POST /api/v1/a/web-subscribe — creates a Stripe Checkout Session for web payment
+app.post("/api/v1/a/web-subscribe", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.jwtUser?.userId;
+    const schema = z.object({
+      priceId: z.string().min(1, "Price ID is required"),
+      autoRenew: z.boolean().default(true),
+    });
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Validation failed", details: parseResult.error.errors });
+    }
+    const { priceId, autoRenew } = parseResult.data;
+    const stripe = await getStripeClient();
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const user = userResult[0];
+    if (!user) return res.status(404).json({ success: false, error: "User not found" });
+
+    let customerId = user.stripeCustomerId;
+    if (customerId) {
+      try { await stripe.customers.retrieve(customerId); } catch { customerId = null; }
+    }
+    if (!customerId) {
+      const customer = await stripe.customers.create({ email: user.email!, metadata: { userId } });
+      customerId = customer.id;
+      await db.update(users).set({ stripeCustomerId: customerId, updatedAt: new Date() }).where(eq(users.id, userId));
+    }
+
+    const baseUrl = WEB_APP_URL;
+    const session = await stripe.checkout.sessions.create({
+      mode: "subscription",
+      customer: customerId,
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${baseUrl}/subscribe/success?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${baseUrl}/pricing`,
+      metadata: { userId, autoRenew: String(autoRenew) },
+      subscription_data: {
+        metadata: { userId, autoRenew: String(autoRenew) },
+      },
+    });
+
+    console.log(`[Web Subscribe] Checkout session created: ${session.id} for user ${userId}, autoRenew=${autoRenew}`);
+    res.json({ success: true, url: session.url });
+  } catch (error: any) {
+    console.error("[Web Subscribe] Error:", error);
+    res.status(500).json({ success: false, error: error.message || "Failed to create checkout session" });
+  }
 });
 
 // POST /api/cancel-subscription + /api/v1/a/cancel-subscription

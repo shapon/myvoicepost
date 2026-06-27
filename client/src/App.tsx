@@ -29,6 +29,8 @@ import AppSettings from "@/pages/AppSettings";
 import AuthHelp from "@/pages/AuthHelp";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
+import Subscribe from "@/pages/Subscribe";
+import SubscribeSuccess from "@/pages/SubscribeSuccess";
 
 function AppSkeleton() {
   return (
@@ -159,6 +161,8 @@ function Router() {
       <Route path="/help-center">
         {() => <ProtectedRoute component={AuthHelp} />}
       </Route>
+      <Route path="/subscribe" component={Subscribe} />
+      <Route path="/subscribe/success" component={SubscribeSuccess} />
       <Route component={NotFound} />
     </Switch>
   );

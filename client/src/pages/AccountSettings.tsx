@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
 import { apiRequest, queryClient, setAuthToken } from "@/lib/queryClient";
 import { useAuth } from "@/contexts/AuthContext";
@@ -10,6 +10,9 @@ import AppLayout from "@/components/AppLayout";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Skeleton } from "@/components/ui/skeleton";
 import {
   Form,
   FormControl,
@@ -30,7 +33,26 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
-import { Shield, User, Lock, Loader2, Check } from "lucide-react";
+import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle } from "lucide-react";
+
+interface SubscriptionInfo {
+  id: string;
+  plan_name: string;
+  status: string;
+  valid_date_upto: string | null;
+  cancel_at_period_end: boolean;
+  current_period_end: string | null;
+  stripe_status: string | null;
+}
+
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
 
 // ── Schemas ────────────────────────────────────────────────────────────────────
 
@@ -61,8 +83,59 @@ export default function AccountSettings() {
   const [profileSaved, setProfileSaved] = useState(false);
   const [showLeaveDialog, setShowLeaveDialog] = useState(false);
   const [pendingPath, setPendingPath] = useState<string | null>(null);
+  const [showCancelDialog, setShowCancelDialog] = useState(false);
   const originalPushStateRef = useRef<typeof window.history.pushState | null>(null);
   const sentinelPushedRef = useRef(false);
+
+  // ── Subscription query ──────────────────────────────────────────────────────
+  const { data: subData, isLoading: subLoading } = useQuery<{
+    success: boolean;
+    has_active_subscription: boolean;
+    subscription: SubscriptionInfo | null;
+  }>({
+    queryKey: ["/api/v1/a/subscription-status"],
+  });
+
+  const sub = subData?.subscription ?? null;
+  const hasSub = subData?.has_active_subscription ?? false;
+  const autoRenewOn = hasSub && sub ? !sub.cancel_at_period_end : false;
+  const pendingCancellation = hasSub && sub ? sub.cancel_at_period_end : false;
+
+  const cancelMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/v1/a/cancel-subscription", {});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to cancel subscription");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/subscription-status"] });
+      toast({ title: "Subscription cancelled", description: "Your plan will remain active until the end of the billing period." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
+
+  const reactivateMutation = useMutation({
+    mutationFn: async () => {
+      const res = await apiRequest("POST", "/api/v1/a/reactivate-subscription", {});
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to reactivate subscription");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/subscription-status"] });
+      toast({ title: "Auto-renewal enabled", description: "Your subscription will renew automatically." });
+    },
+    onError: (err: Error) => {
+      toast({ title: "Error", description: err.message, variant: "destructive" });
+    },
+  });
 
   // Profile form
   const profileForm = useForm<ProfileValues>({
@@ -262,6 +335,91 @@ export default function AccountSettings() {
             </div>
           </div>
 
+          {/* Subscription */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <CreditCard className="w-4 h-4 text-muted-foreground" />
+                <CardTitle className="text-base">Subscription</CardTitle>
+              </div>
+              <CardDescription>Manage your plan and auto-renewal</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              {subLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-5 w-40" />
+                  <Skeleton className="h-5 w-56" />
+                  <Skeleton className="h-9 w-32" />
+                </div>
+              ) : !hasSub ? (
+                <div className="flex items-center justify-between gap-4 flex-wrap">
+                  <div>
+                    <p className="text-sm text-muted-foreground">You don't have an active subscription.</p>
+                  </div>
+                  <Button variant="default" size="sm" asChild>
+                    <a href="/pricing">View plans</a>
+                  </Button>
+                </div>
+              ) : (
+                <>
+                  {/* Plan name + status */}
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="font-medium text-sm">{sub?.plan_name}</span>
+                    {pendingCancellation ? (
+                      <Badge variant="destructive" data-testid="status-sub-cancelling">Cancelling</Badge>
+                    ) : (
+                      <Badge variant="secondary" data-testid="status-sub-active">Active</Badge>
+                    )}
+                  </div>
+
+                  {/* Billing date row */}
+                  <div className="flex items-center justify-between text-sm flex-wrap gap-2">
+                    <span className="text-muted-foreground">
+                      {pendingCancellation ? "Access until" : autoRenewOn ? "Next billing date" : "Expires on"}
+                    </span>
+                    <span className="font-medium" data-testid="text-billing-date">
+                      {formatDate(sub?.current_period_end ?? sub?.valid_date_upto)}
+                    </span>
+                  </div>
+
+                  {/* Auto-renew toggle */}
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">Auto-renewal</span>
+                    </div>
+                    <Switch
+                      checked={autoRenewOn}
+                      disabled={cancelMutation.isPending || reactivateMutation.isPending}
+                      onCheckedChange={(checked) => {
+                        if (checked) {
+                          reactivateMutation.mutate();
+                        } else {
+                          setShowCancelDialog(true);
+                        }
+                      }}
+                      data-testid="switch-auto-renew"
+                    />
+                  </div>
+
+                  {/* Pending cancellation warning */}
+                  {pendingCancellation && (
+                    <div className="flex items-start gap-2 rounded-md bg-destructive/10 px-3 py-2 text-sm text-destructive" data-testid="text-cancel-warning">
+                      <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+                      <span>
+                        Your subscription has been cancelled and will expire on{" "}
+                        <strong>{formatDate(sub?.current_period_end ?? sub?.valid_date_upto)}</strong>.
+                        No further charges will be made. You can reactivate by turning auto-renewal back on.
+                      </span>
+                    </div>
+                  )}
+                </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Separator />
+
           {/* Update profile */}
           <Card>
             <CardHeader className="pb-3">
@@ -419,6 +577,31 @@ export default function AccountSettings() {
 
         </div>
       </div>
+
+      {/* Cancel subscription confirmation dialog */}
+      <AlertDialog open={showCancelDialog} onOpenChange={setShowCancelDialog}>
+        <AlertDialogContent data-testid="dialog-cancel-subscription">
+          <AlertDialogHeader>
+            <AlertDialogTitle>Cancel auto-renewal?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Your subscription will stay active until the end of the current billing period. After that, it won't renew and you'll lose access to premium features. You can turn auto-renewal back on at any time before then.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel data-testid="button-keep-subscription">Keep subscription</AlertDialogCancel>
+            <AlertDialogAction
+              data-testid="button-confirm-cancel"
+              className="bg-destructive text-destructive-foreground"
+              onClick={() => {
+                setShowCancelDialog(false);
+                cancelMutation.mutate();
+              }}
+            >
+              Cancel auto-renewal
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {/* Unsaved changes confirmation dialog */}
       <AlertDialog open={showLeaveDialog} onOpenChange={(open) => { if (!open) handleCancelLeave(); }}>

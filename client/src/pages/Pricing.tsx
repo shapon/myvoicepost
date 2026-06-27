@@ -5,6 +5,7 @@ import { Check, Mic } from "lucide-react";
 import { motion } from "framer-motion";
 import { Link } from "wouter";
 import Header from "@/components/landing/Header";
+import { useAuth } from "@/contexts/AuthContext";
 
 const plans = [
   {
@@ -61,6 +62,7 @@ const plans = [
 
 export default function Pricing() {
   const [isYearly, setIsYearly] = useState(true);
+  const { user } = useAuth();
 
   return (
     <div className="min-h-screen bg-background">
@@ -193,7 +195,13 @@ export default function Pricing() {
                     </p>
                   </div>
 
-                  <Link href="/signup">
+                  <Link href={
+                    plan.cta === "Contact Sales"
+                      ? "mailto:support@myvoicepost.com"
+                      : user
+                        ? `/subscribe?plan=${plan.name}`
+                        : "/signup"
+                  }>
                     <Button
                       className={`w-full mb-6 ${
                         plan.highlighted
@@ -203,7 +211,7 @@ export default function Pricing() {
                       variant={plan.highlighted ? "default" : "outline"}
                       data-testid={`button-get-started-${plan.name.toLowerCase()}`}
                     >
-                      {plan.cta}
+                      {user && plan.cta !== "Contact Sales" ? "Subscribe Now" : plan.cta}
                     </Button>
                   </Link>
 
