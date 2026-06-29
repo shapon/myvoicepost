@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { pgTable, text, varchar, uuid, timestamp, boolean, integer, numeric } from "drizzle-orm/pg-core";
+import { pgTable, text, varchar, uuid, timestamp, boolean, integer, numeric, unique } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod";
 
@@ -333,6 +333,42 @@ export const notificationLog = pgTable("mvp_notification_log", {
   sentAt: timestamp("sent_at").defaultNow(),
   status: varchar("status", { length: 20 }).default("sent"),
   message: text("message"),
+  title: varchar("title", { length: 100 }),
+  readAt: timestamp("read_at"),
 });
 
+export const insertNotificationLogSchema = createInsertSchema(notificationLog).omit({
+  id: true,
+  sentAt: true,
+  readAt: true,
+});
+export type InsertNotificationLog = z.infer<typeof insertNotificationLogSchema>;
 export type NotificationLog = typeof notificationLog.$inferSelect;
+
+export const NOTIFICATION_TYPES = [
+  "subscription_renewed",
+  "payment_failed",
+  "subscription_expired",
+  "topup_credited",
+  "low_minutes",
+  "expiry_3days_manual",
+] as const;
+export type NotificationTypeKey = typeof NOTIFICATION_TYPES[number];
+
+export const notificationPreferences = pgTable("mvp_notification_preferences", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  notificationType: varchar("notification_type", { length: 50 }).notNull(),
+  pushEnabled: boolean("push_enabled").notNull().default(true),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  updatedAt: timestamp("updated_at").defaultNow(),
+}, (t) => ({
+  userTypeUnique: unique().on(t.userId, t.notificationType),
+}));
+
+export const insertNotificationPreferenceSchema = createInsertSchema(notificationPreferences).omit({
+  id: true,
+  updatedAt: true,
+});
+export type InsertNotificationPreference = z.infer<typeof insertNotificationPreferenceSchema>;
+export type NotificationPreference = typeof notificationPreferences.$inferSelect;
