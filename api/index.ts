@@ -202,6 +202,8 @@ const notificationLog = pgTable("mvp_notification_log", {
   sentAt: timestamp("sent_at").defaultNow(),
   status: varchar("status", { length: 20 }).default("sent"),
   message: text("message"),
+  title: varchar("title", { length: 100 }),
+  readAt: timestamp("read_at"),
 });
 
 const supportRequests = pgTable("mvp_support_requests", {
@@ -782,6 +784,9 @@ async function sendPaymentFailedEmail(
             </table>
           </div>
           <p style="color: #666; font-size: 14px;">To keep your subscription active, please update your payment method in the app and try again. Stripe will automatically retry the charge in a few days.</p>
+          <div style="text-align:center;margin:28px 0;">
+            <a href="${process.env.WEB_APP_URL || 'https://myvoicepost.com'}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Update Payment Method</a>
+          </div>
           <hr style="border: none; border-top: 1px solid #e0e0e0; margin: 25px 0;">
           <p style="color: #888; font-size: 13px; margin-bottom: 0;">-- The MyVoicePost Team</p>
         </div>
@@ -804,6 +809,43 @@ async function sendPaymentFailedEmail(
   } catch (emailError: any) {
     console.error(`[FAIL EMAIL] Failed to send payment failure email: ${emailError.message}`);
   }
+}
+
+async function sendSubscriptionRenewedEmail(email: string, planName: string): Promise<void> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping subscription_renewed email"); return; }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } }),
+    });
+    await transporter.verify();
+    const webAppUrl = process.env.WEB_APP_URL || "https://myvoicepost.com";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Subscription Renewed</title></head>
+<body style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
+    <h1 style="color:white;margin:0;">MyVoicePost</h1></div>
+  <div style="background:#fff;padding:30px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+    <h2 style="margin-top:0;">Your subscription has been renewed</h2>
+    <p>Your <strong>${planName}</strong> subscription has been renewed. Your recording minutes have been refreshed and you're ready to go!</p>
+    <p style="color:#666;font-size:14px;">You can manage your subscription anytime from the app settings.</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${webAppUrl}" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Start Recording</a>
+    </div>
+    <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
+    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+  </div>
+  <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
+</body></html>`;
+    await transporter.sendMail({ from: emailFrom, to: email, subject: `MyVoicePost - Your ${planName} Subscription Has Been Renewed`, text: `Your MyVoicePost ${planName} subscription has been renewed. Your recording minutes are refreshed.`, html });
+    console.log(`[Email] subscription_renewed sent to ${email}`);
+  } catch (err: any) { console.error(`[Email] subscription_renewed failed: ${err.message}`); }
 }
 
 async function sendRenewalReminderEmail(
@@ -887,6 +929,154 @@ async function sendRenewalReminderEmail(
   } catch (emailError: any) {
     console.error(`[RENEWAL EMAIL] Failed to send reminder email: ${emailError.message}`);
   }
+}
+
+async function sendSubscriptionExpiredEmail(email: string): Promise<void> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping subscription_expired email"); return; }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } }),
+    });
+    await transporter.verify();
+    const webAppUrl = process.env.WEB_APP_URL || "https://myvoicepost.com";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Subscription Expired</title></head>
+<body style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
+    <h1 style="color:white;margin:0;">MyVoicePost</h1></div>
+  <div style="background:#fff;padding:30px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+    <h2 style="margin-top:0;">Your subscription has ended</h2>
+    <p>Your MyVoicePost subscription has expired. We hope you enjoyed using the app!</p>
+    <p style="color:#666;font-size:14px;">Your recording history is safe. Subscribe again to keep recording.</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${webAppUrl}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Renew Subscription</a>
+    </div>
+    <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
+    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+  </div>
+  <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
+</body></html>`;
+    await transporter.sendMail({ from: emailFrom, to: email, subject: "MyVoicePost - Your Subscription Has Ended", text: "Your MyVoicePost subscription has expired. Subscribe again to continue recording.", html });
+    console.log(`[Email] subscription_expired sent to ${email}`);
+  } catch (err: any) { console.error(`[Email] subscription_expired failed: ${err.message}`); }
+}
+
+async function sendTopUpCreditedEmail(email: string, minutes: number): Promise<void> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping topup_credited email"); return; }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } }),
+    });
+    await transporter.verify();
+    const webAppUrl = process.env.WEB_APP_URL || "https://myvoicepost.com";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Top-Up Credited</title></head>
+<body style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
+    <h1 style="color:white;margin:0;">MyVoicePost</h1></div>
+  <div style="background:#fff;padding:30px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+    <h2 style="margin-top:0;">${minutes} minutes added to your account</h2>
+    <p>Your top-up was successful! <strong>${minutes} recording minutes</strong> have been added to your account and are available immediately.</p>
+    <p style="color:#666;font-size:14px;">Open the app to start recording.</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${webAppUrl}" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Start Recording</a>
+    </div>
+    <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
+    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+  </div>
+  <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
+</body></html>`;
+    await transporter.sendMail({ from: emailFrom, to: email, subject: `MyVoicePost - ${minutes} Minutes Added to Your Account`, text: `${minutes} recording minutes have been added to your MyVoicePost account.`, html });
+    console.log(`[Email] topup_credited sent to ${email}`);
+  } catch (err: any) { console.error(`[Email] topup_credited failed: ${err.message}`); }
+}
+
+async function sendLowMinutesEmail(email: string, minsLeft: number): Promise<void> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping low_minutes email"); return; }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } }),
+    });
+    await transporter.verify();
+    const webAppUrl = process.env.WEB_APP_URL || "https://myvoicepost.com";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Low on Minutes</title></head>
+<body style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
+    <h1 style="color:white;margin:0;">MyVoicePost</h1></div>
+  <div style="background:#fff;padding:30px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+    <h2 style="margin-top:0;">You're running low on recording time</h2>
+    <p>You have <strong>${minsLeft} minute${minsLeft === 1 ? "" : "s"}</strong> remaining. Top up now to keep recording without interruption.</p>
+    <p style="color:#666;font-size:14px;">Top-ups are available instantly and added on top of your existing balance.</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${webAppUrl}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Top Up Now</a>
+    </div>
+    <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
+    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+  </div>
+  <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
+</body></html>`;
+    await transporter.sendMail({ from: emailFrom, to: email, subject: `MyVoicePost - Only ${minsLeft} Minute${minsLeft === 1 ? "" : "s"} Remaining`, text: `You have ${minsLeft} recording minutes remaining. Top up now to keep recording.`, html });
+    console.log(`[Email] low_minutes sent to ${email}`);
+  } catch (err: any) { console.error(`[Email] low_minutes failed: ${err.message}`); }
+}
+
+async function sendSubscriptionExpiringSoonEmail(email: string, planName: string, daysLeft: number): Promise<void> {
+  const smtpHost = process.env.SMTP_HOST;
+  const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
+  const smtpSecure = process.env.SMTP_SECURE === "true";
+  const smtpUser = process.env.SMTP_USER;
+  const smtpPass = process.env.SMTP_PASS;
+  const emailFrom = process.env.EMAIL_FROM || smtpUser;
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping expiry_3days_manual email"); return; }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: smtpHost, port: smtpPort, secure: smtpSecure,
+      auth: { user: smtpUser, pass: smtpPass },
+      ...(smtpPort === 587 && !smtpSecure && { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } }),
+    });
+    await transporter.verify();
+    const webAppUrl = process.env.WEB_APP_URL || "https://myvoicepost.com";
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Subscription Expiring Soon</title></head>
+<body style="font-family:-apple-system,sans-serif;max-width:600px;margin:0 auto;padding:20px;">
+  <div style="background:linear-gradient(135deg,#f59e0b 0%,#d97706 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
+    <h1 style="color:white;margin:0;">MyVoicePost</h1></div>
+  <div style="background:#fff;padding:30px;border:1px solid #e0e0e0;border-top:none;border-radius:0 0 10px 10px;">
+    <h2 style="margin-top:0;">Your subscription expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"}</h2>
+    <p>Your <strong>${planName}</strong> subscription will expire in <strong>${daysLeft} day${daysLeft === 1 ? "" : "s"}</strong> and will <em>not</em> renew automatically.</p>
+    <p style="color:#666;font-size:14px;">To avoid any interruption, subscribe again before your expiry date. Your recording history will be preserved.</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${webAppUrl}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Renew Now</a>
+    </div>
+    <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
+    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+  </div>
+  <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
+</body></html>`;
+    await transporter.sendMail({ from: emailFrom, to: email, subject: `MyVoicePost - Your Subscription Expires in ${daysLeft} Day${daysLeft === 1 ? "" : "s"}`, text: `Your MyVoicePost ${planName} subscription expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} and will not auto-renew.`, html });
+    console.log(`[Email] expiry_3days_manual sent to ${email}`);
+  } catch (err: any) { console.error(`[Email] expiry_3days_manual failed: ${err.message}`); }
 }
 
 // ============ CRASH REPORT EMAIL ============
@@ -1729,8 +1919,114 @@ const translations = new Map<string, any>();
 
 // ============ ROUTES ============
 
+// Run startup migration: ensure notification log columns exist
+(async () => {
+  try {
+    await db.execute(sql`
+      ALTER TABLE mvp_notification_log
+        ADD COLUMN IF NOT EXISTS title varchar(100),
+        ADD COLUMN IF NOT EXISTS read_at timestamp
+    `);
+  } catch (_migErr: any) {
+    console.warn("[Migration] mvp_notification_log column check skipped:", (_migErr as any)?.message);
+  }
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS mvp_notification_preferences (
+        id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id uuid NOT NULL,
+        notification_type varchar(50) NOT NULL,
+        push_enabled boolean NOT NULL DEFAULT true,
+        email_enabled boolean NOT NULL DEFAULT true,
+        updated_at timestamp DEFAULT now(),
+        UNIQUE(user_id, notification_type)
+      )
+    `);
+  } catch (_migErr2: any) {
+    console.warn("[Migration] mvp_notification_preferences check skipped:", (_migErr2 as any)?.message);
+  }
+})();
+
+const NOTIFICATION_TYPES_API = [
+  "subscription_renewed",
+  "payment_failed",
+  "subscription_expired",
+  "topup_credited",
+  "low_minutes",
+  "expiry_3days_manual",
+] as const;
+
+async function getNotificationPrefApi(userId: string, notificationType: string): Promise<{ pushEnabled: boolean; emailEnabled: boolean }> {
+  try {
+    const result = await db.execute(sql`
+      SELECT push_enabled, email_enabled FROM mvp_notification_preferences
+      WHERE user_id = ${userId} AND notification_type = ${notificationType}
+      LIMIT 1
+    `);
+    const rows = result.rows as any[];
+    if (rows.length === 0) return { pushEnabled: true, emailEnabled: true };
+    return { pushEnabled: rows[0].push_enabled !== false, emailEnabled: rows[0].email_enabled !== false };
+  } catch {
+    return { pushEnabled: true, emailEnabled: true };
+  }
+}
+
 app.get("/api/health", (req, res) => {
   res.json({ status: "ok" });
+});
+
+// -- Notification Preferences ----------------------------------------------
+app.get("/api/v1/a/notification-preferences", jwtAuthMiddleware, async (req: any, res) => {
+  const jwtUser = req.jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  try {
+    const rows = (await db.execute(sql`
+      SELECT notification_type, push_enabled, email_enabled
+      FROM mvp_notification_preferences WHERE user_id = ${userId}
+    `)).rows as any[];
+    const existingMap = new Map(rows.map((r: any) => [r.notification_type, r]));
+    for (const t of NOTIFICATION_TYPES_API) {
+      if (!existingMap.has(t)) {
+        await db.execute(sql`
+          INSERT INTO mvp_notification_preferences (id, user_id, notification_type, push_enabled, email_enabled, updated_at)
+          VALUES (gen_random_uuid(), ${userId}, ${t}, true, true, now())
+          ON CONFLICT (user_id, notification_type) DO NOTHING
+        `);
+        existingMap.set(t, { notification_type: t, push_enabled: true, email_enabled: true });
+      }
+    }
+    const preferences = NOTIFICATION_TYPES_API.map(t => {
+      const p = existingMap.get(t);
+      return { notificationType: t, pushEnabled: p?.push_enabled !== false, emailEnabled: p?.email_enabled !== false };
+    });
+    res.json({ success: true, preferences });
+  } catch (error: any) {
+    console.error("[NotifPrefs] GET error:", error);
+    res.status(500).json({ success: false, error: "Failed to fetch notification preferences" });
+  }
+});
+
+app.patch("/api/v1/a/notification-preferences", jwtAuthMiddleware, async (req: any, res) => {
+  const jwtUser = req.jwtUser;
+  const userId = jwtUser?.userId || jwtUser?.id;
+  if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  const { notificationType, pushEnabled, emailEnabled } = req.body || {};
+  if (!notificationType || typeof pushEnabled !== "boolean" || typeof emailEnabled !== "boolean") {
+    return res.status(400).json({ success: false, error: "Invalid request" });
+  }
+  try {
+    await db.execute(sql`
+      INSERT INTO mvp_notification_preferences (id, user_id, notification_type, push_enabled, email_enabled, updated_at)
+      VALUES (gen_random_uuid(), ${userId}, ${notificationType}, ${pushEnabled}, ${emailEnabled}, now())
+      ON CONFLICT (user_id, notification_type)
+      DO UPDATE SET push_enabled = EXCLUDED.push_enabled, email_enabled = EXCLUDED.email_enabled, updated_at = now()
+    `);
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("[NotifPrefs] PATCH error:", error);
+    res.status(500).json({ success: false, error: "Failed to update notification preference" });
+  }
 });
 
 // Base64 endpoints for mobile app
@@ -5646,17 +5942,17 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
       }
 
       // Record the top-up purchase in mvp_user_subscriptions
-      await tx.insert(userSubscriptions).values({
+      const [newTopupSub] = await tx.insert(userSubscriptions).values({
         userId,
         planId: topupPlanId,
         status: "completed",
         minutesRemaining: String(topupMinutes),
         paymentToken: paymentIntentId,
         validDateUpto: new Date(),
-      });
+      }).returning({ id: userSubscriptions.id });
 
       const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
-      return { alreadyApplied: false, newMinutesTotal, newRemaining };
+      return { alreadyApplied: false, newMinutesTotal, newRemaining, newTopupSubId: newTopupSub?.id };
     });
 
     if (result.alreadyApplied) {
@@ -5676,6 +5972,39 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
       trialMinutesTotal: result.newMinutesTotal,
       minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
     });
+
+    // Fire-and-forget push — after response is sent, no risk of blocking
+    ;(async () => {
+      try {
+        const { pushEnabled: tcPrefPush, emailEnabled: tcPrefEmail } = await getNotificationPrefApi(userId, "topup_credited");
+        const tokens = await db.select().from(pushTokens)
+          .where(and(eq(pushTokens.userId, userId), eq(pushTokens.isActive, true)));
+        if (tokens.length > 0 && tcPrefPush) {
+          await sendExpoPushNotifications(
+            tokens.map(t => t.pushToken),
+            "Top-Up Credited",
+            `${topupMinutes} minutes have been added to your account!`,
+            { type: "topup_credited", screen: "home" }
+          );
+        }
+        await db.insert(notificationLog).values({
+          userId,
+          notificationType: "topup_credited",
+          title: "Top-Up Credited",
+          status: "sent",
+          message: `${topupMinutes} minutes top-up credited`,
+          subscriptionId: result.newTopupSubId,
+        });
+        const topupEmailUser = await db.select({ email: users.email }).from(users)
+          .where(eq(users.id, userId)).limit(1);
+        if (topupEmailUser[0]?.email && tcPrefEmail) {
+          sendTopUpCreditedEmail(topupEmailUser[0].email, topupMinutes)
+            .catch((e: any) => console.error("[Email] topup_credited:", e.message));
+        }
+      } catch (pushErr: any) {
+        console.error("[Push] topup_credited notification failed:", pushErr.message);
+      }
+    })();
   } catch (error: any) {
     console.error("[Confirm Top-up] Error:", error);
     res.status(500).json({ success: false, error: error.message || "Failed to confirm top-up" });
@@ -6355,17 +6684,43 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 await refreshUserRole(user.id);
                 console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}, access until ${newTrialEndsAt.toISOString()}, ${totalNewMinutesRemaining} mins remaining`);
 
-                if (user.email) {
-                  const carryoverMinutes = isWithinTrial ? currentMinutesRemaining : 0;
-                  sendSubscriptionConfirmationEmail(
-                    user.email,
-                    matchedPlan.name,
-                    matchedPlan.priceMonthly,
-                    totalNewMinutesRemaining,
-                    newTrialEndsAt,
-                    carryoverMinutes
-                  ).catch(err => console.error("[Stripe Webhook] Email send error:", err.message));
-                }
+                // Fire-and-forget push + email — must never block webhook 200 response
+                ;(async () => {
+                  try {
+                    const dedupKey = `sub_renewed_${subscriptionId}_${invoice.period_start || ''}`;
+                    const existing = await db.select().from(notificationLog)
+                      .where(and(
+                        eq(notificationLog.userId, user.id),
+                        eq(notificationLog.notificationType, "subscription_renewed"),
+                        eq(notificationLog.message, dedupKey),
+                      )).limit(1);
+                    if (existing.length > 0) return;
+                    const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPrefApi(user.id, "subscription_renewed");
+                    const tokens = await db.select().from(pushTokens)
+                      .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                    if (tokens.length > 0 && prefPush) {
+                      await sendExpoPushNotifications(
+                        tokens.map(t => t.pushToken),
+                        "Subscription Renewed",
+                        `Your ${matchedPlan.name} plan has been renewed. Enjoy your recording minutes!`,
+                        { type: "subscription_renewed", screen: "subscription" }
+                      );
+                    }
+                    await db.insert(notificationLog).values({
+                      userId: user.id,
+                      notificationType: "subscription_renewed",
+                      title: "Subscription Renewed",
+                      status: "sent",
+                      message: dedupKey,
+                    });
+                    if (user.email && prefEmail) {
+                      sendSubscriptionRenewedEmail(user.email, matchedPlan.name)
+                        .catch(err => console.error("[Stripe Webhook] subscription_renewed email error:", err.message));
+                    }
+                  } catch (pushErr: any) {
+                    console.error("[Push] subscription_renewed failed:", pushErr.message);
+                  }
+                })();
               }
             }
           }
@@ -6404,33 +6759,64 @@ async function handleStripeWebhook(req: Request, res: Response) {
             await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${failedSubId}`);
 
-            if (user.email) {
-              const failureMessage = failedInvoice.last_finalization_error?.message
-                || (failedInvoice.attempt_count > 1
-                  ? `Payment retry attempt ${failedInvoice.attempt_count} failed. Your card was declined.`
-                  : "Your payment method was declined. Please check your card details or try a different payment method.");
-
-              let planName = "Starter";
-              if (failedSubId) {
-                try {
-                  const sub = await stripe.subscriptions.retrieve(failedSubId);
-                  const priceId = sub.items.data[0]?.price?.id;
-                  if (priceId) {
-                    const planResult = await db.select().from(subscriptionPlans)
-                      .where(eq(subscriptionPlans.stripePriceId, priceId))
-                      .limit(1);
-                    if (planResult.length > 0) planName = planResult[0].name;
+            // Fire-and-forget push + email — must never block webhook 200 response
+            ;(async () => {
+              try {
+                const dedupKey = `payment_failed_${failedInvoice.id}`;
+                const existing = await db.select().from(notificationLog)
+                  .where(and(
+                    eq(notificationLog.userId, user.id),
+                    eq(notificationLog.notificationType, "payment_failed"),
+                    eq(notificationLog.message, dedupKey),
+                  )).limit(1);
+                if (existing.length > 0) return;
+                const { pushEnabled: pfPrefPush, emailEnabled: pfPrefEmail } = await getNotificationPrefApi(user.id, "payment_failed");
+                const tokens = await db.select().from(pushTokens)
+                  .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                if (tokens.length > 0 && pfPrefPush) {
+                  await sendExpoPushNotifications(
+                    tokens.map(t => t.pushToken),
+                    "Payment Failed",
+                    "We couldn't process your payment. Please update your payment method to keep your subscription active.",
+                    { type: "payment_failed", screen: "subscription" }
+                  );
+                }
+                await db.insert(notificationLog).values({
+                  userId: user.id,
+                  notificationType: "payment_failed",
+                  title: "Payment Failed",
+                  status: "sent",
+                  message: dedupKey,
+                });
+                if (user.email && pfPrefEmail) {
+                  const failureMessage = failedInvoice.last_finalization_error?.message
+                    || (failedInvoice.attempt_count > 1
+                      ? `Payment retry attempt ${failedInvoice.attempt_count} failed. Your card was declined.`
+                      : "Your payment method was declined. Please check your card details or try a different payment method.");
+                  let pfPlanName = "Starter";
+                  if (failedSubId) {
+                    try {
+                      const pfSub = await stripe.subscriptions.retrieve(failedSubId);
+                      const priceId = pfSub.items.data[0]?.price?.id;
+                      if (priceId) {
+                        const planResult = await db.select().from(subscriptionPlans)
+                          .where(eq(subscriptionPlans.stripePriceId, priceId))
+                          .limit(1);
+                        if (planResult.length > 0) pfPlanName = planResult[0].name;
+                      }
+                    } catch (_) {}
                   }
-                } catch (_) {}
+                  sendPaymentFailedEmail(
+                    user.email,
+                    failureMessage,
+                    failedInvoice.amount_due || 0,
+                    pfPlanName
+                  ).catch(err => console.error("[Stripe Webhook] Failure email send error:", err.message));
+                }
+              } catch (pushErr: any) {
+                console.error("[Push] payment_failed notification failed:", pushErr.message);
               }
-
-              sendPaymentFailedEmail(
-                user.email,
-                failureMessage,
-                failedInvoice.amount_due || 0,
-                planName
-              ).catch(err => console.error("[Stripe Webhook] Failure email send error:", err.message));
-            }
+            })();
           }
         }
         break;
@@ -6533,6 +6919,44 @@ async function handleStripeWebhook(req: Request, res: Response) {
 
             await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
+
+            // Fire-and-forget push — must never block webhook 200 response
+            ;(async () => {
+              try {
+                const dedupKey = `sub_expired_${deletedSub.id}`;
+                const existing = await db.select().from(notificationLog)
+                  .where(and(
+                    eq(notificationLog.userId, user.id),
+                    eq(notificationLog.notificationType, "subscription_expired"),
+                    eq(notificationLog.message, dedupKey),
+                  )).limit(1);
+                if (existing.length > 0) return;
+                const { pushEnabled: sePrefPush, emailEnabled: sePrefEmail } = await getNotificationPrefApi(user.id, "subscription_expired");
+                const tokens = await db.select().from(pushTokens)
+                  .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                if (tokens.length > 0 && sePrefPush) {
+                  await sendExpoPushNotifications(
+                    tokens.map(t => t.pushToken),
+                    "Subscription Expired",
+                    "Your subscription has ended. Subscribe again to continue enjoying MyVoicePost.",
+                    { type: "subscription_expired", screen: "subscription" }
+                  );
+                }
+                await db.insert(notificationLog).values({
+                  userId: user.id,
+                  notificationType: "subscription_expired",
+                  title: "Subscription Expired",
+                  status: "sent",
+                  message: dedupKey,
+                });
+                if (user.email && sePrefEmail) {
+                  sendSubscriptionExpiredEmail(user.email)
+                    .catch((e: any) => console.error("[Email] subscription_expired:", e.message));
+                }
+              } catch (pushErr: any) {
+                console.error("[Push] subscription_expired notification failed:", pushErr.message);
+              }
+            })();
           }
         }
         break;
@@ -6893,6 +7317,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       await db.insert(notificationLog).values({
         userId: sub.userId,
         notificationType,
+        title: notificationTitle,
         subscriptionId: sub.subId,
         status: "sent",
         message: notificationBody,
@@ -6966,12 +7391,138 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       await db.insert(notificationLog).values({
         userId: user.id,
         notificationType,
+        title: notificationTitle,
         status: "sent",
         message: notificationBody,
       });
 
       sentCount++;
       console.log(`[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`);
+    }
+
+    // === LOW MINUTES WARNING (=10 minutes remaining) ===
+    try {
+      const lowMinuteSubs = await db.select({
+        subId: userSubscriptions.id,
+        userId: userSubscriptions.userId,
+        minutesRemaining: userSubscriptions.minutesRemaining,
+        planName: subscriptionPlans.name,
+      }).from(userSubscriptions)
+        .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+        .where(eq(userSubscriptions.status, "active"));
+
+      for (const sub of lowMinuteSubs) {
+        const remaining = parseFloat(String(sub.minutesRemaining || "0"));
+        if (remaining > 10) continue;
+
+        const alreadySent = await db.select().from(notificationLog)
+          .where(and(
+            eq(notificationLog.userId, sub.userId),
+            eq(notificationLog.notificationType, "low_minutes"),
+            eq(notificationLog.subscriptionId, sub.subId),
+          )).limit(1);
+        if (alreadySent.length > 0) { skippedCount++; continue; }
+
+        const userTokens = await db.select().from(pushTokens)
+          .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+
+        const minsLeft = Math.max(0, Math.floor(remaining));
+        const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } = await getNotificationPrefApi(sub.userId, "low_minutes");
+        if (userTokens.length > 0 && lmPrefPush) await sendExpoPushNotifications(
+          userTokens.map(t => t.pushToken),
+          "Low on Minutes",
+          `You have ${minsLeft} minute${minsLeft === 1 ? "" : "s"} remaining. Top up now to keep recording!`,
+          { type: "low_minutes", screen: "home" }
+        );
+        await db.insert(notificationLog).values({
+          userId: sub.userId,
+          notificationType: "low_minutes",
+          title: "Low on Minutes",
+          subscriptionId: sub.subId,
+          status: "sent",
+          message: `${minsLeft} minutes remaining warning`,
+        });
+        const lowMinEmailUser = await db.select({ email: users.email }).from(users)
+          .where(eq(users.id, sub.userId)).limit(1);
+        if (lowMinEmailUser[0]?.email && lmPrefEmail) {
+          sendLowMinutesEmail(lowMinEmailUser[0].email, minsLeft)
+            .catch((e: any) => console.error("[Email] low_minutes:", e.message));
+        }
+        sentCount++;
+        console.log(`[Cron] Sent low_minutes notification to user ${sub.userId} (${minsLeft} mins left)`);
+      }
+    } catch (lowMinErr: any) {
+      console.error("[Cron] Low minutes check failed:", lowMinErr.message);
+    }
+
+    // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===
+    try {
+      const threeDaysFromNow = new Date(now.getTime() + 3 * oneDayMs);
+      const manualPayerSubs = await db.select({
+        subId: userSubscriptions.id,
+        userId: userSubscriptions.userId,
+        validDateUpto: userSubscriptions.validDateUpto,
+        planName: subscriptionPlans.name,
+        stripeSubscriptionId: users.stripeSubscriptionId,
+      }).from(userSubscriptions)
+        .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+        .innerJoin(users, eq(userSubscriptions.userId, users.id))
+        .where(and(
+          eq(userSubscriptions.status, "active"),
+          gte(userSubscriptions.validDateUpto, now),
+          sql`${userSubscriptions.validDateUpto} <= ${threeDaysFromNow}`,
+        ));
+
+      for (const sub of manualPayerSubs) {
+        if (!sub.stripeSubscriptionId) continue;
+
+        const alreadySent = await db.select().from(notificationLog)
+          .where(and(
+            eq(notificationLog.userId, sub.userId),
+            eq(notificationLog.notificationType, "expiry_3days_manual"),
+            eq(notificationLog.subscriptionId, sub.subId),
+          )).limit(1);
+        if (alreadySent.length > 0) { skippedCount++; continue; }
+
+        // Verify this is a manual payer (cancel_at_period_end=true) via Stripe
+        try {
+          const stripeClient = await getStripeClient();
+          const stripeSub = await stripeClient.subscriptions.retrieve(sub.stripeSubscriptionId);
+          if (!stripeSub.cancel_at_period_end) continue;
+        } catch {
+          continue;
+        }
+
+        const userTokens = await db.select().from(pushTokens)
+          .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+
+        const daysLeft = Math.ceil((new Date(sub.validDateUpto!).getTime() - now.getTime()) / oneDayMs);
+        const { pushEnabled: exPrefPush, emailEnabled: exPrefEmail } = await getNotificationPrefApi(sub.userId, "expiry_3days_manual");
+        if (userTokens.length > 0 && exPrefPush) await sendExpoPushNotifications(
+          userTokens.map(t => t.pushToken),
+          "Subscription Expiring in 3 Days",
+          `Your ${sub.planName || "subscription"} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} and will not auto-renew. Subscribe again to continue.`,
+          { type: "expiry_3days_manual", screen: "subscription" }
+        );
+        await db.insert(notificationLog).values({
+          userId: sub.userId,
+          notificationType: "expiry_3days_manual",
+          title: "Subscription Expiring Soon",
+          subscriptionId: sub.subId,
+          status: "sent",
+          message: `Manual subscription expiring in ${daysLeft} days`,
+        });
+        const expiryEmailUser = await db.select({ email: users.email }).from(users)
+          .where(eq(users.id, sub.userId)).limit(1);
+        if (expiryEmailUser[0]?.email && exPrefEmail) {
+          sendSubscriptionExpiringSoonEmail(expiryEmailUser[0].email, sub.planName || "subscription", daysLeft)
+            .catch((e: any) => console.error("[Email] expiry_3days_manual:", e.message));
+        }
+        sentCount++;
+        console.log(`[Cron] Sent expiry_3days_manual notification to user ${sub.userId}`);
+      }
+    } catch (manualErr: any) {
+      console.error("[Cron] Manual expiry 3-day check failed:", manualErr.message);
     }
 
     console.log(`[Cron] Notifications done. Sent: ${sentCount}, Skipped: ${skippedCount}`);
@@ -7021,6 +7572,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
               await db.insert(notificationLog).values({
                 userId: u.userId,
                 notificationType: "renewal_reminder_3days",
+                title: "Renewal Reminder",
                 status: "sent",
                 message: renewalKey,
               });
@@ -8121,6 +8673,50 @@ app.post("/api/v1/a/doc-ai", mobileAuthMiddleware, docUpload.single("file"), asy
   } catch (err: any) {
     console.error("[DocAI] Error:", err);
     return res.status(500).json({ success: false, error: err.message || "Internal server error." });
+  }
+});
+
+// GET /api/v1/a/notifications - Fetch notification inbox
+app.get("/api/v1/a/notifications", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.jwtUser?.userId || req.jwtUser?.id;
+    const offset = parseInt(String(req.query.offset || "0"), 10);
+    const limit = Math.min(parseInt(String(req.query.limit || "50"), 10), 50);
+
+    const notifications = await db
+      .select()
+      .from(notificationLog)
+      .where(eq(notificationLog.userId, userId))
+      .orderBy(desc(notificationLog.sentAt))
+      .limit(limit)
+      .offset(offset);
+
+    const unreadResult = await db
+      .select({ count: sql<number>`count(*)::int` })
+      .from(notificationLog)
+      .where(and(eq(notificationLog.userId, userId), sql`${notificationLog.readAt} IS NULL`));
+
+    const unreadCount = unreadResult[0]?.count ?? 0;
+
+    res.json({ success: true, notifications, unreadCount });
+  } catch (error: any) {
+    console.error("[Notifications] Error fetching:", error.message);
+    res.status(500).json({ success: false, error: "Failed to fetch notifications" });
+  }
+});
+
+// POST /api/v1/a/notifications/read-all - Mark all as read
+app.post("/api/v1/a/notifications/read-all", mobileAuthMiddleware, async (req: any, res) => {
+  try {
+    const userId = req.jwtUser?.userId || req.jwtUser?.id;
+    await db
+      .update(notificationLog)
+      .set({ readAt: new Date() })
+      .where(and(eq(notificationLog.userId, userId), sql`${notificationLog.readAt} IS NULL`));
+    res.json({ success: true });
+  } catch (error: any) {
+    console.error("[Notifications] Error marking read:", error.message);
+    res.status(500).json({ success: false, error: "Failed to mark notifications as read" });
   }
 });
 

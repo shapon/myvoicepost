@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
-import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle } from "lucide-react";
+import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle, Bell } from "lucide-react";
 
 interface SubscriptionInfo {
   id: string;
@@ -136,6 +136,60 @@ export default function AccountSettings() {
       toast({ title: "Error", description: err.message, variant: "destructive" });
     },
   });
+
+  // ── Notification preferences ────────────────────────────────────────────────
+  const NOTIF_LABELS: Record<string, { label: string; description: string }> = {
+    subscription_renewed: { label: "Subscription Renewed", description: "When your plan renews successfully" },
+    payment_failed: { label: "Payment Failed", description: "When a payment attempt fails" },
+    subscription_expired: { label: "Subscription Expired", description: "When your subscription ends" },
+    topup_credited: { label: "Top-Up Credited", description: "When minutes are added to your account" },
+    low_minutes: { label: "Low on Minutes", description: "When you're running low on recording time" },
+    expiry_3days_manual: { label: "Subscription Expiring Soon", description: "3-day warning before your plan ends" },
+  };
+
+  interface NotifPref { notificationType: string; pushEnabled: boolean; emailEnabled: boolean; }
+
+  const { data: notifData, isLoading: notifLoading } = useQuery<{ success: boolean; preferences: NotifPref[] }>({
+    queryKey: ["/api/v1/a/notification-preferences"],
+  });
+
+  const notifPrefs: Record<string, NotifPref> = {};
+  if (notifData?.preferences) {
+    notifData.preferences.forEach(p => { notifPrefs[p.notificationType] = p; });
+  }
+
+  const notifMutation = useMutation({
+    mutationFn: async (pref: NotifPref) => {
+      const res = await apiRequest("PATCH", "/api/v1/a/notification-preferences", pref);
+      if (!res.ok) throw new Error("Failed to save preference");
+      return res.json();
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/notification-preferences"] });
+      toast({ title: "Saved", description: "Notification preference updated" });
+    },
+    onError: () => {
+      toast({ title: "Error", description: "Could not save notification preference", variant: "destructive" });
+      queryClient.invalidateQueries({ queryKey: ["/api/v1/a/notification-preferences"] });
+    },
+  });
+
+  function toggleNotifPref(type: string, field: "pushEnabled" | "emailEnabled", value: boolean) {
+    const current = notifPrefs[type] ?? { notificationType: type, pushEnabled: true, emailEnabled: true };
+    const updated = { ...current, [field]: value };
+    queryClient.setQueryData<{ success: boolean; preferences: NotifPref[] }>(
+      ["/api/v1/a/notification-preferences"],
+      (old) => {
+        if (!old) return old;
+        const exists = old.preferences.some(p => p.notificationType === type);
+        const preferences = exists
+          ? old.preferences.map(p => p.notificationType === type ? updated : p)
+          : [...old.preferences, updated];
+        return { ...old, preferences };
+      }
+    );
+    notifMutation.mutate(updated);
+  }
 
   // Profile form
   const profileForm = useForm<ProfileValues>({
@@ -414,6 +468,60 @@ export default function AccountSettings() {
                     </div>
                   )}
                 </>
+              )}
+            </CardContent>
+          </Card>
+
+          <Separator />
+
+          {/* Notification Preferences */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Bell className="w-4 h-4 text-muted-foreground" />
+                <CardTitle className="text-base">Notification Preferences</CardTitle>
+              </div>
+              <CardDescription>Choose which notifications you receive by push or email</CardDescription>
+            </CardHeader>
+            <CardContent>
+              {notifLoading ? (
+                <div className="space-y-3">
+                  {[1,2,3,4,5,6].map(i => <Skeleton key={i} className="h-10 w-full" />)}
+                </div>
+              ) : (
+                <div className="space-y-1">
+                  <div className="grid grid-cols-[1fr_auto_auto] gap-x-4 items-center pb-2 mb-1 border-b">
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Notification</span>
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide text-center w-12">Push</span>
+                    <span className="text-xs font-medium text-muted-foreground uppercase tracking-wide text-center w-12">Email</span>
+                  </div>
+                  {Object.keys(NOTIF_LABELS).map(type => {
+                    const pref = notifPrefs[type] ?? { notificationType: type, pushEnabled: true, emailEnabled: true };
+                    const info = NOTIF_LABELS[type];
+                    return (
+                      <div key={type} className="grid grid-cols-[1fr_auto_auto] gap-x-4 items-center py-2.5">
+                        <div>
+                          <p className="text-sm font-medium" data-testid={`text-notif-label-${type}`}>{info.label}</p>
+                          <p className="text-xs text-muted-foreground">{info.description}</p>
+                        </div>
+                        <div className="flex justify-center w-12">
+                          <Switch
+                            checked={pref.pushEnabled}
+                            onCheckedChange={v => toggleNotifPref(type, "pushEnabled", v)}
+                            data-testid={`switch-notif-push-${type}`}
+                          />
+                        </div>
+                        <div className="flex justify-center w-12">
+                          <Switch
+                            checked={pref.emailEnabled}
+                            onCheckedChange={v => toggleNotifPref(type, "emailEnabled", v)}
+                            data-testid={`switch-notif-email-${type}`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
               )}
             </CardContent>
           </Card>

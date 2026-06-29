@@ -19,9 +19,21 @@ import {
   appSettings,
   crashReports,
   notificationLog,
+  notificationPreferences,
+  NOTIFICATION_TYPES,
 } from "@shared/schema";
 import type { UserRole } from "@shared/schema";
-import { sendPasswordResetEmail, buildResetResponse, RESET_TOKEN_EXPIRY_HOURS } from "./email";
+import {
+  sendPasswordResetEmail,
+  buildResetResponse,
+  RESET_TOKEN_EXPIRY_HOURS,
+  sendSubscriptionRenewedEmail,
+  sendPaymentFailedEmail,
+  sendSubscriptionExpiredEmail,
+  sendTopUpCreditedEmail,
+  sendLowMinutesEmail,
+  sendSubscriptionExpiringSoonEmail,
+} from "./email";
 import { transcribeAudio, transcribeAudioAuto, translateAndPolish, polishText, transformTextWithTone, transcribeAudioFromUrl, toneCategories } from "./gemini";
 import { db } from "./supabase-db";
 import { eq, and, gte, desc, sql, count, lt, lte } from "drizzle-orm";
@@ -252,6 +264,20 @@ const upload = multer({
   },
 });
 
+async function getNotificationPref(userId: string, notificationType: string): Promise<{ pushEnabled: boolean; emailEnabled: boolean }> {
+  try {
+    const pref = await db.select().from(notificationPreferences)
+      .where(and(
+        eq(notificationPreferences.userId, userId),
+        eq(notificationPreferences.notificationType, notificationType),
+      )).limit(1);
+    if (pref.length === 0) return { pushEnabled: true, emailEnabled: true };
+    return { pushEnabled: pref[0].pushEnabled, emailEnabled: pref[0].emailEnabled };
+  } catch {
+    return { pushEnabled: true, emailEnabled: true };
+  }
+}
+
 export async function registerRoutes(
   httpServer: Server,
   app: Express,
@@ -259,10 +285,91 @@ export async function registerRoutes(
   // Apply JWT middleware to all API routes
   app.use("/api", jwtAuthMiddleware);
 
+  // Run startup migration: ensure notification log columns exist
+  try {
+    await db.execute(sql`
+      ALTER TABLE mvp_notification_log
+        ADD COLUMN IF NOT EXISTS title varchar(100),
+        ADD COLUMN IF NOT EXISTS read_at timestamp
+    `);
+  } catch (_migErr: any) {
+    console.warn("[Migration] mvp_notification_log column check skipped:", _migErr?.message);
+  }
+
+  // Ensure notification preferences table exists
+  try {
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS mvp_notification_preferences (
+        id uuid DEFAULT gen_random_uuid() PRIMARY KEY,
+        user_id uuid NOT NULL,
+        notification_type varchar(50) NOT NULL,
+        push_enabled boolean NOT NULL DEFAULT true,
+        email_enabled boolean NOT NULL DEFAULT true,
+        updated_at timestamp DEFAULT now(),
+        UNIQUE(user_id, notification_type)
+      )
+    `);
+  } catch (_migErr2: any) {
+    console.warn("[Migration] mvp_notification_preferences check skipped:", _migErr2?.message);
+  }
 
   // Health check endpoint
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
+  });
+
+  // -- Notification Preferences ----------------------------------------------
+  app.get("/api/v1/a/notification-preferences", async (req, res) => {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+    try {
+      const existing = await db.select().from(notificationPreferences)
+        .where(eq(notificationPreferences.userId, userId));
+      const existingMap = new Map(existing.map(p => [p.notificationType, p]));
+      const toInsert = NOTIFICATION_TYPES.filter(t => !existingMap.has(t)).map(t => ({
+        userId,
+        notificationType: t,
+        pushEnabled: true,
+        emailEnabled: true,
+      }));
+      if (toInsert.length > 0) {
+        const inserted = await db.insert(notificationPreferences).values(toInsert).onConflictDoNothing().returning();
+        inserted.forEach(p => existingMap.set(p.notificationType, p));
+      }
+      const preferences = NOTIFICATION_TYPES.map(t => {
+        const p = existingMap.get(t);
+        return { notificationType: t, pushEnabled: p?.pushEnabled ?? true, emailEnabled: p?.emailEnabled ?? true };
+      });
+      res.json({ success: true, preferences });
+    } catch (error: any) {
+      console.error("[NotifPrefs] GET error:", error);
+      res.status(500).json({ success: false, error: "Failed to fetch notification preferences" });
+    }
+  });
+
+  app.patch("/api/v1/a/notification-preferences", async (req, res) => {
+    const userId = getUserId(req);
+    if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+    const schema = z.object({
+      notificationType: z.string().min(1),
+      pushEnabled: z.boolean(),
+      emailEnabled: z.boolean(),
+    });
+    const parsed = schema.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ success: false, error: "Invalid request" });
+    const { notificationType, pushEnabled, emailEnabled } = parsed.data;
+    try {
+      await db.execute(sql`
+        INSERT INTO mvp_notification_preferences (id, user_id, notification_type, push_enabled, email_enabled, updated_at)
+        VALUES (gen_random_uuid(), ${userId}, ${notificationType}, ${pushEnabled}, ${emailEnabled}, now())
+        ON CONFLICT (user_id, notification_type)
+        DO UPDATE SET push_enabled = EXCLUDED.push_enabled, email_enabled = EXCLUDED.email_enabled, updated_at = now()
+      `);
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[NotifPrefs] PATCH error:", error);
+      res.status(500).json({ success: false, error: "Failed to update notification preference" });
+    }
   });
 
 
@@ -3513,6 +3620,44 @@ export async function registerRoutes(
 
                   await refreshUserRole(user.id);
                   console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
+
+                  // Fire-and-forget push — must never block webhook 200 response
+                  ;(async () => {
+                    try {
+                      const dedupKey = `sub_renewed_${subscriptionId}_${invoice.period_start || ''}`;
+                      const existing = await db.select().from(notificationLog)
+                        .where(and(
+                          eq(notificationLog.userId, user.id),
+                          eq(notificationLog.notificationType, "subscription_renewed"),
+                          eq(notificationLog.message, dedupKey),
+                        )).limit(1);
+                      if (existing.length > 0) return;
+                      const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, "subscription_renewed");
+                      const tokens = await db.select().from(pushTokens)
+                        .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                      if (tokens.length > 0 && prefPush) {
+                        await sendExpoPushNotifications(
+                          tokens.map(t => t.pushToken),
+                          "Subscription Renewed",
+                          `Your ${matchedPlan.name} plan has been renewed. Enjoy your recording minutes!`,
+                          { type: "subscription_renewed", screen: "subscription" }
+                        );
+                      }
+                      await db.insert(notificationLog).values({
+                        userId: user.id,
+                        notificationType: "subscription_renewed",
+                        title: "Subscription Renewed",
+                        status: "sent",
+                        message: dedupKey,
+                      });
+                      if (user.email && prefEmail) {
+                        sendSubscriptionRenewedEmail(user.email, matchedPlan.name)
+                          .catch((e: any) => console.error("[Email] subscription_renewed:", e.message));
+                      }
+                    } catch (pushErr: any) {
+                      console.error("[Push] subscription_renewed failed:", pushErr.message);
+                    }
+                  })();
                 }
               }
             }
@@ -3550,6 +3695,44 @@ export async function registerRoutes(
 
               await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${subscriptionId}`);
+
+              // Fire-and-forget push — must never block webhook 200 response
+              ;(async () => {
+                try {
+                  const dedupKey = `payment_failed_${invoice.id}`;
+                  const existing = await db.select().from(notificationLog)
+                    .where(and(
+                      eq(notificationLog.userId, user.id),
+                      eq(notificationLog.notificationType, "payment_failed"),
+                      eq(notificationLog.message, dedupKey),
+                    )).limit(1);
+                  if (existing.length > 0) return;
+                  const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, "payment_failed");
+                  const tokens = await db.select().from(pushTokens)
+                    .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                  if (tokens.length > 0 && prefPush) {
+                    await sendExpoPushNotifications(
+                      tokens.map(t => t.pushToken),
+                      "Payment Failed",
+                      "We couldn't process your payment. Please update your payment method to keep your subscription active.",
+                      { type: "payment_failed", screen: "subscription" }
+                    );
+                  }
+                  await db.insert(notificationLog).values({
+                    userId: user.id,
+                    notificationType: "payment_failed",
+                    title: "Payment Failed",
+                    status: "sent",
+                    message: dedupKey,
+                  });
+                  if (user.email && prefEmail) {
+                    sendPaymentFailedEmail(user.email)
+                      .catch((e: any) => console.error("[Email] payment_failed:", e.message));
+                  }
+                } catch (pushErr: any) {
+                  console.error("[Push] payment_failed notification failed:", pushErr.message);
+                }
+              })();
             }
           }
           break;
@@ -3653,6 +3836,44 @@ export async function registerRoutes(
 
               await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
+
+              // Fire-and-forget push — must never block webhook 200 response
+              ;(async () => {
+                try {
+                  const dedupKey = `sub_expired_${subscription.id}`;
+                  const existing = await db.select().from(notificationLog)
+                    .where(and(
+                      eq(notificationLog.userId, user.id),
+                      eq(notificationLog.notificationType, "subscription_expired"),
+                      eq(notificationLog.message, dedupKey),
+                    )).limit(1);
+                  if (existing.length > 0) return;
+                  const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, "subscription_expired");
+                  const tokens = await db.select().from(pushTokens)
+                    .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                  if (tokens.length > 0 && prefPush) {
+                    await sendExpoPushNotifications(
+                      tokens.map(t => t.pushToken),
+                      "Subscription Expired",
+                      "Your subscription has ended. Subscribe again to continue enjoying MyVoicePost.",
+                      { type: "subscription_expired", screen: "subscription" }
+                    );
+                  }
+                  await db.insert(notificationLog).values({
+                    userId: user.id,
+                    notificationType: "subscription_expired",
+                    title: "Subscription Expired",
+                    status: "sent",
+                    message: dedupKey,
+                  });
+                  if (user.email && prefEmail) {
+                    sendSubscriptionExpiredEmail(user.email)
+                      .catch((e: any) => console.error("[Email] subscription_expired:", e.message));
+                  }
+                } catch (pushErr: any) {
+                  console.error("[Push] subscription_expired notification failed:", pushErr.message);
+                }
+              })();
             }
           }
           break;
@@ -4195,7 +4416,7 @@ export async function registerRoutes(
         });
 
         await db.insert(notificationLog).values({
-          userId: sub.userId, notificationType, subscriptionId: sub.subId, status: "sent", message: notificationBody,
+          userId: sub.userId, notificationType, title: notificationTitle, subscriptionId: sub.subId, status: "sent", message: notificationBody,
         });
 
         sentCount++;
@@ -4241,9 +4462,134 @@ export async function registerRoutes(
           type: "trial_expiry", daysRemaining: daysUntilExpiry,
         });
 
-        await db.insert(notificationLog).values({ userId: user.id, notificationType, status: "sent", message: notificationBody });
+        await db.insert(notificationLog).values({ userId: user.id, notificationType, title: notificationTitle, status: "sent", message: notificationBody });
         sentCount++;
         console.log(`[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`);
+      }
+
+      // === LOW MINUTES WARNING (=10 minutes remaining) ===
+      try {
+        const lowMinuteSubs = await db.select({
+          subId: userSubscriptions.id,
+          userId: userSubscriptions.userId,
+          minutesRemaining: userSubscriptions.minutesRemaining,
+          planName: subscriptionPlans.name,
+        }).from(userSubscriptions)
+          .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+          .where(eq(userSubscriptions.status, "active"));
+
+        for (const sub of lowMinuteSubs) {
+          const remaining = parseFloat(String(sub.minutesRemaining || "0"));
+          if (remaining > 10) continue;
+
+          const alreadySent = await db.select().from(notificationLog)
+            .where(and(
+              eq(notificationLog.userId, sub.userId),
+              eq(notificationLog.notificationType, "low_minutes"),
+              eq(notificationLog.subscriptionId, sub.subId),
+            )).limit(1);
+          if (alreadySent.length > 0) { skippedCount++; continue; }
+
+          const userTokens = await db.select().from(pushTokens)
+            .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+
+          const minsLeft = Math.max(0, Math.floor(remaining));
+          const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } = await getNotificationPref(sub.userId, "low_minutes");
+          if (userTokens.length > 0 && lmPrefPush) await sendExpoPushNotifications(
+            userTokens.map(t => t.pushToken),
+            "Low on Minutes",
+            `You have ${minsLeft} minute${minsLeft === 1 ? "" : "s"} remaining. Top up now to keep recording!`,
+            { type: "low_minutes", screen: "home" }
+          );
+          await db.insert(notificationLog).values({
+            userId: sub.userId,
+            notificationType: "low_minutes",
+            title: "Low on Minutes",
+            subscriptionId: sub.subId,
+            status: "sent",
+            message: `${minsLeft} minutes remaining warning`,
+          });
+          const lowMinUser = await db.select({ email: users.email }).from(users)
+            .where(eq(users.id, sub.userId)).limit(1);
+          if (lowMinUser[0]?.email && lmPrefEmail) {
+            sendLowMinutesEmail(lowMinUser[0].email, minsLeft)
+              .catch((e: any) => console.error("[Email] low_minutes:", e.message));
+          }
+          sentCount++;
+          console.log(`[Cron] Sent low_minutes notification to user ${sub.userId} (${minsLeft} mins left)`);
+        }
+      } catch (lowMinErr: any) {
+        console.error("[Cron] Low minutes check failed:", lowMinErr.message);
+      }
+
+      // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===
+      try {
+        const threeDaysFromNow = new Date(now.getTime() + 3 * oneDayMs);
+        const manualPayerSubs = await db.select({
+          subId: userSubscriptions.id,
+          userId: userSubscriptions.userId,
+          validDateUpto: userSubscriptions.validDateUpto,
+          planName: subscriptionPlans.name,
+          stripeSubscriptionId: users.stripeSubscriptionId,
+        }).from(userSubscriptions)
+          .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+          .innerJoin(users, eq(userSubscriptions.userId, users.id))
+          .where(and(
+            eq(userSubscriptions.status, "active"),
+            gte(userSubscriptions.validDateUpto, now),
+            sql`${userSubscriptions.validDateUpto} <= ${threeDaysFromNow}`,
+          ));
+
+        for (const sub of manualPayerSubs) {
+          if (!sub.stripeSubscriptionId) continue;
+
+          const alreadySent = await db.select().from(notificationLog)
+            .where(and(
+              eq(notificationLog.userId, sub.userId),
+              eq(notificationLog.notificationType, "expiry_3days_manual"),
+              eq(notificationLog.subscriptionId, sub.subId),
+            )).limit(1);
+          if (alreadySent.length > 0) { skippedCount++; continue; }
+
+          // Verify this is a manual payer (cancel_at_period_end=true) via Stripe
+          try {
+            const stripeClient = await getUncachableStripeClient();
+            const stripeSub = await stripeClient.subscriptions.retrieve(sub.stripeSubscriptionId);
+            if (!stripeSub.cancel_at_period_end) continue;
+          } catch {
+            continue;
+          }
+
+          const userTokens = await db.select().from(pushTokens)
+            .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+
+          const daysLeft = Math.ceil((new Date(sub.validDateUpto!).getTime() - now.getTime()) / oneDayMs);
+          const { pushEnabled: exPrefPush, emailEnabled: exPrefEmail } = await getNotificationPref(sub.userId, "expiry_3days_manual");
+          if (userTokens.length > 0 && exPrefPush) await sendExpoPushNotifications(
+            userTokens.map(t => t.pushToken),
+            "Subscription Expiring in 3 Days",
+            `Your ${sub.planName || "subscription"} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} and will not auto-renew. Subscribe again to continue.`,
+            { type: "expiry_3days_manual", screen: "subscription" }
+          );
+          await db.insert(notificationLog).values({
+            userId: sub.userId,
+            notificationType: "expiry_3days_manual",
+            title: "Subscription Expiring Soon",
+            subscriptionId: sub.subId,
+            status: "sent",
+            message: `Manual subscription expiring in ${daysLeft} days`,
+          });
+          const expiryUser = await db.select({ email: users.email }).from(users)
+            .where(eq(users.id, sub.userId)).limit(1);
+          if (expiryUser[0]?.email && exPrefEmail) {
+            sendSubscriptionExpiringSoonEmail(expiryUser[0].email, sub.planName || "subscription", daysLeft)
+              .catch((e: any) => console.error("[Email] expiry_3days_manual:", e.message));
+          }
+          sentCount++;
+          console.log(`[Cron] Sent expiry_3days_manual notification to user ${sub.userId}`);
+        }
+      } catch (manualErr: any) {
+        console.error("[Cron] Manual expiry 3-day check failed:", manualErr.message);
       }
 
       console.log(`[Cron] Notifications done. Sent: ${sentCount}, Skipped: ${skippedCount}`);
@@ -4282,7 +4628,7 @@ export async function registerRoutes(
 
                 await sendRenewalReminderEmail(u.email, planName, periodEnd, amount);
                 await db.insert(notificationLog).values({
-                  userId: u.userId, notificationType: "renewal_reminder_3days", status: "sent", message: renewalKey,
+                  userId: u.userId, notificationType: "renewal_reminder_3days", title: "Renewal Reminder", status: "sent", message: renewalKey,
                 });
                 renewalRemindersSent++;
                 console.log(`[Cron] Sent renewal reminder to user ${u.userId} (renews in ${daysUntilRenewal} days)`);
@@ -5014,13 +5360,13 @@ export async function registerRoutes(
           topupPlanId = newPlan.id;
         }
 
-        await tx.insert(userSubscriptions).values({
+        const [newTopupSub] = await tx.insert(userSubscriptions).values({
           userId, planId: topupPlanId, status: "completed",
           minutesRemaining: String(topupMinutes), paymentToken: paymentIntentId, validDateUpto: new Date(),
-        });
+        }).returning({ id: userSubscriptions.id });
 
         const newRemaining = newMinutesTotal - parseFloat(String(user.trialMinutesUsed || "0"));
-        return { alreadyApplied: false, newMinutesTotal, newRemaining };
+        return { alreadyApplied: false, newMinutesTotal, newRemaining, newTopupSubId: newTopupSub?.id };
       });
 
       if (result.alreadyApplied) {
@@ -5034,6 +5380,39 @@ export async function registerRoutes(
         trialMinutesTotal: result.newMinutesTotal,
         minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
       });
+
+      // Fire-and-forget push — after response is sent, no risk of blocking
+      ;(async () => {
+        try {
+          const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(userId, "topup_credited");
+          const tokens = await db.select().from(pushTokens)
+            .where(and(eq(pushTokens.userId, userId), eq(pushTokens.isActive, true)));
+          if (tokens.length > 0 && prefPush) {
+            await sendExpoPushNotifications(
+              tokens.map(t => t.pushToken),
+              "Top-Up Credited",
+              `${topupMinutes} minutes have been added to your account!`,
+              { type: "topup_credited", screen: "home" }
+            );
+          }
+          await db.insert(notificationLog).values({
+            userId,
+            notificationType: "topup_credited",
+            title: "Top-Up Credited",
+            status: "sent",
+            message: `${topupMinutes} minutes top-up credited`,
+            subscriptionId: result.newTopupSubId,
+          });
+          const topupUser = await db.select({ email: users.email }).from(users)
+            .where(eq(users.id, userId)).limit(1);
+          if (topupUser[0]?.email && prefEmail) {
+            sendTopUpCreditedEmail(topupUser[0].email, topupMinutes)
+              .catch((e: any) => console.error("[Email] topup_credited:", e.message));
+          }
+        } catch (pushErr: any) {
+          console.error("[Push] topup_credited notification failed:", pushErr.message);
+        }
+      })();
     } catch (error: any) {
       console.error("[Confirm Topup] Error:", error);
       res.status(500).json({ success: false, error: error.message || "Failed to confirm top-up" });
@@ -5341,6 +5720,52 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[Push Token Unregister] Error:", error.message);
       res.status(500).json({ success: false, error: "Failed to unregister push token" });
+    }
+  });
+
+  // ============================================================
+  // NOTIFICATION INBOX
+  // ============================================================
+
+  app.get("/api/v1/a/notifications", mobileAuthMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.jwtUser?.userId || req.jwtUser?.id;
+      const offset = parseInt(String(req.query.offset || "0"), 10);
+      const limit = Math.min(parseInt(String(req.query.limit || "50"), 10), 50);
+
+      const notifications = await db
+        .select()
+        .from(notificationLog)
+        .where(eq(notificationLog.userId, userId))
+        .orderBy(desc(notificationLog.sentAt))
+        .limit(limit)
+        .offset(offset);
+
+      const unreadResult = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(notificationLog)
+        .where(and(eq(notificationLog.userId, userId), sql`${notificationLog.readAt} IS NULL`));
+
+      const unreadCount = unreadResult[0]?.count ?? 0;
+
+      res.json({ success: true, notifications, unreadCount });
+    } catch (error: any) {
+      console.error("[Notifications] Error fetching:", error.message);
+      res.status(500).json({ success: false, error: "Failed to fetch notifications" });
+    }
+  });
+
+  app.post("/api/v1/a/notifications/read-all", mobileAuthMiddleware, async (req: any, res) => {
+    try {
+      const userId = req.jwtUser?.userId || req.jwtUser?.id;
+      await db
+        .update(notificationLog)
+        .set({ readAt: new Date() })
+        .where(and(eq(notificationLog.userId, userId), sql`${notificationLog.readAt} IS NULL`));
+      res.json({ success: true });
+    } catch (error: any) {
+      console.error("[Notifications] Error marking read:", error.message);
+      res.status(500).json({ success: false, error: "Failed to mark notifications as read" });
     }
   });
 

@@ -27,6 +27,7 @@ import Profile from "@/pages/Profile";
 import AccountSettings from "@/pages/AccountSettings";
 import AppSettings from "@/pages/AppSettings";
 import AuthHelp from "@/pages/AuthHelp";
+import Notifications from "@/pages/Notifications";
 import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import Subscribe from "@/pages/Subscribe";
@@ -157,6 +158,9 @@ function Router() {
       </Route>
       <Route path="/settings">
         {() => <ProtectedRoute component={AppSettings} />}
+      </Route>
+      <Route path="/notifications">
+        {() => <ProtectedRoute component={Notifications} />}
       </Route>
       <Route path="/help-center">
         {() => <ProtectedRoute component={AuthHelp} />}
