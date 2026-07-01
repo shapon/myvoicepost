@@ -1976,7 +1976,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // -- Notification Preferences ----------------------------------------------
-app.get("/api/v1/a/notification-preferences", jwtAuthMiddleware, async (req: any, res) => {
+app.get("/api/v1/a/notification-preferences", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = req.jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
@@ -2007,7 +2007,7 @@ app.get("/api/v1/a/notification-preferences", jwtAuthMiddleware, async (req: any
   }
 });
 
-app.patch("/api/v1/a/notification-preferences", jwtAuthMiddleware, async (req: any, res) => {
+app.patch("/api/v1/a/notification-preferences", mobileAuthMiddleware, async (req: any, res) => {
   const jwtUser = req.jwtUser;
   const userId = jwtUser?.userId || jwtUser?.id;
   if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
