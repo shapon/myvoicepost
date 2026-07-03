@@ -6,6 +6,7 @@ import { OUTPUT_FORMATS, OUTPUT_TYPES, getLanguageName } from "@shared/schema";
 import { useSaveTextMutation } from "@/hooks/use-save-text";
 import AppLayout from "@/components/AppLayout";
 import WebVoiceRecorder from "@/components/WebVoiceRecorder";
+import LiveVoiceRecorder from "@/components/LiveVoiceRecorder";
 import WebTextResultCard from "@/components/WebTextResultCard";
 import LanguageSelect from "@/components/LanguageSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -105,6 +106,10 @@ export default function Polish() {
     setInputText(text);
   }
 
+  function handleLiveTextChange(text: string) {
+    setInputText(text);
+  }
+
   function handlePolishedTextEdit(newText: string) {
     if (result) {
       setResult({ ...result, polishedText: newText });
@@ -201,12 +206,15 @@ export default function Polish() {
               </TabsContent>
 
               <TabsContent value="voice" className="mt-4 space-y-3">
-                <WebVoiceRecorder
+                <LiveVoiceRecorder
+                  currentText={inputText}
+                  onLiveTextChange={handleLiveTextChange}
                   onTranscriptionComplete={handleTranscriptionComplete}
                   onPartialTranscription={handlePartialTranscription}
                   maxDuration={user ? 300 : 55}
                   chunkDuration={60}
                   disabled={polishMutation.isPending}
+                  language={language}
                 />
                 {inputText && (
                   <div className="rounded-md border p-3">

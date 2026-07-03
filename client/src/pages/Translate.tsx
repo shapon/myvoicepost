@@ -7,6 +7,7 @@ import { OUTPUT_FORMATS, getLanguageName } from "@shared/schema";
 import { useSaveTextMutation } from "@/hooks/use-save-text";
 import AppLayout from "@/components/AppLayout";
 import WebVoiceRecorder from "@/components/WebVoiceRecorder";
+import LiveVoiceRecorder from "@/components/LiveVoiceRecorder";
 import WebTextResultCard from "@/components/WebTextResultCard";
 import LanguageSelect from "@/components/LanguageSelect";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -102,6 +103,10 @@ export default function Translate() {
   }
 
   function handlePartialTranscription(transcribedText: string) {
+    setText(transcribedText);
+  }
+
+  function handleLiveTextChange(transcribedText: string) {
     setText(transcribedText);
   }
 
@@ -203,12 +208,15 @@ export default function Translate() {
               </TabsContent>
 
               <TabsContent value="voice" className="mt-4 space-y-3">
-                <WebVoiceRecorder
+                <LiveVoiceRecorder
+                  currentText={text}
+                  onLiveTextChange={handleLiveTextChange}
                   onTranscriptionComplete={handleTranscriptionComplete}
                   onPartialTranscription={handlePartialTranscription}
                   maxDuration={user ? 300 : 55}
                   chunkDuration={60}
                   disabled={translateMutation.isPending}
+                  language={sourceLanguage}
                 />
                 {text && (
                   <div className="rounded-md border p-3">
