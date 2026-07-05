@@ -2877,7 +2877,7 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-app.delete("/api/v1/a/account", mobileAuthMiddleware, async (req: any, res) => {
+app.post("/api/v1/a/account/delete", mobileAuthMiddleware, async (req: any, res) => {
   try {
     const userId = req.jwtUser?.userId;
     if (!userId) {

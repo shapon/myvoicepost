@@ -1315,7 +1315,7 @@ export async function registerRoutes(
   });
 
   // Delete account: removes all user data and the user record
-  app.delete("/api/v1/a/account", mobileAuthMiddleware, async (req, res) => {
+  app.post("/api/v1/a/account/delete", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
