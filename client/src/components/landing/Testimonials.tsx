@@ -1,120 +1,156 @@
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
-import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Star } from "lucide-react";
 import { SiX, SiAppstore, SiGoogleplay, SiProducthunt } from "react-icons/si";
+import { Link } from "wouter";
 
-const testimonials = [
+export const testimonials = [
   {
-    name: "Jonathan Holden",
+    name: "James Hartwell",
     avatar: "JH",
-    platform: "twitter",
+    platform: "X",
     icon: SiX,
-    title: "Really helped me",
-    content: "I was just having a bit of an existential crisis, so I talked about it to MyVoicePost, which provided me with a summary that included very useful category headings. That really helped me figure things out!",
+    content: "I just talk to it — and walk away with structured notes. Wild.",
     rating: 5,
   },
   {
-    name: "@LadyG",
+    name: "Lauren Grace",
     avatar: "LG",
-    platform: "appstore",
+    platform: "App Store",
     icon: SiAppstore,
-    title: "Transformed how I take notes",
-    content: "It has completely transformed how I take notes! The speech-to-text accuracy is impressive, and the structured output makes organizing my thoughts a breeze. Highly recommend!",
+    content: "Completely transformed how I take notes. The accuracy is unreal.",
     rating: 5,
   },
   {
-    name: "Mila Kono",
+    name: "Maya Krishnan",
     avatar: "MK",
-    platform: "producthunt",
+    platform: "Product Hunt",
     icon: SiProducthunt,
-    title: "2 minutes, and I get a neat email",
-    content: "Usually I'd need around 15 minutes to give structured feedback but now it's just 2 minutes of voice note, and I get a neat email ready to be sent!",
+    content: "Feedback that took me 15 minutes now takes 2.",
     rating: 5,
   },
   {
-    name: "Matej Cabadaj",
+    name: "Marcus Chen",
     avatar: "MC",
-    platform: "producthunt",
+    platform: "Product Hunt",
     icon: SiProducthunt,
-    title: "I can let my ideas flow",
-    content: "MyVoicePost is perfect for my forest walks! I can let my ideas flow without stopping. Love it!",
+    content: "Perfect for my walks — I let ideas flow without stopping.",
     rating: 5,
   },
   {
-    name: "Conner Kees",
+    name: "Cameron Knox",
     avatar: "CK",
-    platform: "googleplay",
+    platform: "Google Play",
     icon: SiGoogleplay,
-    title: "Essential tool for content creators",
-    content: "MyVoicePost is amazing. I use it everyday for content. I think it could be an essential tool in the toolkit of content creators, big thinkers, or entrepreneurs.",
+    content: "I use it every day for content. An essential tool.",
     rating: 5,
   },
   {
-    name: "Sofiane",
+    name: "Sophie Farrell",
     avatar: "SF",
-    platform: "twitter",
-    icon: SiX,
-    title: "Can't go back now",
-    content: "I don't think I can go back now. I'm really hooked! The way it structures my thoughts and voice notes is... perfect.",
+    platform: "Google Play",
+    icon: SiGoogleplay,
+    content: "Powerful, fast, and the output quality is amazing.",
     rating: 5,
   },
 ];
+
+function StarRow({ count }: { count: number }) {
+  return (
+    <div className="flex gap-1 mb-4">
+      {Array.from({ length: count }).map((_, i) => (
+        <Star key={i} className="w-5 h-5 fill-yellow-400 text-yellow-400" />
+      ))}
+    </div>
+  );
+}
+
+export function TestimonialCard({ testimonial, index = 0 }: { testimonial: typeof testimonials[0]; index?: number }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 30 }}
+      whileInView={{ opacity: 1, y: 0 }}
+      viewport={{ once: true }}
+      transition={{ delay: index * 0.1 }}
+      className="h-full"
+    >
+      <Card
+        className="p-6 h-full flex flex-col bg-card border-border hover-elevate"
+        data-testid={`card-testimonial-${index}`}
+      >
+        <StarRow count={testimonial.rating} />
+
+        <p className="text-foreground font-medium text-base leading-relaxed flex-1 mb-6">
+          "{testimonial.content}"
+        </p>
+
+        <div className="flex items-center gap-3">
+          <Avatar className="w-10 h-10 flex-shrink-0">
+            <AvatarFallback className="bg-primary text-primary-foreground text-sm font-semibold">
+              {testimonial.avatar}
+            </AvatarFallback>
+          </Avatar>
+          <div>
+            <p className="font-semibold text-sm leading-tight">{testimonial.name}</p>
+            <div className="flex items-center gap-1.5 mt-0.5">
+              <testimonial.icon className="w-3 h-3 text-muted-foreground" />
+              <span className="text-xs text-muted-foreground">Review from {testimonial.platform}</span>
+            </div>
+          </div>
+        </div>
+      </Card>
+    </motion.div>
+  );
+}
 
 export default function Testimonials() {
   return (
     <section className="py-20 md:py-32" id="reviews" data-testid="testimonials-section">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="text-center mb-16">
-          <h2 className="text-3xl md:text-5xl font-bold mb-4">
-            Experience of our clients
+
+        {/* Heading */}
+        <div className="text-center mb-10">
+          <h2 className="text-3xl md:text-5xl font-bold mb-6">
+            What 300,000+ users say
           </h2>
-          <p className="text-lg text-muted-foreground">
-            Join thousands of happy users transforming their voice into text
-          </p>
+
+          {/* Store ratings */}
+          <div className="inline-flex items-center gap-0 divide-x divide-border border border-border rounded-xl overflow-hidden">
+            <div className="flex items-center gap-2 px-6 py-3">
+              <Star className="w-6 h-6 fill-yellow-400 text-yellow-400" />
+              <div className="text-left">
+                <p className="text-xl font-bold leading-none">4.8</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-0.5">App Store</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 px-6 py-3">
+              <Star className="w-6 h-6 fill-yellow-400 text-yellow-400" />
+              <div className="text-left">
+                <p className="text-xl font-bold leading-none">4.7</p>
+                <p className="text-xs text-muted-foreground uppercase tracking-wider mt-0.5">Google Play</p>
+              </div>
+            </div>
+          </div>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {testimonials.map((testimonial, index) => (
-            <motion.div
-              key={testimonial.name}
-              initial={{ opacity: 0, y: 30 }}
-              whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ delay: index * 0.1 }}
-            >
-              <Card
-                className="p-6 h-full bg-card border-border hover-elevate"
-                data-testid={`card-testimonial-${index}`}
-              >
-                <div className="flex items-center gap-3 mb-4">
-                  <Avatar className="w-12 h-12">
-                    <AvatarImage src="" />
-                    <AvatarFallback className="bg-primary text-primary-foreground font-medium">
-                      {testimonial.avatar}
-                    </AvatarFallback>
-                  </Avatar>
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold">{testimonial.name}</span>
-                      <testimonial.icon className="w-4 h-4 text-muted-foreground" />
-                    </div>
-                    <div className="flex gap-0.5">
-                      {Array.from({ length: testimonial.rating }).map((_, i) => (
-                        <Star key={i} className="w-3.5 h-3.5 fill-yellow-500 text-yellow-500" />
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <h3 className="font-semibold mb-2">{testimonial.title}</h3>
-                <p className="text-muted-foreground text-sm leading-relaxed">
-                  {testimonial.content}
-                </p>
-              </Card>
-            </motion.div>
+        {/* Cards grid */}
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5 mb-12">
+          {testimonials.map((t, i) => (
+            <TestimonialCard key={t.name} testimonial={t} index={i} />
           ))}
         </div>
+
+        {/* See all reviews */}
+        <div className="text-center">
+          <Link href="/reviews">
+            <Button variant="outline" size="lg" data-testid="button-see-all-reviews">
+              See all reviews
+            </Button>
+          </Link>
+        </div>
+
       </div>
     </section>
   );

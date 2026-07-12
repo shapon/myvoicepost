@@ -32,6 +32,7 @@ import ForgotPassword from "@/pages/ForgotPassword";
 import ResetPassword from "@/pages/ResetPassword";
 import Subscribe from "@/pages/Subscribe";
 import SubscribeSuccess from "@/pages/SubscribeSuccess";
+import Reviews from "@/pages/Reviews";
 
 function AppSkeleton() {
   return (
@@ -167,6 +168,7 @@ function Router() {
       </Route>
       <Route path="/subscribe" component={Subscribe} />
       <Route path="/subscribe/success" component={SubscribeSuccess} />
+      <Route path="/reviews" component={Reviews} />
       <Route component={NotFound} />
     </Switch>
   );

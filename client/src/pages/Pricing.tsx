@@ -1,82 +1,121 @@
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { Check, Mic } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { Check, X, Mic, Zap, CreditCard } from "lucide-react";
 import { motion } from "framer-motion";
 import { Link } from "wouter";
 import Header from "@/components/landing/Header";
+import Footer from "@/components/landing/Footer";
 import { useAuth } from "@/contexts/AuthContext";
 
-const plans = [
+const MONTHLY_PRICE = 15;
+const YEARLY_PRICE = Math.round(MONTHLY_PRICE * 0.8); // 20% off
+
+type CellValue = boolean | string;
+
+interface ComparisonRow {
+  feature: string;
+  free: CellValue;
+  pro: CellValue;
+  note?: string;
+}
+
+interface ComparisonSection {
+  title: string;
+  rows: ComparisonRow[];
+}
+
+const comparisonSections: ComparisonSection[] = [
   {
-    name: "Starter",
-    description: "Perfect for personal use",
-    monthlyPrice: 9,
-    yearlyPrice: 7,
-    features: [
-      "30 minutes of audio per month",
-      "Polish feature included",
-      "5 languages supported",
-      "Email support",
-      "Basic text formatting",
+    title: "Recording & Transcription",
+    rows: [
+      { feature: "Voice recording & transcription", free: true, pro: true },
+      { feature: "Audio file upload", free: true, pro: true },
+      { feature: "Background / screen-off recording", free: true, pro: true },
+      { feature: "Offline recording", free: true, pro: true },
+      { feature: "Monthly audio minutes", free: "90 mins", pro: "3,000 mins" },
+      { feature: "Pay-as-you-go top-up (if you run out)", free: true, pro: true },
     ],
-    highlighted: false,
-    cta: "Get Started",
   },
   {
-    name: "Pro",
-    description: "Best for professionals",
-    monthlyPrice: 29,
-    yearlyPrice: 23,
-    features: [
-      "120 minutes of audio per month",
-      "Polish + Translate features",
-      "29 languages supported",
-      "Priority support",
-      "Advanced formatting options",
-      "Save & export history",
-      "API access",
+    title: "AI Processing",
+    rows: [
+      { feature: "AI Polish — rewrite your speech", free: true, pro: true },
+      { feature: "AI Translation (90+ languages)", free: true, pro: true },
+      { feature: "25+ rewrite styles & tones", free: true, pro: true },
+      { feature: "Long-form content (500+ words)", free: false, pro: true },
     ],
-    highlighted: true,
-    cta: "Get Started",
   },
   {
-    name: "Enterprise",
-    description: "For teams and businesses",
-    monthlyPrice: 79,
-    yearlyPrice: 63,
-    features: [
-      "Unlimited audio processing",
-      "All languages supported",
-      "Dedicated account manager",
-      "Custom integrations",
-      "Team collaboration",
-      "Advanced analytics",
-      "SLA guarantee",
-      "White-label options",
+    title: "File & Document Processing",
+    rows: [
+      { feature: "PDF / DOCX / Image upload", free: true, pro: true },
+      { feature: "Max file size", free: "25 MB", pro: "50 MB" },
+      { feature: "Auto summary & key takeaways", free: true, pro: true },
+      { feature: "Auto-generated FAQ from documents", free: true, pro: true },
+      { feature: "SEO blog post from voice / file", free: false, pro: true },
     ],
-    highlighted: false,
-    cta: "Contact Sales",
+  },
+  {
+    title: "Apps & Sync",
+    rows: [
+      { feature: "iOS, Android, Web & macOS apps", free: true, pro: true },
+      { feature: "Sync across all devices", free: true, pro: true },
+      { feature: "Dark & light mode", free: true, pro: true },
+      { feature: "Save & access full history", free: true, pro: true },
+    ],
+  },
+  {
+    title: "Support & Billing",
+    rows: [
+      { feature: "Email support", free: true, pro: true },
+      { feature: "Priority support", free: false, pro: true },
+      { feature: "No credit card required to start", free: true, pro: false },
+      { feature: "Cancel anytime", free: false, pro: true },
+    ],
   },
 ];
 
+function CellContent({ value, isProCol }: { value: CellValue; isProCol: boolean }) {
+  if (typeof value === "boolean") {
+    return value ? (
+      <Check
+        className={`w-5 h-5 mx-auto ${isProCol ? "text-primary" : "text-primary"}`}
+        aria-label="Included"
+      />
+    ) : (
+      <X className="w-4 h-4 mx-auto text-muted-foreground/40" aria-label="Not included" />
+    );
+  }
+  return (
+    <span className={`text-sm font-medium ${isProCol ? "text-foreground" : "text-foreground"}`}>
+      {value}
+    </span>
+  );
+}
+
 export default function Pricing() {
-  const [isYearly, setIsYearly] = useState(true);
+  const [isYearly, setIsYearly] = useState(false);
   const { user } = useAuth();
+
+  const displayPrice = isYearly ? YEARLY_PRICE : MONTHLY_PRICE;
 
   return (
     <div className="min-h-screen bg-background">
       <Header />
 
-      <main className="pt-32 pb-20 px-4">
-        <div className="max-w-7xl mx-auto">
-          <div className="text-center mb-12">
+      <main className="pt-28 pb-24 px-4">
+        <div className="max-w-5xl mx-auto">
+
+          {/* -- Page heading -- */}
+          <div className="text-center mb-14">
             <motion.h1
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              className="text-4xl md:text-5xl font-bold text-foreground mb-4"
+              className="text-4xl md:text-5xl font-bold mb-4"
             >
-              Plans
+              Simple, transparent pricing
             </motion.h1>
             <motion.p
               initial={{ opacity: 0, y: 20 }}
@@ -84,320 +123,285 @@ export default function Pricing() {
               transition={{ delay: 0.1 }}
               className="text-lg text-muted-foreground"
             >
-              No hidden fees. Cancel anytime.
+              Start free for 7 days. Upgrade when you need more.
             </motion.p>
 
+            {/* Billing toggle */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.2 }}
-              className="flex items-center justify-center gap-2 mt-8"
+              className="inline-flex items-center bg-muted rounded-full p-1 mt-8"
             >
-              <div className="inline-flex items-center bg-muted rounded-full p-1">
-                <button
-                  onClick={() => setIsYearly(false)}
-                  className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
-                    !isYearly
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  data-testid="button-monthly"
-                >
-                  Monthly
-                </button>
-                <button
-                  onClick={() => setIsYearly(true)}
-                  className={`px-6 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
-                    isYearly
-                      ? "bg-background text-foreground shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                  data-testid="button-yearly"
-                >
-                  Yearly
-                  <span className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 text-xs px-2 py-0.5 rounded-full">
-                    40% off
-                  </span>
-                </button>
-              </div>
+              <button
+                onClick={() => setIsYearly(false)}
+                className={`px-6 py-2 rounded-full text-sm font-medium transition-all ${
+                  !isYearly
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid="button-monthly"
+              >
+                Monthly
+              </button>
+              <button
+                onClick={() => setIsYearly(true)}
+                className={`px-6 py-2 rounded-full text-sm font-medium transition-all flex items-center gap-2 ${
+                  isYearly
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+                data-testid="button-yearly"
+              >
+                Yearly
+                <span className="bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300 text-xs px-2 py-0.5 rounded-full font-semibold">
+                  Save 20%
+                </span>
+              </button>
             </motion.div>
           </div>
 
-          <div className="grid md:grid-cols-3 gap-6 lg:gap-8 max-w-6xl mx-auto">
-            {plans.map((plan, index) => (
-              <motion.div
-                key={plan.name}
-                initial={{ opacity: 0, y: 30 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.1 * (index + 1) }}
+          {/* -- Plan cards -- */}
+          <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-20">
+
+            {/* Free Trial card */}
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <Card className="relative p-8 h-full flex flex-col bg-card border-border" data-testid="card-plan-free">
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                    <Mic className="w-5 h-5 text-primary" />
+                  </div>
+                  <div>
+                    <p className="font-bold text-lg leading-none">7-Day Free Trial</p>
+                    <p className="text-sm text-muted-foreground mt-0.5">No credit card needed</p>
+                  </div>
+                </div>
+
+                <div className="mb-8">
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-5xl font-bold">$0</span>
+                  </div>
+                  <p className="text-sm text-muted-foreground mt-1">Free for 7 days</p>
+                </div>
+
+                <Link href={user ? "/dashboard" : "/signup"}>
+                  <Button
+                    variant="outline"
+                    className="w-full mb-8"
+                    data-testid="button-get-started-free"
+                  >
+                    Start Free Trial
+                  </Button>
+                </Link>
+
+                <ul className="space-y-3 flex-1">
+                  {[
+                    "90 mins of audio",
+                    "AI Polish & Translate",
+                    "90+ languages",
+                    "25+ rewrite styles",
+                    "PDF / DOCX / Image upload (25 MB)",
+                    "Auto summaries & FAQs",
+                    "iOS, Android, Web & macOS",
+                    "Sync across devices",
+                    "Save & access history",
+                    "Pay-as-you-go top-up available",
+                    "Email support",
+                  ].map((f) => (
+                    <li key={f} className="flex items-start gap-3">
+                      <Check className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
+                      <span className="text-sm text-muted-foreground">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </motion.div>
+
+            {/* Pro card */}
+            <motion.div
+              initial={{ opacity: 0, y: 30 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.4 }}
+            >
+              <Card
+                className="relative p-8 h-full flex flex-col bg-foreground text-background border-foreground shadow-2xl scale-[1.02]"
+                data-testid="card-plan-pro"
               >
-                <Card
-                  className={`relative p-6 lg:p-8 h-full flex flex-col ${
-                    plan.highlighted
-                      ? "bg-foreground text-background border-foreground scale-105 shadow-2xl"
-                      : "bg-card"
-                  }`}
-                  data-testid={`card-plan-${plan.name.toLowerCase()}`}
-                >
-                  <div className="mb-6">
-                    <div className="flex items-center gap-2 mb-2">
-                      <div
-                        className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                          plan.highlighted
-                            ? "bg-background/20"
-                            : "bg-primary/10"
-                        }`}
-                      >
-                        <Mic
-                          className={`w-4 h-4 ${
-                            plan.highlighted ? "text-background" : "text-primary"
-                          }`}
-                        />
-                      </div>
-                      <span className="font-semibold text-lg">
-                        MyVoicePost
-                        <span
-                          className={`text-xs ml-1 ${
-                            plan.highlighted
-                              ? "text-background/70"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {plan.name}
-                        </span>
-                      </span>
-                    </div>
+                <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground border-0 px-4 py-1 text-xs font-semibold whitespace-nowrap">
+                  Most Popular
+                </Badge>
+
+                <div className="flex items-center gap-3 mb-6">
+                  <div className="w-10 h-10 rounded-xl bg-background/20 flex items-center justify-center">
+                    <Zap className="w-5 h-5 text-background" />
                   </div>
-
-                  <div className="mb-6">
-                    <div className="flex items-baseline gap-1">
-                      <span className="text-4xl lg:text-5xl font-bold">
-                        ${isYearly ? plan.yearlyPrice : plan.monthlyPrice}
-                      </span>
-                      <span
-                        className={`text-sm ${
-                          plan.highlighted
-                            ? "text-background/70"
-                            : "text-muted-foreground"
-                        }`}
-                      >
-                        /month
-                      </span>
-                    </div>
-                    <p
-                      className={`text-sm mt-1 ${
-                        plan.highlighted
-                          ? "text-background/70"
-                          : "text-muted-foreground"
-                      }`}
-                    >
-                      {isYearly ? "Billed yearly" : "Billed monthly"}
-                    </p>
+                  <div>
+                    <p className="font-bold text-lg leading-none text-background">Pro</p>
+                    <p className="text-sm text-background/60 mt-0.5">For power users</p>
                   </div>
+                </div>
 
-                  <Link href={
-                    plan.cta === "Contact Sales"
-                      ? "mailto:support@myvoicepost.com"
-                      : user
-                        ? `/subscribe?plan=${plan.name}`
-                        : "/signup"
-                  }>
-                    <Button
-                      className={`w-full mb-6 ${
-                        plan.highlighted
-                          ? "bg-background text-foreground hover:bg-background/90"
-                          : ""
-                      }`}
-                      variant={plan.highlighted ? "default" : "outline"}
-                      data-testid={`button-get-started-${plan.name.toLowerCase()}`}
-                    >
-                      {user && plan.cta !== "Contact Sales" ? "Subscribe Now" : plan.cta}
-                    </Button>
-                  </Link>
+                <div className="mb-8">
+                  <div className="flex items-baseline gap-1">
+                    <span className="text-5xl font-bold text-background">${displayPrice}</span>
+                    <span className="text-sm text-background/60">/month</span>
+                  </div>
+                  <p className="text-sm text-background/60 mt-1">
+                    {isYearly ? `$${YEARLY_PRICE * 12}/year — you save $${(MONTHLY_PRICE - YEARLY_PRICE) * 12}` : "Billed monthly"}
+                  </p>
+                </div>
 
-                  <ul className="space-y-3 flex-1">
-                    {plan.features.map((feature) => (
-                      <li key={feature} className="flex items-start gap-3">
-                        <Check
-                          className={`w-5 h-5 flex-shrink-0 mt-0.5 ${
-                            plan.highlighted ? "text-green-400" : "text-primary"
-                          }`}
-                        />
-                        <span
-                          className={`text-sm ${
-                            plan.highlighted
-                              ? "text-background/90"
-                              : "text-muted-foreground"
-                          }`}
-                        >
-                          {feature}
-                        </span>
-                      </li>
-                    ))}
-                  </ul>
-                </Card>
-              </motion.div>
-            ))}
+                <Link href={user ? `/subscribe?plan=pro&billing=${isYearly ? "yearly" : "monthly"}` : "/signup"}>
+                  <Button
+                    className="w-full mb-8 bg-background text-foreground hover:bg-background/90"
+                    data-testid="button-get-started-pro"
+                  >
+                    {user ? "Subscribe Now" : "Get Started"}
+                  </Button>
+                </Link>
+
+                <ul className="space-y-3 flex-1">
+                  {[
+                    "3,000 mins of audio / month",
+                    "AI Polish & Translate",
+                    "90+ languages",
+                    "25+ rewrite styles",
+                    "Long-form content (500+ words)",
+                    "PDF / DOCX / Image upload (50 MB)",
+                    "Auto summaries, FAQs & SEO blog posts",
+                    "iOS, Android, Web & macOS",
+                    "Sync across devices",
+                    "Save & access full history",
+                    "Pay-as-you-go top-up available",
+                    "Priority support",
+                    "Cancel anytime",
+                  ].map((f) => (
+                    <li key={f} className="flex items-start gap-3">
+                      <Check className="w-5 h-5 text-green-400 flex-shrink-0 mt-0.5" />
+                      <span className="text-sm text-background/90">{f}</span>
+                    </li>
+                  ))}
+                </ul>
+              </Card>
+            </motion.div>
           </div>
 
+          {/* -- Pay-as-you-go callout -- */}
           <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            transition={{ delay: 0.6 }}
-            className="text-center mt-16"
+            initial={{ opacity: 0, y: 20 }}
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
+            className="max-w-3xl mx-auto mb-20"
           >
-            <p className="text-muted-foreground">
-              Need more?{" "}
-              <a
-                href="mailto:support@myvoicepost.com"
-                className="text-primary hover:underline font-medium"
-                data-testid="link-contact"
-              >
-                Let's talk!
-              </a>
-            </p>
+            <Card className="p-6 md:p-8 bg-primary/5 border-primary/20 flex flex-col sm:flex-row items-start sm:items-center gap-6">
+              <div className="w-12 h-12 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                <CreditCard className="w-6 h-6 text-primary" />
+              </div>
+              <div className="flex-1">
+                <h3 className="font-bold text-lg mb-1">Pay-as-you-go top-ups</h3>
+                <p className="text-sm text-muted-foreground">
+                  Run out of minutes mid-month? No problem. Both Free and Pro users can purchase
+                  additional audio minutes on demand — no plan upgrade required. Pay only for
+                  what you use, whenever you need it.
+                </p>
+              </div>
+              <Link href={user ? "/dashboard" : "/signup"}>
+                <Button variant="outline" className="flex-shrink-0" data-testid="button-topup">
+                  Top up now
+                </Button>
+              </Link>
+            </Card>
           </motion.div>
 
+          {/* -- Feature comparison table -- */}
           <motion.div
             initial={{ opacity: 0, y: 30 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.7 }}
-            className="mt-20"
+            whileInView={{ opacity: 1, y: 0 }}
+            viewport={{ once: true }}
           >
-            <h2 className="text-2xl font-bold text-center mb-8">
-              Feature Comparison
+            <h2 className="text-2xl md:text-3xl font-bold text-center mb-10" data-testid="heading-comparison">
+              Full feature comparison
             </h2>
-            <div className="overflow-x-auto">
-              <table className="w-full max-w-4xl mx-auto" data-testid="table-features">
+
+            <div className="overflow-x-auto rounded-xl border border-border" data-testid="table-features">
+              <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-border">
-                    <th className="text-left py-4 px-4 font-medium text-muted-foreground">
+                  <tr className="border-b border-border bg-muted/40">
+                    <th className="text-left py-4 px-6 font-semibold text-foreground w-1/2">
                       Feature
                     </th>
-                    <th className="text-center py-4 px-4 font-medium">Starter</th>
-                    <th className="text-center py-4 px-4 font-medium bg-muted/50 rounded-t-lg">
+                    <th className="text-center py-4 px-6 font-semibold text-foreground w-1/4">
+                      7-Day Free
+                    </th>
+                    <th className="text-center py-4 px-6 font-semibold text-foreground w-1/4 bg-primary/8">
                       Pro
                     </th>
-                    <th className="text-center py-4 px-4 font-medium">Enterprise</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {[
-                    {
-                      feature: "Audio minutes/month",
-                      starter: "30 min",
-                      pro: "120 min",
-                      enterprise: "Unlimited",
-                    },
-                    {
-                      feature: "Polish feature",
-                      starter: true,
-                      pro: true,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "Translate feature",
-                      starter: false,
-                      pro: true,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "Languages supported",
-                      starter: "5",
-                      pro: "29",
-                      enterprise: "All",
-                    },
-                    {
-                      feature: "Save history",
-                      starter: false,
-                      pro: true,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "API access",
-                      starter: false,
-                      pro: true,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "Team collaboration",
-                      starter: false,
-                      pro: false,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "Custom integrations",
-                      starter: false,
-                      pro: false,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "Priority support",
-                      starter: false,
-                      pro: true,
-                      enterprise: true,
-                    },
-                    {
-                      feature: "Dedicated manager",
-                      starter: false,
-                      pro: false,
-                      enterprise: true,
-                    },
-                  ].map((row, i) => (
-                    <tr
-                      key={row.feature}
-                      className={`border-b border-border ${
-                        i % 2 === 0 ? "" : "bg-muted/20"
-                      }`}
-                    >
-                      <td className="py-4 px-4 text-sm">{row.feature}</td>
-                      <td className="py-4 px-4 text-center">
-                        {typeof row.starter === "boolean" ? (
-                          row.starter ? (
-                            <Check className="w-5 h-5 text-primary mx-auto" />
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )
-                        ) : (
-                          <span className="text-sm">{row.starter}</span>
-                        )}
-                      </td>
-                      <td className="py-4 px-4 text-center bg-muted/50">
-                        {typeof row.pro === "boolean" ? (
-                          row.pro ? (
-                            <Check className="w-5 h-5 text-primary mx-auto" />
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )
-                        ) : (
-                          <span className="text-sm font-medium">{row.pro}</span>
-                        )}
-                      </td>
-                      <td className="py-4 px-4 text-center">
-                        {typeof row.enterprise === "boolean" ? (
-                          row.enterprise ? (
-                            <Check className="w-5 h-5 text-primary mx-auto" />
-                          ) : (
-                            <span className="text-muted-foreground">-</span>
-                          )
-                        ) : (
-                          <span className="text-sm">{row.enterprise}</span>
-                        )}
-                      </td>
-                    </tr>
+                  {comparisonSections.map((section) => (
+                    <Fragment key={section.title}>
+                      {/* Section header row */}
+                      <tr className="border-b border-border bg-muted/20">
+                        <td
+                          colSpan={3}
+                          className="py-3 px-6 text-xs font-semibold uppercase tracking-wider text-muted-foreground"
+                        >
+                          {section.title}
+                        </td>
+                      </tr>
+
+                      {/* Feature rows */}
+                      {section.rows.map((row, i) => (
+                        <tr
+                          key={row.feature}
+                          className={`border-b border-border last:border-0 transition-colors hover:bg-muted/20 ${
+                            i % 2 === 0 ? "" : "bg-muted/10"
+                          }`}
+                        >
+                          <td className="py-3.5 px-6 text-foreground">{row.feature}</td>
+                          <td className="py-3.5 px-6 text-center">
+                            <CellContent value={row.free} isProCol={false} />
+                          </td>
+                          <td className="py-3.5 px-6 text-center bg-primary/5">
+                            <CellContent value={row.pro} isProCol={true} />
+                          </td>
+                        </tr>
+                      ))}
+                    </Fragment>
                   ))}
                 </tbody>
               </table>
             </div>
           </motion.div>
+
+          {/* -- FAQ / contact nudge -- */}
+          <motion.div
+            initial={{ opacity: 0 }}
+            whileInView={{ opacity: 1 }}
+            viewport={{ once: true }}
+            className="text-center mt-16"
+          >
+            <p className="text-muted-foreground">
+              Questions about the right plan?{" "}
+              <a
+                href="mailto:support@myvoicepost.com"
+                className="text-primary hover:underline font-medium"
+                data-testid="link-contact"
+              >
+                Email us — we're happy to help.
+              </a>
+            </p>
+          </motion.div>
+
         </div>
       </main>
 
-      <footer className="border-t border-border py-8">
-        <div className="max-w-7xl mx-auto px-4 text-center text-sm text-muted-foreground">
-          &copy; {new Date().getFullYear()} MyVoicePost. All rights reserved.
-        </div>
-      </footer>
+      <Footer />
     </div>
   );
 }

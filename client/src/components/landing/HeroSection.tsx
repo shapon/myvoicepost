@@ -30,7 +30,7 @@ export default function HeroSection() {
   };
 
   return (
-    <section className="relative min-h-screen pt-24 pb-16 overflow-hidden" data-testid="hero-section">
+    <section className="relative pt-24 pb-16 overflow-hidden" data-testid="hero-section">
       <div className="absolute inset-0 bg-gradient-to-b from-primary/5 via-transparent to-transparent" />
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-primary/15 rounded-full blur-3xl opacity-40" />
       <div className="absolute bottom-1/4 right-1/4 w-96 h-96 bg-cyan-400/15 rounded-full blur-3xl opacity-40" />
