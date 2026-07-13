@@ -92,10 +92,10 @@ export default function Signup() {
       return;
     }
 
-    if (!otp || otp.length !== 6) {
+    if (!otp || !/^\d{6}$/.test(otp)) {
       toast({
         title: "Verification code required",
-        description: "Please enter the 6-digit code sent to your email.",
+        description: "Please enter the 6-digit numeric code sent to your email.",
         variant: "destructive",
       });
       return;

@@ -474,7 +474,18 @@ async function seedSubscriptionPlans() {
   }
 }
 
-seedSubscriptionPlans();
+// Wrap fire-and-forget startup tasks with a timeout so cold-start DB
+// timeouts don't leave the serverless function hanging indefinitely.
+function withStartupTimeout(promise: Promise<unknown>, label: string, ms = 5000): void {
+  const timeout = new Promise<never>((_, reject) =>
+    setTimeout(() => reject(new Error(`TIMEOUT after ${ms}ms`)), ms)
+  );
+  Promise.race([promise, timeout]).catch((err: any) => {
+    console.warn(`[Startup] ${label} skipped:`, err.message);
+  });
+}
+
+withStartupTimeout(seedSubscriptionPlans(), "seedSubscriptionPlans");
 
 function getTokenFromRequest(req: Request): string | null {
   const authHeader = req.headers.authorization;
@@ -1920,7 +1931,7 @@ const translations = new Map<string, any>();
 // ============ ROUTES ============
 
 // Run startup migration: ensure notification log columns exist
-(async () => {
+withStartupTimeout((async () => {
   try {
     await db.execute(sql`
       ALTER TABLE mvp_notification_log
@@ -1945,7 +1956,7 @@ const translations = new Map<string, any>();
   } catch (_migErr2: any) {
     console.warn("[Migration] mvp_notification_preferences check skipped:", (_migErr2 as any)?.message);
   }
-})();
+})(), "startupMigrations", 8000);
 
 const NOTIFICATION_TYPES_API = [
   "subscription_renewed",
@@ -2391,7 +2402,7 @@ app.post("/api/v1/p/mail_otp", async (req, res) => {
 
     const { email } = parseResult.data;
     const normalizedEmail = email.toLowerCase().trim();
-    console.log(`[DEBUG /p/mail_otp] INPUT: email=${normalizedEmail}`);
+    console.log(`[DEBUG /p/mail_otp] INPUT: email_domain=${normalizedEmail.split("@")[1] ?? "unknown"}`);
 
     const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
     if (existingEmail.length > 0) {
@@ -2404,14 +2415,21 @@ app.post("/api/v1/p/mail_otp", async (req, res) => {
     const otp = Math.floor(100000 + Math.random() * 900000).toString();
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-    await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
-
-    await db.insert(emailOtps).values({
-      email: normalizedEmail,
-      otp,
-      expiresAt,
-      verified: false,
-    });
+    try {
+      await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
+      await db.insert(emailOtps).values({
+        email: normalizedEmail,
+        otp,
+        expiresAt,
+        verified: false,
+      });
+    } catch (dbErr: any) {
+      console.error("[OTP] DB error storing OTP code:", dbErr.message);
+      return res.status(503).json({
+        success: false,
+        error: "Service temporarily unavailable. Please try again in a moment.",
+      });
+    }
 
     await sendOtpEmail(normalizedEmail, otp);
 
@@ -2524,78 +2542,91 @@ app.post("/api/v1/p/login", async (req, res) => {
   }
 });
 
-// Public Register shortcut
-app.post("/api/v1/p/register", async (req, res) => {
-  try {
-    const registerSchema = z.object({
-      username: z.string().min(3, "Username must be at least 3 characters"),
-      email: z.string().email("Valid email is required"),
-      password: z.string().min(6, "Password must be at least 6 characters"),
-      confirmPassword: z.string(),
-      otp: z.string().length(6, "6-digit verification code is required"),
-    }).refine((data) => data.password === data.confirmPassword, {
-      message: "Passwords don't match",
-      path: ["confirmPassword"],
-    });
+// ============================================================
+// SHARED REGISTRATION HANDLER
+// Called by both /api/v1/p/register (mobile) and /api/v1/p/auth/signup (web)
+// ============================================================
+const registerSchema = z.object({
+  username: z.string().min(3, "Username must be at least 3 characters"),
+  email: z.string().email("Valid email is required"),
+  password: z.string().min(6, "Password must be at least 6 characters"),
+  confirmPassword: z.string(),
+  otp: z.string().length(6, "6-digit verification code is required"),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: "Passwords don't match",
+  path: ["confirmPassword"],
+});
 
-    const parseResult = registerSchema.safeParse(req.body);
+async function handleRegistration(req: Request, res: Response) {
+  const routeName = req.path.includes("auth") ? "/p/auth/signup" : "/p/register";
+  try {
+    const body = req.body || {};
+    console.log(
+      `[${routeName}] INPUT: fields=[${Object.keys(body).join(",")}]` +
+      ` username_len=${String(body.username ?? "").length}` +
+      ` email_len=${String(body.email ?? "").length}` +
+      ` password=${body.password ? "provided" : "MISSING"}` +
+      ` confirmPassword=${body.confirmPassword ? "provided" : "MISSING"}` +
+      ` otp_len=${String(body.otp ?? "").length}`
+    );
+
+    const parseResult = registerSchema.safeParse(body);
     if (!parseResult.success) {
+      const errs = parseResult.error.errors;
+      console.log(`[${routeName}] VALIDATION FAILED: ${JSON.stringify(errs.map(e => ({ field: e.path.join("."), msg: e.message })))}`);
       return res.status(400).json({
         success: false,
-        error: "Validation failed",
-        details: parseResult.error.errors,
+        error: errs[0]?.message || "Validation failed",
+        details: errs,
       });
     }
 
     const { username, email, password, otp } = parseResult.data;
     const normalizedEmail = email.toLowerCase().trim();
 
-    const otpRecords = await db.select().from(emailOtps)
-      .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
-      .limit(1);
+    let otpRecords;
+    try {
+      otpRecords = await db.select().from(emailOtps)
+        .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
+        .limit(1);
+    } catch (dbErr: any) {
+      console.error(`[${routeName}] DB error during OTP lookup:`, dbErr.message);
+      return res.status(503).json({ success: false, error: "Service temporarily unavailable. Please try again in a moment." });
+    }
 
     if (otpRecords.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: "Invalid verification code",
-      });
+      const emailDomain = normalizedEmail.split("@")[1] ?? "unknown";
+      console.log(`[${routeName}] OTP not found: email_domain=${emailDomain} otp_len=${otp.length}`);
+      return res.status(400).json({ success: false, error: "Invalid verification code. Please request a new one." });
     }
 
     const otpRecord = otpRecords[0];
     if (new Date() > otpRecord.expiresAt) {
-      return res.status(400).json({
-        success: false,
-        error: "Verification code has expired. Please request a new one.",
-      });
+      const emailDomain = normalizedEmail.split("@")[1] ?? "unknown";
+      console.log(`[${routeName}] OTP expired: email_domain=${emailDomain} expiredAt=${otpRecord.expiresAt.toISOString()}`);
+      return res.status(400).json({ success: false, error: "Verification code has expired. Please request a new one." });
     }
 
     const existingUser = await db.select().from(users).where(eq(users.username, username)).limit(1);
     if (existingUser.length > 0) {
-      return res.status(409).json({
-        success: false,
-        error: "Username already exists",
-      });
+      return res.status(409).json({ success: false, error: "Username already exists" });
     }
 
     const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
     if (existingEmail.length > 0) {
-      return res.status(409).json({
-        success: false,
-        error: "Email already exists",
-      });
+      return res.status(409).json({ success: false, error: "Email already exists" });
     }
 
     await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
 
     const hashedPassword = await bcrypt.hash(password, 10);
-
     const trialStartsAt = new Date();
     const trialEndsAt = new Date();
     trialEndsAt.setDate(trialEndsAt.getDate() + 7);
 
     const result = await db.insert(users).values({
       username,
-      email,
+      email: normalizedEmail,
       passwordHash: hashedPassword,
       trialStartsAt,
       trialEndsAt,
@@ -2614,17 +2645,14 @@ app.post("/api/v1/p/register", async (req, res) => {
       { expiresIn: "60d" }
     );
 
-    console.log(`[DEBUG /p/register] OUTPUT: success=true, userId=${user.id}, username=${user.username}, trialEnds=${trialEndsAt.toISOString()}`);
+    console.log(`[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${trialEndsAt.toISOString()}`);
 
-    res.status(201).json({
+    return res.status(201).json({
       success: true,
+      message: "Account created successfully",
       token,
       expiresIn: 60 * 24 * 60 * 60,
-      user: {
-        id: user.id,
-        email: user.email,
-        username: user.username,
-      },
+      user: { id: user.id, email: user.email, username: user.username },
       trial: {
         starts_at: trialStartsAt.toISOString(),
         ends_at: trialEndsAt.toISOString(),
@@ -2634,13 +2662,12 @@ app.post("/api/v1/p/register", async (req, res) => {
       },
     });
   } catch (error: any) {
-    console.error("[Public] Register error:", error);
-    res.status(500).json({
-      success: false,
-      error: "Failed to create account",
-    });
+    console.error(`[${routeName}] Unhandled error:`, error.message);
+    return res.status(500).json({ success: false, error: "Failed to create account" });
   }
-});
+}
+
+app.post("/api/v1/p/register", handleRegistration);
 
 // Auth login - full inline handler (do NOT use app.handle() re-dispatch; body already parsed)
 app.post("/api/v1/p/auth/login", async (req, res) => {
@@ -2725,107 +2752,8 @@ app.post("/api/v1/p/auth/login", async (req, res) => {
   }
 });
 
-// Auth signup - full inline handler (do NOT use app.handle() re-dispatch; body already parsed)
-app.post("/api/v1/p/auth/signup", async (req, res) => {
-  try {
-    const registerSchema = z.object({
-      username: z.string().min(3, "Username must be at least 3 characters"),
-      email: z.string().email("Valid email is required"),
-      password: z.string().min(6, "Password must be at least 6 characters"),
-      confirmPassword: z.string(),
-      otp: z.string().length(6, "6-digit verification code is required"),
-    }).refine((data) => data.password === data.confirmPassword, {
-      message: "Passwords don't match",
-      path: ["confirmPassword"],
-    });
-
-    const parseResult = registerSchema.safeParse(req.body);
-    if (!parseResult.success) {
-      return res.status(400).json({
-        success: false,
-        error: "Validation failed",
-        details: parseResult.error.errors,
-      });
-    }
-
-    const { username, email, password, otp } = parseResult.data;
-    const normalizedEmail = email.toLowerCase().trim();
-
-    const otpRecords = await db.select().from(emailOtps)
-      .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
-      .limit(1);
-
-    if (otpRecords.length === 0) {
-      return res.status(400).json({ success: false, error: "Invalid verification code" });
-    }
-
-    const otpRecord = otpRecords[0];
-    if (new Date() > otpRecord.expiresAt) {
-      return res.status(400).json({
-        success: false,
-        error: "Verification code has expired. Please request a new one.",
-      });
-    }
-
-    const existingUser = await db.select().from(users).where(eq(users.username, username)).limit(1);
-    if (existingUser.length > 0) {
-      return res.status(409).json({ success: false, error: "Username already exists" });
-    }
-
-    const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
-    if (existingEmail.length > 0) {
-      return res.status(409).json({ success: false, error: "Email already exists" });
-    }
-
-    await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const trialStartsAt = new Date();
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
-
-    const inserted = await db.insert(users).values({
-      username,
-      email: normalizedEmail,
-      passwordHash: hashedPassword,
-      trialStartsAt,
-      trialEndsAt,
-      trialUsed: false,
-      trialMinutesTotal: 90,
-      trialMinutesUsed: "0",
-    }).returning();
-
-    const newUser = inserted[0];
-    const sessionId = generateSessionId();
-    await storeSessionId(newUser.id, sessionId);
-
-    const token = jwt.sign(
-      { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId },
-      JWT_SECRET,
-      { expiresIn: "60d" }
-    );
-
-    console.log(`[Auth Signup] User ${newUser.username} created with 7-day trial`);
-
-    res.status(201).json({
-      success: true,
-      message: "Account created successfully",
-      token,
-      expiresIn: 60 * 24 * 60 * 60,
-      user: { id: newUser.id, email: newUser.email, username: newUser.username },
-      trial: {
-        starts_at: trialStartsAt.toISOString(),
-        ends_at: trialEndsAt.toISOString(),
-        minutes_total: 90,
-        minutes_used: 0,
-        minutes_remaining: 90,
-      },
-    });
-  } catch (error: any) {
-    console.error("[Auth Signup] Error:", error);
-    res.status(500).json({ success: false, error: "Failed to create account" });
-  }
-});
+// Auth signup — delegates to shared handleRegistration (same logic as /p/register)
+app.post("/api/v1/p/auth/signup", handleRegistration);
 
 app.post("/api/v1/a/auth/logout", mobileAuthMiddleware, async (req, res) => {
   const jwtUser = (req as any).jwtUser;
