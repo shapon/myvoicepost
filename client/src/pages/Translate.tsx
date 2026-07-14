@@ -281,6 +281,8 @@ export default function Translate() {
               isSaving={saveMutation.isPending}
               onTextChange={handlePolishedTextEdit}
               icon={<Languages className="h-4 w-4 text-primary" />}
+              showImageGen
+              isAuthenticated={!!user}
             />
           </div>
         )}

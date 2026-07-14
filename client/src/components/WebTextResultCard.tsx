@@ -13,8 +13,12 @@ import {
   Save,
   X,
   Loader2,
+  ImageIcon,
+  Download,
+  RotateCw,
 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
+import { apiRequest } from "@/lib/queryClient";
 
 interface WebTextResultCardProps {
   title: string;
@@ -28,6 +32,8 @@ interface WebTextResultCardProps {
   isSaving?: boolean;
   onTextChange?: (newText: string) => void;
   icon?: React.ReactNode;
+  showImageGen?: boolean;
+  isAuthenticated?: boolean;
 }
 
 export default function WebTextResultCard({
@@ -42,6 +48,8 @@ export default function WebTextResultCard({
   isSaving = false,
   onTextChange,
   icon,
+  showImageGen = false,
+  isAuthenticated = false,
 }: WebTextResultCardProps) {
   const { toast } = useToast();
   const [copied, setCopied] = useState(false);
@@ -49,6 +57,12 @@ export default function WebTextResultCard({
   const [editText, setEditText] = useState(text);
   const [isPlaying, setIsPlaying] = useState(false);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+
+  const [generatedImage, setGeneratedImage] = useState<string | null>(null);
+  const [isGeneratingImage, setIsGeneratingImage] = useState(false);
+  const [cooldownUntil, setCooldownUntil] = useState<number>(0);
+  const [secondsLeft, setSecondsLeft] = useState<number>(0);
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     setEditText(text);
@@ -61,6 +75,37 @@ export default function WebTextResultCard({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (cooldownUntil <= Date.now()) {
+      setSecondsLeft(0);
+      return;
+    }
+    const tick = () => {
+      const remaining = Math.ceil((cooldownUntil - Date.now()) / 1000);
+      if (remaining <= 0) {
+        setSecondsLeft(0);
+        if (intervalRef.current) {
+          clearInterval(intervalRef.current);
+          intervalRef.current = null;
+        }
+      } else {
+        setSecondsLeft(remaining);
+      }
+    };
+    tick();
+    intervalRef.current = setInterval(tick, 1000);
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [cooldownUntil]);
+
+  const startCooldown = (seconds: number) => {
+    setCooldownUntil(Date.now() + seconds * 1000);
+  };
 
   const handleCopy = async () => {
     try {
@@ -143,17 +188,80 @@ export default function WebTextResultCard({
     setIsEditing(false);
   };
 
+  const handleGenerateImage = async () => {
+    if (!text.trim() || secondsLeft > 0) return;
+    setIsGeneratingImage(true);
+    try {
+      const prompt = `Create a visually appealing image that represents the following text content. Make it suitable for sharing on social media:\n\n${text.substring(0, 500)}`;
+      const res = await apiRequest("POST", "/api/v1/a/generate-image-web", {
+        prompt,
+        size: "1024x1024",
+        quality: "standard",
+      });
+
+      if (res.status === 429) {
+        const err = await res.json();
+        const retryAfter = err.retryAfterSeconds || 30;
+        startCooldown(retryAfter);
+        toast({
+          title: "Too many requests",
+          description: err.error || `Please wait ${retryAfter}s before generating again.`,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to generate image");
+      }
+
+      const data = await res.json();
+      if (data.success && data.imageBase64) {
+        setGeneratedImage(data.imageBase64);
+        startCooldown(30);
+      } else {
+        throw new Error("No image returned from server");
+      }
+    } catch (error: any) {
+      toast({
+        title: "Image generation failed",
+        description: error.message || "Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsGeneratingImage(false);
+    }
+  };
+
+  const handleDownloadImage = () => {
+    if (!generatedImage) return;
+    const link = document.createElement("a");
+    link.href = `data:image/png;base64,${generatedImage}`;
+    link.download = `myvoicepost-image-${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
   if (!text) return null;
+
+  const isCoolingDown = secondsLeft > 0;
+  const imageButtonLabel = isGeneratingImage
+    ? "Generating..."
+    : isCoolingDown
+    ? `Image (${secondsLeft}s)`
+    : "Image";
 
   return (
     <Card data-testid={`card-result-${title.toLowerCase().replace(/\s+/g, "-")}`}>
-      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2">
+      <CardHeader className="flex flex-row items-center justify-between gap-2 pb-2 flex-wrap">
         <div className="flex items-center gap-2 flex-wrap">
           {icon}
           <CardTitle className="text-sm font-medium">{title}</CardTitle>
           {badge && <Badge variant={badgeVariant}>{badge}</Badge>}
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex items-center gap-1 flex-wrap">
           <Button
             size="icon"
             variant="ghost"
@@ -211,8 +319,26 @@ export default function WebTextResultCard({
               {isSaving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             </Button>
           )}
+          {showImageGen && isAuthenticated && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleGenerateImage}
+              disabled={isGeneratingImage || isCoolingDown}
+              className="gap-1.5 text-primary"
+              data-testid={`button-image-${title.toLowerCase().replace(/\s+/g, "-")}`}
+            >
+              {isGeneratingImage ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <ImageIcon className="w-4 h-4" />
+              )}
+              <span className="text-xs">{imageButtonLabel}</span>
+            </Button>
+          )}
         </div>
       </CardHeader>
+
       <CardContent>
         {isEditing ? (
           <Textarea
@@ -227,6 +353,50 @@ export default function WebTextResultCard({
           </p>
         )}
       </CardContent>
+
+      {isGeneratingImage && !generatedImage && (
+        <CardContent className="pt-0">
+          <div className="flex flex-col items-center gap-2 py-6 text-muted-foreground rounded-md border border-dashed">
+            <Loader2 className="w-6 h-6 animate-spin text-primary" />
+            <p className="text-sm font-medium">Creating your image…</p>
+            <p className="text-xs">This may take 15–30 seconds</p>
+          </div>
+        </CardContent>
+      )}
+
+      {generatedImage && (
+        <CardContent className="pt-0 space-y-3" data-testid={`section-image-${title.toLowerCase().replace(/\s+/g, "-")}`}>
+          <img
+            src={`data:image/png;base64,${generatedImage}`}
+            alt="AI generated illustration"
+            className="w-full rounded-md border object-contain"
+            data-testid={`img-generated-${title.toLowerCase().replace(/\s+/g, "-")}`}
+          />
+          <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1 gap-1.5"
+              onClick={handleDownloadImage}
+              data-testid={`button-download-${title.toLowerCase().replace(/\s+/g, "-")}`}
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="flex-1 gap-1.5"
+              onClick={handleGenerateImage}
+              disabled={isGeneratingImage || isCoolingDown}
+              data-testid={`button-regen-${title.toLowerCase().replace(/\s+/g, "-")}`}
+            >
+              <RotateCw className="w-3.5 h-3.5" />
+              {isCoolingDown ? `Redo (${secondsLeft}s)` : "Redo"}
+            </Button>
+          </div>
+        </CardContent>
+      )}
     </Card>
   );
 }

@@ -4209,6 +4209,10 @@ app.post("/api/v1/a/translate", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Generate image from text description using Gemini
+const imageGenRateLimitStore: Record<string, { count: number; resetAt: number }> = {};
+const IMAGE_GEN_RATE_WINDOW_MS = 60 * 1000;
+const IMAGE_GEN_RATE_MAX = 3;
+
 app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
   try {
     const geminiKey = process.env.GEMINI_API_KEY;
@@ -4238,6 +4242,25 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
     console.log(`[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`);
+
+    if (userId) {
+      const now = Date.now();
+      const userLimit = imageGenRateLimitStore[userId];
+      if (userLimit && now < userLimit.resetAt) {
+        if (userLimit.count >= IMAGE_GEN_RATE_MAX) {
+          const retryAfterSeconds = Math.ceil((userLimit.resetAt - now) / 1000);
+          console.log(`[IMAGE GEN] Rate limited userId=${userId}, retryAfterSeconds=${retryAfterSeconds}`);
+          return res.status(429).json({
+            success: false,
+            error: `Image generation limit reached. Please wait ${retryAfterSeconds} seconds before trying again.`,
+            retryAfterSeconds,
+          });
+        }
+        imageGenRateLimitStore[userId].count++;
+      } else {
+        imageGenRateLimitStore[userId] = { count: 1, resetAt: now + IMAGE_GEN_RATE_WINDOW_MS };
+      }
+    }
 
     const UNSAFE_KEYWORDS = [
       "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
@@ -4271,40 +4294,36 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const SAFETY_PREFIX = "IMPORTANT: This image must be completely safe, family-friendly, and appropriate for all ages including children. " +
-      "Do not include any violence, gore, weapons, nudity, sexual content, drugs, alcohol, tobacco, " +
-      "scary or disturbing imagery, hateful symbols, or any content inappropriate for minors. " +
-      "The image should be clean, wholesome, and suitable for a general audience. " +
-      "Now generate the following: ";
+    const truncatedPrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
 
-    const safePrompt = SAFETY_PREFIX + prompt;
+    const SAFETY_PREFIX = "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
+
+    const safePrompt = SAFETY_PREFIX + truncatedPrompt;
+
+    const aspectRatioMap: Record<string, string> = {
+      "1024x1024": "1:1",
+      "1024x1792": "9:16",
+      "1792x1024": "16:9",
+    };
+    const aspectRatio = aspectRatioMap[size] || "1:1";
 
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
-    const response = await geminiAi.models.generateContent({
-      model: "gemini-2.0-flash-exp-image-generation",
-      contents: [safePrompt],
+    const response = await geminiAi.models.generateImages({
+      model: "imagen-3.0-generate-002",
+      prompt: safePrompt,
       config: {
-        responseModalities: ["TEXT", "IMAGE"],
+        numberOfImages: 1,
+        aspectRatio,
+        safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
+        personGeneration: "ALLOW_ADULT",
       },
     });
 
-    let imageBase64 = "";
-    let responseText = "";
-
-    if (response.candidates && response.candidates[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData && part.inlineData.data) {
-          imageBase64 = part.inlineData.data;
-        }
-        if (part.text) {
-          responseText = part.text;
-        }
-      }
-    }
+    const imageBase64 = response.generatedImages?.[0]?.image?.imageBytes;
 
     if (!imageBase64) {
-      throw new Error("No image data received from Gemini");
+      throw new Error("No image data received from Imagen");
     }
 
     console.log(`[IMAGE GEN] Image generated successfully for user ${userId}`);
@@ -4312,7 +4331,7 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     res.json({
       success: true,
       imageBase64: imageBase64,
-      revisedPrompt: responseText || prompt,
+      revisedPrompt: truncatedPrompt,
     });
   } catch (error: any) {
     console.error("[IMAGE GEN] Error:", error.message);
@@ -4337,6 +4356,120 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
       success: false,
       error: error.message || "Failed to generate image",
     });
+  }
+});
+
+// Web: Generate image (uses standard Bearer JWT — same secret as mobile, explicit web route)
+app.post("/api/v1/a/generate-image-web", mobileAuthMiddleware, async (req, res) => {
+  try {
+    const geminiKey = process.env.GEMINI_API_KEY;
+    if (!geminiKey) {
+      return res.status(500).json({ success: false, error: "Gemini API key not configured" });
+    }
+
+    const schema = z.object({
+      prompt: z.string().min(1, "Image description is required").max(4000, "Description too long"),
+      size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional().default("1024x1024"),
+      quality: z.enum(["standard", "hd"]).optional().default("standard"),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+    }
+
+    const { prompt, size } = parseResult.data;
+    const jwtUser = (req as any).jwtUser;
+    const userId = jwtUser?.userId || jwtUser?.id;
+    console.log(`[IMAGE GEN WEB] userId=${userId}, size=${size}, promptLength=${prompt.length}`);
+
+    if (userId) {
+      const now = Date.now();
+      const userLimit = imageGenRateLimitStore[userId];
+      if (userLimit && now < userLimit.resetAt) {
+        if (userLimit.count >= IMAGE_GEN_RATE_MAX) {
+          const retryAfterSeconds = Math.ceil((userLimit.resetAt - now) / 1000);
+          return res.status(429).json({
+            success: false,
+            error: `Image generation limit reached. Please wait ${retryAfterSeconds} seconds before trying again.`,
+            retryAfterSeconds,
+          });
+        }
+        imageGenRateLimitStore[userId].count++;
+      } else {
+        imageGenRateLimitStore[userId] = { count: 1, resetAt: now + IMAGE_GEN_RATE_WINDOW_MS };
+      }
+    }
+
+    const UNSAFE_KEYWORDS = [
+      "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
+      "sex", "sexual", "erotic", "hentai", "xxx",
+      "kill", "killing", "murder", "stab", "stabbing", "shoot", "shooting", "decapitate",
+      "gore", "gory", "bloody", "blood", "dismember", "mutilate", "torture", "beheading",
+      "gun", "rifle", "pistol", "shotgun", "firearm", "assault rifle", "machine gun",
+      "bomb", "grenade", "explosive", "missile", "knife attack",
+      "drug", "drugs", "cocaine", "heroin", "meth", "marijuana", "cannabis", "weed",
+      "smoking", "cigarette", "vaping", "alcohol", "drunk", "beer", "wine", "whiskey",
+      "horror", "scary", "terrifying", "nightmare", "demon", "demonic", "satan", "satanic",
+      "zombie", "undead", "corpse", "dead body", "skull", "skeleton",
+      "racist", "racism", "hate", "nazi", "swastika", "terrorist", "terrorism",
+      "suicide", "self-harm", "cutting", "hanging",
+      "child abuse", "abuse", "assault", "kidnap", "trafficking",
+      "bikini", "lingerie", "underwear", "bra", "panties", "thong",
+      "strip", "stripper", "prostitute", "escort",
+    ];
+
+    const promptLower = prompt.toLowerCase();
+    const detectedUnsafe = UNSAFE_KEYWORDS.filter(keyword => {
+      const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      return regex.test(promptLower);
+    });
+
+    if (detectedUnsafe.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Your image description contains content that is not allowed. Please keep descriptions family-friendly.",
+      });
+    }
+
+    const truncatedPrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
+    const SAFETY_PREFIX = "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
+    const safePrompt = SAFETY_PREFIX + truncatedPrompt;
+
+    const aspectRatioMap: Record<string, string> = {
+      "1024x1024": "1:1",
+      "1024x1792": "9:16",
+      "1792x1024": "16:9",
+    };
+    const aspectRatio = aspectRatioMap[size] || "1:1";
+
+    const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
+    const response = await geminiAi.models.generateImages({
+      model: "imagen-3.0-generate-002",
+      prompt: safePrompt,
+      config: {
+        numberOfImages: 1,
+        aspectRatio,
+        safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
+        personGeneration: "ALLOW_ADULT",
+      },
+    });
+
+    const imageBase64 = response.generatedImages?.[0]?.image?.imageBytes;
+    if (!imageBase64) throw new Error("No image data received from Imagen");
+
+    console.log(`[IMAGE GEN WEB] Success for user ${userId}`);
+    res.json({ success: true, imageBase64, revisedPrompt: truncatedPrompt });
+  } catch (error: any) {
+    console.error("[IMAGE GEN WEB] Error:", error.message);
+    const errorMsg = (error.message || "").toLowerCase();
+    if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
+      return res.status(400).json({ success: false, error: "Your image description was rejected by the safety filter. Please modify it and try again." });
+    }
+    if (errorMsg.includes("quota") || errorMsg.includes("rate") || error?.status === 429) {
+      return res.status(429).json({ success: false, error: "Too many image generation requests. Please wait a moment and try again." });
+    }
+    res.status(500).json({ success: false, error: error.message || "Failed to generate image" });
   }
 });
 
@@ -7381,6 +7514,62 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       }
     } catch (lowMinErr: any) {
       console.error("[Cron] Low minutes check failed:", lowMinErr.message);
+    }
+
+    // === LOW MINUTES WARNING — TRIAL USERS (=10 trial minutes remaining) ===
+    try {
+      const trialLowMinUsers = await db.select({
+        id: users.id,
+        email: users.email,
+        trialMinutesTotal: users.trialMinutesTotal,
+        trialMinutesUsed: users.trialMinutesUsed,
+      }).from(users)
+        .where(and(
+          sql`${users.trialMinutesTotal} IS NOT NULL`,
+          sql`${users.trialMinutesUsed} IS NOT NULL`,
+          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
+          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) > 0`,
+        ));
+
+      for (const trialUser of trialLowMinUsers) {
+        const minsLeft = Math.max(0, Math.floor(
+          (Number(trialUser.trialMinutesTotal) || 0) - (Number(trialUser.trialMinutesUsed) || 0)
+        ));
+
+        const alreadySent = await db.select().from(notificationLog)
+          .where(and(
+            eq(notificationLog.userId, trialUser.id),
+            eq(notificationLog.notificationType, "low_minutes_trial"),
+          )).limit(1);
+        if (alreadySent.length > 0) { skippedCount++; continue; }
+
+        const userTokens = await db.select().from(pushTokens)
+          .where(and(eq(pushTokens.userId, trialUser.id), eq(pushTokens.isActive, true)));
+
+        const minsLeftStr = `${minsLeft} trial minute${minsLeft === 1 ? "" : "s"}`;
+        const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } = await getNotificationPrefApi(trialUser.id, "low_minutes");
+        if (userTokens.length > 0 && lmPrefPush) await sendExpoPushNotifications(
+          userTokens.map(t => t.pushToken),
+          "Low on Minutes",
+          `You have ${minsLeftStr} remaining. Subscribe now to keep recording!`,
+          { type: "low_minutes", screen: "home" }
+        );
+        await db.insert(notificationLog).values({
+          userId: trialUser.id,
+          notificationType: "low_minutes_trial",
+          title: "Low on Minutes",
+          status: "sent",
+          message: `Trial: ${minsLeft} minutes remaining warning`,
+        });
+        if (trialUser.email && lmPrefEmail) {
+          sendLowMinutesEmail(trialUser.email, minsLeft)
+            .catch((e: any) => console.error("[Email] low_minutes_trial:", e.message));
+        }
+        sentCount++;
+        console.log(`[Cron] Sent low_minutes_trial notification to user ${trialUser.id} (${minsLeft} trial mins left)`);
+      }
+    } catch (trialLowMinErr: any) {
+      console.error("[Cron] Trial low minutes check failed:", trialLowMinErr.message);
     }
 
     // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===

@@ -241,6 +241,10 @@ const crashReportRateLimit: Record<string, { count: number; resetAt: number }> =
 const CRASH_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const CRASH_RATE_LIMIT_MAX = 5;
 
+const imageGenRateLimit: Record<string, { count: number; resetAt: number }> = {};
+const IMAGE_GEN_RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const IMAGE_GEN_RATE_LIMIT_MAX = 3;
+
 const crashEmailThrottle: Record<string, number> = {};
 const CRASH_EMAIL_COOLDOWN_MS = 5 * 60 * 1000;
 
@@ -469,14 +473,21 @@ export async function registerRoutes(
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
-      await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
-
-      await db.insert(emailOtps).values({
-        email: normalizedEmail,
-        otp,
-        expiresAt,
-        verified: false,
-      });
+      try {
+        await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
+        await db.insert(emailOtps).values({
+          email: normalizedEmail,
+          otp,
+          expiresAt,
+          verified: false,
+        });
+      } catch (dbErr: any) {
+        console.error("[OTP] DB error storing OTP code:", dbErr.message);
+        return res.status(503).json({
+          success: false,
+          error: "Service temporarily unavailable. Please try again in a moment.",
+        });
+      }
 
       await sendOtpEmail(normalizedEmail, otp);
 
@@ -914,77 +925,86 @@ export async function registerRoutes(
     }
   });
 
-  // Public: Signup (no auth required - user creates account then gets token)
-  app.post("/api/v1/p/auth/signup", async (req, res) => {
+  // ============================================================
+  // SHARED REGISTRATION HANDLER (captures 'storage' via closure)
+  // Called by both /api/v1/p/auth/signup (web) and /api/v1/p/register (mobile)
+  // ============================================================
+  const handleRegistrationRequest = async (req: any, res: any) => {
+    const routeName = (req.path || "").includes("auth") ? "/p/auth/signup" : "/p/register";
+    const body = req.body || {};
+    console.log(
+      `[${routeName}] INPUT: fields=[${Object.keys(body).join(",")}]` +
+      ` username_len=${String(body.username ?? "").length}` +
+      ` email_len=${String(body.email ?? "").length}` +
+      ` password=${body.password ? "provided" : "MISSING"}` +
+      ` confirmPassword=${body.confirmPassword ? "provided" : "MISSING"}` +
+      ` otp_len=${String(body.otp ?? "").length}`
+    );
+
+    const signupSchema = z
+      .object({
+        username: z.string().min(3, "Username must be at least 3 characters"),
+        email: z.string().email("Valid email is required"),
+        password: z.string().min(6, "Password must be at least 6 characters"),
+        confirmPassword: z.string(),
+        otp: z.string().length(6, "6-digit verification code is required"),
+      })
+      .refine((data) => data.password === data.confirmPassword, {
+        message: "Passwords don't match",
+        path: ["confirmPassword"],
+      });
+
+    const parseResult = signupSchema.safeParse(body);
+    if (!parseResult.success) {
+      const errs = parseResult.error.errors;
+      console.log(`[${routeName}] VALIDATION FAILED: ${JSON.stringify(errs.map((e) => ({ field: e.path.join("."), msg: e.message })))}`);
+      return res.status(400).json({
+        success: false,
+        error: errs[0]?.message || "Validation failed",
+        details: errs,
+      });
+    }
+
     try {
-      const signupSchemaPublic = z
-        .object({
-          username: z.string().min(3, "Username must be at least 3 characters"),
-          email: z.string().email("Valid email is required"),
-          password: z.string().min(6, "Password must be at least 6 characters"),
-          confirmPassword: z.string(),
-          otp: z.string().length(6, "6-digit verification code is required"),
-        })
-        .refine((data) => data.password === data.confirmPassword, {
-          message: "Passwords don't match",
-          path: ["confirmPassword"],
-        });
-
-      const parseResult = signupSchemaPublic.safeParse(req.body);
-      if (!parseResult.success) {
-        return res.status(400).json({
-          success: false,
-          error: "Validation failed",
-          details: parseResult.error.errors,
-        });
-      }
-
       const { username, email, password, otp } = parseResult.data;
       const normalizedEmail = email.toLowerCase().trim();
+      const emailDomain = normalizedEmail.split("@")[1] ?? "unknown";
 
-      const otpRecords = await db.select().from(emailOtps)
-        .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
-        .limit(1);
+      let otpRecords;
+      try {
+        otpRecords = await db.select().from(emailOtps)
+          .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
+          .limit(1);
+      } catch (dbErr: any) {
+        console.error(`[${routeName}] DB error during OTP lookup:`, dbErr.message);
+        return res.status(503).json({ success: false, error: "Service temporarily unavailable. Please try again in a moment." });
+      }
 
       if (otpRecords.length === 0) {
-        return res.status(400).json({
-          success: false,
-          error: "Invalid verification code",
-        });
+        console.log(`[${routeName}] OTP not found: email_domain=${emailDomain} otp_len=${otp.length}`);
+        return res.status(400).json({ success: false, error: "Invalid verification code. Please request a new one." });
       }
 
       const otpRecord = otpRecords[0];
       if (new Date() > otpRecord.expiresAt) {
-        return res.status(400).json({
-          success: false,
-          error: "Verification code has expired. Please request a new one.",
-        });
+        console.log(`[${routeName}] OTP expired: email_domain=${emailDomain} expiredAt=${otpRecord.expiresAt.toISOString()}`);
+        return res.status(400).json({ success: false, error: "Verification code has expired. Please request a new one." });
       }
 
-      // Check if username exists
       const existingUser = await storage.getUserByUsername(username);
       if (existingUser) {
-        return res.status(409).json({
-          success: false,
-          error: "Username already exists",
-        });
+        return res.status(409).json({ success: false, error: "Username already exists" });
       }
 
-      // Check if email exists
       const existingEmailUser = await storage.getUserByEmail?.(normalizedEmail);
       if (existingEmailUser) {
-        return res.status(409).json({
-          success: false,
-          error: "Email already exists",
-        });
+        return res.status(409).json({ success: false, error: "Email already exists" });
       }
 
       await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
 
-      // Create user
       const user = await storage.createUser({ username, email: normalizedEmail, password });
 
-      // Initialize trial: 7 days, 90 minutes
       const trialStartsAt = new Date();
       const trialEndsAt = new Date();
       trialEndsAt.setDate(trialEndsAt.getDate() + 7);
@@ -1000,29 +1020,23 @@ export async function registerRoutes(
         })
         .where(eq(users.id, user.id));
 
-      // Generate session ID for single-device enforcement
       const sessionId = generateSessionId();
       await storeSessionId(user.id, sessionId);
 
-      // Generate JWT token (valid for 60 days)
       const token = jwt.sign(
         { userId: user.id, email: user.email, username: user.username, sessionId },
         JWT_SECRET,
         { expiresIn: "60d" },
       );
 
-      console.log(`[Public Signup] User ${user.username} created successfully with 7-day trial`);
+      console.log(`[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${trialEndsAt.toISOString()}`);
 
-      res.status(201).json({
+      return res.status(201).json({
         success: true,
         message: "Account created successfully",
         token,
         expiresIn: 60 * 24 * 60 * 60,
-        user: {
-          id: user.id,
-          email: user.email,
-          username: user.username,
-        },
+        user: { id: user.id, email: user.email, username: user.username },
         trial: {
           starts_at: trialStartsAt.toISOString(),
           ends_at: trialEndsAt.toISOString(),
@@ -1032,13 +1046,13 @@ export async function registerRoutes(
         },
       });
     } catch (error: any) {
-      console.error("[Public Signup] Error:", error);
-      res.status(500).json({
-        success: false,
-        error: "Failed to create account",
-      });
+      console.error(`[${routeName}] Unhandled error:`, error.message);
+      return res.status(500).json({ success: false, error: "Failed to create account" });
     }
-  });
+  };
+
+  // Public: Signup — delegates to shared handler
+  app.post("/api/v1/p/auth/signup", handleRegistrationRequest);
 
   // GET /api/v1/wp/auth/google/config - Web-specific: Get Google Client ID for frontend GSI
   app.get("/api/v1/wp/auth/google/config", (req, res) => {
@@ -2172,6 +2186,25 @@ export async function registerRoutes(
       const userId = req.jwtUser?.userId;
       console.log(`[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`);
 
+      if (userId) {
+        const now = Date.now();
+        const userLimit = imageGenRateLimit[userId];
+        if (userLimit && now < userLimit.resetAt) {
+          if (userLimit.count >= IMAGE_GEN_RATE_LIMIT_MAX) {
+            const retryAfterSeconds = Math.ceil((userLimit.resetAt - now) / 1000);
+            console.log(`[IMAGE GEN] Rate limited userId=${userId}, retryAfterSeconds=${retryAfterSeconds}`);
+            return res.status(429).json({
+              success: false,
+              error: `Image generation limit reached. Please wait ${retryAfterSeconds} seconds before trying again.`,
+              retryAfterSeconds,
+            });
+          }
+          imageGenRateLimit[userId].count++;
+        } else {
+          imageGenRateLimit[userId] = { count: 1, resetAt: now + IMAGE_GEN_RATE_LIMIT_WINDOW_MS };
+        }
+      }
+
       const UNSAFE_KEYWORDS = [
         "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
         "sex", "sexual", "erotic", "hentai", "xxx",
@@ -2204,43 +2237,162 @@ export async function registerRoutes(
         });
       }
 
-      const SAFETY_PREFIX = "IMPORTANT: This image must be completely safe, family-friendly, and appropriate for all ages including children. " +
-        "Do not include any violence, gore, weapons, nudity, sexual content, drugs, alcohol, tobacco, " +
-        "scary or disturbing imagery, hateful symbols, or any content inappropriate for minors. " +
-        "The image should be clean, wholesome, and suitable for a general audience. " +
-        "Now generate the following: ";
+      const truncatedPrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
+
+      const SAFETY_PREFIX = "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
+
+      const safePrompt = SAFETY_PREFIX + truncatedPrompt;
+
+      const aspectRatioMap: Record<string, string> = {
+        "1024x1024": "1:1",
+        "1024x1792": "9:16",
+        "1792x1024": "16:9",
+      };
+      const aspectRatio = aspectRatioMap[size] || "1:1";
 
       const { GoogleGenAI } = await import("@google/genai");
       const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
-      const response = await geminiAi.models.generateContent({
-        model: "gemini-2.0-flash-exp-image-generation",
-        contents: [SAFETY_PREFIX + prompt],
-        config: { responseModalities: ["TEXT", "IMAGE"] },
+      const response = await geminiAi.models.generateImages({
+        model: "imagen-3.0-generate-002",
+        prompt: safePrompt,
+        config: {
+          numberOfImages: 1,
+          aspectRatio,
+          safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
+          personGeneration: "ALLOW_ADULT",
+        },
       });
 
-      let imageBase64 = "";
-      let responseText = "";
-
-      if (response.candidates && response.candidates[0]?.content?.parts) {
-        for (const part of response.candidates[0].content.parts) {
-          if (part.inlineData && part.inlineData.data) {
-            imageBase64 = part.inlineData.data;
-          }
-          if (part.text) {
-            responseText = part.text;
-          }
-        }
-      }
+      const imageBase64 = response.generatedImages?.[0]?.image?.imageBytes;
 
       if (!imageBase64) {
-        throw new Error("No image data received from Gemini");
+        throw new Error("No image data received from Imagen");
       }
 
       console.log(`[IMAGE GEN] Success for user ${userId}`);
-      res.json({ success: true, imageBase64, revisedPrompt: responseText || prompt });
+      res.json({ success: true, imageBase64, revisedPrompt: truncatedPrompt });
     } catch (error: any) {
       console.error("[IMAGE GEN] Error:", error.message);
+      const errorMsg = (error.message || "").toLowerCase();
+      if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
+        return res.status(400).json({ success: false, error: "Image rejected by safety filter. Please modify your description." });
+      }
+      if (errorMsg.includes("quota") || errorMsg.includes("rate") || error?.status === 429) {
+        return res.status(429).json({ success: false, error: "Too many requests. Please try again later." });
+      }
+      res.status(500).json({ success: false, error: error.message || "Failed to generate image" });
+    }
+  });
+
+  // Web: Generate image (standard JWT auth — req.jwtUser set by global jwtAuthMiddleware)
+  app.post("/api/v1/a/generate-image-web", async (req, res) => {
+    try {
+      if (!req.jwtUser) {
+        return res.status(401).json({ success: false, error: "Authentication required." });
+      }
+
+      const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      if (!geminiKey) {
+        return res.status(500).json({ success: false, error: "Gemini API key not configured" });
+      }
+
+      const schema = z.object({
+        prompt: z.string().min(1, "Image description is required").max(4000, "Description too long"),
+        size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional().default("1024x1024"),
+        quality: z.enum(["standard", "hd"]).optional().default("standard"),
+      });
+
+      const parseResult = schema.safeParse(req.body);
+      if (!parseResult.success) {
+        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+      }
+
+      const { prompt, size } = parseResult.data;
+      const userId = req.jwtUser?.userId;
+      console.log(`[IMAGE GEN WEB] userId=${userId}, size=${size}, promptLength=${prompt.length}`);
+
+      if (userId) {
+        const now = Date.now();
+        const userLimit = imageGenRateLimit[userId];
+        if (userLimit && now < userLimit.resetAt) {
+          if (userLimit.count >= IMAGE_GEN_RATE_LIMIT_MAX) {
+            const retryAfterSeconds = Math.ceil((userLimit.resetAt - now) / 1000);
+            return res.status(429).json({
+              success: false,
+              error: `Image generation limit reached. Please wait ${retryAfterSeconds} seconds before trying again.`,
+              retryAfterSeconds,
+            });
+          }
+          imageGenRateLimit[userId].count++;
+        } else {
+          imageGenRateLimit[userId] = { count: 1, resetAt: now + IMAGE_GEN_RATE_LIMIT_WINDOW_MS };
+        }
+      }
+
+      const UNSAFE_KEYWORDS = [
+        "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
+        "sex", "sexual", "erotic", "hentai", "xxx",
+        "kill", "killing", "murder", "stab", "stabbing", "shoot", "shooting", "decapitate",
+        "gore", "gory", "bloody", "blood", "dismember", "mutilate", "torture", "beheading",
+        "gun", "rifle", "pistol", "shotgun", "firearm", "assault rifle", "machine gun",
+        "bomb", "grenade", "explosive", "missile", "knife attack",
+        "drug", "drugs", "cocaine", "heroin", "meth", "marijuana", "cannabis", "weed",
+        "smoking", "cigarette", "vaping", "alcohol", "drunk", "beer", "wine", "whiskey",
+        "horror", "scary", "terrifying", "nightmare", "demon", "demonic", "satan", "satanic",
+        "zombie", "undead", "corpse", "dead body", "skull", "skeleton",
+        "racist", "racism", "hate", "nazi", "swastika", "terrorist", "terrorism",
+        "suicide", "self-harm", "cutting", "hanging",
+        "child abuse", "abuse", "assault", "kidnap", "trafficking",
+        "bikini", "lingerie", "underwear", "bra", "panties", "thong",
+        "strip", "stripper", "prostitute", "escort",
+      ];
+
+      const promptLower = prompt.toLowerCase();
+      const detectedUnsafe = UNSAFE_KEYWORDS.filter(keyword => {
+        const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+        return regex.test(promptLower);
+      });
+
+      if (detectedUnsafe.length > 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Your image description contains content that is not allowed. Please keep it family-friendly.",
+        });
+      }
+
+      const truncatedPrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
+      const SAFETY_PREFIX = "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
+      const safePrompt = SAFETY_PREFIX + truncatedPrompt;
+
+      const aspectRatioMap: Record<string, string> = {
+        "1024x1024": "1:1",
+        "1024x1792": "9:16",
+        "1792x1024": "16:9",
+      };
+      const aspectRatio = aspectRatioMap[size] || "1:1";
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
+
+      const response = await geminiAi.models.generateImages({
+        model: "imagen-3.0-generate-002",
+        prompt: safePrompt,
+        config: {
+          numberOfImages: 1,
+          aspectRatio,
+          safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
+          personGeneration: "ALLOW_ADULT",
+        },
+      });
+
+      const imageBase64 = response.generatedImages?.[0]?.image?.imageBytes;
+      if (!imageBase64) throw new Error("No image data received from Imagen");
+
+      console.log(`[IMAGE GEN WEB] Success for user ${userId}`);
+      res.json({ success: true, imageBase64, revisedPrompt: truncatedPrompt });
+    } catch (error: any) {
+      console.error("[IMAGE GEN WEB] Error:", error.message);
       const errorMsg = (error.message || "").toLowerCase();
       if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
         return res.status(400).json({ success: false, error: "Image rejected by safety filter. Please modify your description." });
@@ -4522,6 +4674,61 @@ export async function registerRoutes(
         console.error("[Cron] Low minutes check failed:", lowMinErr.message);
       }
 
+      // === LOW MINUTES WARNING — TRIAL USERS (=10 trial minutes remaining) ===
+      try {
+        const trialLowMinUsers = await db.select({
+          id: users.id,
+          email: users.email,
+          trialMinutesTotal: users.trialMinutesTotal,
+          trialMinutesUsed: users.trialMinutesUsed,
+        }).from(users)
+          .where(and(
+            sql`${users.trialMinutesTotal} IS NOT NULL`,
+            sql`${users.trialMinutesUsed} IS NOT NULL`,
+            sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
+            sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) > 0`,
+          ));
+
+        for (const trialUser of trialLowMinUsers) {
+          const minsLeft = Math.max(0, Math.floor(
+            (Number(trialUser.trialMinutesTotal) || 0) - (Number(trialUser.trialMinutesUsed) || 0)
+          ));
+
+          const alreadySent = await db.select().from(notificationLog)
+            .where(and(
+              eq(notificationLog.userId, trialUser.id),
+              eq(notificationLog.notificationType, "low_minutes_trial"),
+            )).limit(1);
+          if (alreadySent.length > 0) { skippedCount++; continue; }
+
+          const userTokens = await db.select().from(pushTokens)
+            .where(and(eq(pushTokens.userId, trialUser.id), eq(pushTokens.isActive, true)));
+
+          const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } = await getNotificationPref(trialUser.id, "low_minutes");
+          if (userTokens.length > 0 && lmPrefPush) await sendExpoPushNotifications(
+            userTokens.map(t => t.pushToken),
+            "Low on Minutes",
+            `You have ${minsLeft} trial minute${minsLeft === 1 ? "" : "s"} remaining. Subscribe now to keep recording!`,
+            { type: "low_minutes", screen: "home" }
+          );
+          await db.insert(notificationLog).values({
+            userId: trialUser.id,
+            notificationType: "low_minutes_trial",
+            title: "Low on Minutes",
+            status: "sent",
+            message: `Trial: ${minsLeft} minutes remaining warning`,
+          });
+          if (trialUser.email && lmPrefEmail) {
+            sendLowMinutesEmail(trialUser.email, minsLeft)
+              .catch((e: any) => console.error("[Email] low_minutes_trial:", e.message));
+          }
+          sentCount++;
+          console.log(`[Cron] Sent low_minutes_trial notification to user ${trialUser.id} (${minsLeft} trial mins left)`);
+        }
+      } catch (trialLowMinErr: any) {
+        console.error("[Cron] Trial low minutes check failed:", trialLowMinErr.message);
+      }
+
       // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===
       try {
         const threeDaysFromNow = new Date(now.getTime() + 3 * oneDayMs);
@@ -4810,10 +5017,8 @@ export async function registerRoutes(
     (app as any).handle(req, res, next);
   });
 
-  app.post("/api/v1/p/register", async (req, res, next) => {
-    req.url = "/api/v1/p/auth/signup";
-    (app as any).handle(req, res, next);
-  });
+  // Mobile: Register — delegates to shared handler (same as /p/auth/signup)
+  app.post("/api/v1/p/register", handleRegistrationRequest);
 
   app.post("/api/v1/a/logout", mobileAuthMiddleware, async (req: any, res) => {
     try {
