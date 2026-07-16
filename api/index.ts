@@ -4209,9 +4209,6 @@ app.post("/api/v1/a/translate", mobileAuthMiddleware, async (req, res) => {
 });
 
 // Mobile: Generate image from text description using Gemini
-const imageGenRateLimitStore: Record<string, { count: number; resetAt: number }> = {};
-const IMAGE_GEN_RATE_WINDOW_MS = 60 * 1000;
-const IMAGE_GEN_RATE_MAX = 3;
 
 app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
   try {
@@ -4242,25 +4239,6 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
     console.log(`[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`);
-
-    if (userId) {
-      const now = Date.now();
-      const userLimit = imageGenRateLimitStore[userId];
-      if (userLimit && now < userLimit.resetAt) {
-        if (userLimit.count >= IMAGE_GEN_RATE_MAX) {
-          const retryAfterSeconds = Math.ceil((userLimit.resetAt - now) / 1000);
-          console.log(`[IMAGE GEN] Rate limited userId=${userId}, retryAfterSeconds=${retryAfterSeconds}`);
-          return res.status(429).json({
-            success: false,
-            error: `Image generation limit reached. Please wait ${retryAfterSeconds} seconds before trying again.`,
-            retryAfterSeconds,
-          });
-        }
-        imageGenRateLimitStore[userId].count++;
-      } else {
-        imageGenRateLimitStore[userId] = { count: 1, resetAt: now + IMAGE_GEN_RATE_WINDOW_MS };
-      }
-    }
 
     const UNSAFE_KEYWORDS = [
       "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
@@ -4381,24 +4359,6 @@ app.post("/api/v1/a/generate-image-web", mobileAuthMiddleware, async (req, res) 
     const jwtUser = (req as any).jwtUser;
     const userId = jwtUser?.userId || jwtUser?.id;
     console.log(`[IMAGE GEN WEB] userId=${userId}, size=${size}, promptLength=${prompt.length}`);
-
-    if (userId) {
-      const now = Date.now();
-      const userLimit = imageGenRateLimitStore[userId];
-      if (userLimit && now < userLimit.resetAt) {
-        if (userLimit.count >= IMAGE_GEN_RATE_MAX) {
-          const retryAfterSeconds = Math.ceil((userLimit.resetAt - now) / 1000);
-          return res.status(429).json({
-            success: false,
-            error: `Image generation limit reached. Please wait ${retryAfterSeconds} seconds before trying again.`,
-            retryAfterSeconds,
-          });
-        }
-        imageGenRateLimitStore[userId].count++;
-      } else {
-        imageGenRateLimitStore[userId] = { count: 1, resetAt: now + IMAGE_GEN_RATE_WINDOW_MS };
-      }
-    }
 
     const UNSAFE_KEYWORDS = [
       "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
