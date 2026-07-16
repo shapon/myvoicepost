@@ -2254,12 +2254,11 @@ export async function registerRoutes(
       const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
       const response = await geminiAi.models.generateImages({
-        model: "imagen-3.0-generate-002",
+        model: "gemini-2.5-flash-image",
         prompt: safePrompt,
         config: {
           numberOfImages: 1,
           aspectRatio,
-          safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
           personGeneration: "ALLOW_ADULT",
         },
       });
@@ -2376,12 +2375,11 @@ export async function registerRoutes(
       const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
       const response = await geminiAi.models.generateImages({
-        model: "imagen-3.0-generate-002",
+        model: "gemini-2.5-flash-image",
         prompt: safePrompt,
         config: {
           numberOfImages: 1,
           aspectRatio,
-          safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
           personGeneration: "ALLOW_ADULT",
         },
       });

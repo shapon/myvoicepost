@@ -4310,12 +4310,11 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
     const response = await geminiAi.models.generateImages({
-      model: "imagen-3.0-generate-002",
+      model: "gemini-2.5-flash-image",
       prompt: safePrompt,
       config: {
         numberOfImages: 1,
         aspectRatio,
-        safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
         personGeneration: "ALLOW_ADULT",
       },
     });
@@ -4445,12 +4444,11 @@ app.post("/api/v1/a/generate-image-web", mobileAuthMiddleware, async (req, res) 
 
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
     const response = await geminiAi.models.generateImages({
-      model: "imagen-3.0-generate-002",
+      model: "gemini-2.5-flash-image",
       prompt: safePrompt,
       config: {
         numberOfImages: 1,
         aspectRatio,
-        safetyFilterLevel: "BLOCK_LOW_AND_ABOVE",
         personGeneration: "ALLOW_ADULT",
       },
     });
