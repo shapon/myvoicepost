@@ -4285,19 +4285,22 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     };
     const aspectRatio = aspectRatioMap[size] || "1:1";
 
+    const { GoogleGenAI } = await import("@google/genai");
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
-    const response = await geminiAi.models.generateImages({
+    // 1. Shift to the unified Interactions pipeline
+    const interaction = await geminiAi.interactions.create({
       model: "gemini-3.1-flash-image",
-      prompt: safePrompt,
-      config: {
-        numberOfImages: 1,
-        aspectRatio,
-        personGeneration: "ALLOW_ADULT",
+      input: safePrompt, // 'prompt' is now called 'input'
+      response_format: {
+        type: "image",
+        aspect_ratio: aspectRatio, // Valid inputs: "1:1", "16:9", "9:16", etc.
+        image_size: "1K",          // Resolution tier: "1K", "2K", or "4K"
       },
     });
 
-    const imageBase64 = response.generatedImages?.[0]?.image?.imageBytes;
+    // 2. Extract the base64 string directly from the convenience property
+    const imageBase64 = interaction.output_image?.data;
 
     if (!imageBase64) {
       throw new Error("No image data received from Imagen");
@@ -4402,18 +4405,22 @@ app.post("/api/v1/a/generate-image-web", mobileAuthMiddleware, async (req, res) 
     };
     const aspectRatio = aspectRatioMap[size] || "1:1";
 
+    const { GoogleGenAI } = await import("@google/genai");
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
-    const response = await geminiAi.models.generateImages({
+
+    // 1. Shift to the unified Interactions pipeline
+    const interaction = await geminiAi.interactions.create({
       model: "gemini-3.1-flash-image",
-      prompt: safePrompt,
-      config: {
-        numberOfImages: 1,
-        aspectRatio,
-        personGeneration: "ALLOW_ADULT",
+      input: safePrompt, // 'prompt' is now called 'input'
+      response_format: {
+        type: "image",
+        aspect_ratio: aspectRatio, // Valid inputs: "1:1", "16:9", "9:16", etc.
+        image_size: "1K",          // Resolution tier: "1K", "2K", or "4K"
       },
     });
 
-    const imageBase64 = response.generatedImages?.[0]?.image?.imageBytes;
+    // 2. Extract the base64 string directly from the convenience property
+    const imageBase64 = interaction.output_image?.data;
     if (!imageBase64) throw new Error("No image data received from Imagen");
 
     console.log(`[IMAGE GEN WEB] Success for user ${userId}`);
