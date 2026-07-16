@@ -829,7 +829,7 @@ async function sendSubscriptionRenewedEmail(email: string, planName: string): Pr
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   const emailFrom = process.env.EMAIL_FROM || smtpUser;
-  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping subscription_renewed email"); return; }
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured ï¿½ skipping subscription_renewed email"); return; }
   try {
     const transporter = nodemailer.createTransport({
       host: smtpHost, port: smtpPort, secure: smtpSecure,
@@ -850,7 +850,7 @@ async function sendSubscriptionRenewedEmail(email: string, planName: string): Pr
       <a href="${webAppUrl}" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Start Recording</a>
     </div>
     <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
-    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+    <p style="color:#888;font-size:13px;margin-bottom:0;">ï¿½ The MyVoicePost Team</p>
   </div>
   <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
 </body></html>`;
@@ -949,7 +949,7 @@ async function sendSubscriptionExpiredEmail(email: string): Promise<void> {
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   const emailFrom = process.env.EMAIL_FROM || smtpUser;
-  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping subscription_expired email"); return; }
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured ï¿½ skipping subscription_expired email"); return; }
   try {
     const transporter = nodemailer.createTransport({
       host: smtpHost, port: smtpPort, secure: smtpSecure,
@@ -970,7 +970,7 @@ async function sendSubscriptionExpiredEmail(email: string): Promise<void> {
       <a href="${webAppUrl}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Renew Subscription</a>
     </div>
     <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
-    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+    <p style="color:#888;font-size:13px;margin-bottom:0;">ï¿½ The MyVoicePost Team</p>
   </div>
   <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
 </body></html>`;
@@ -986,7 +986,7 @@ async function sendTopUpCreditedEmail(email: string, minutes: number): Promise<v
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   const emailFrom = process.env.EMAIL_FROM || smtpUser;
-  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping topup_credited email"); return; }
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured ï¿½ skipping topup_credited email"); return; }
   try {
     const transporter = nodemailer.createTransport({
       host: smtpHost, port: smtpPort, secure: smtpSecure,
@@ -1007,7 +1007,7 @@ async function sendTopUpCreditedEmail(email: string, minutes: number): Promise<v
       <a href="${webAppUrl}" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Start Recording</a>
     </div>
     <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
-    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+    <p style="color:#888;font-size:13px;margin-bottom:0;">ï¿½ The MyVoicePost Team</p>
   </div>
   <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
 </body></html>`;
@@ -1023,7 +1023,7 @@ async function sendLowMinutesEmail(email: string, minsLeft: number): Promise<voi
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   const emailFrom = process.env.EMAIL_FROM || smtpUser;
-  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping low_minutes email"); return; }
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured ï¿½ skipping low_minutes email"); return; }
   try {
     const transporter = nodemailer.createTransport({
       host: smtpHost, port: smtpPort, secure: smtpSecure,
@@ -1044,7 +1044,7 @@ async function sendLowMinutesEmail(email: string, minsLeft: number): Promise<voi
       <a href="${webAppUrl}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Top Up Now</a>
     </div>
     <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
-    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+    <p style="color:#888;font-size:13px;margin-bottom:0;">ï¿½ The MyVoicePost Team</p>
   </div>
   <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
 </body></html>`;
@@ -1060,7 +1060,7 @@ async function sendSubscriptionExpiringSoonEmail(email: string, planName: string
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   const emailFrom = process.env.EMAIL_FROM || smtpUser;
-  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured — skipping expiry_3days_manual email"); return; }
+  if (!smtpHost || !smtpUser || !smtpPass) { console.warn("[Email] SMTP not configured ï¿½ skipping expiry_3days_manual email"); return; }
   try {
     const transporter = nodemailer.createTransport({
       host: smtpHost, port: smtpPort, secure: smtpSecure,
@@ -1081,7 +1081,7 @@ async function sendSubscriptionExpiringSoonEmail(email: string, planName: string
       <a href="${webAppUrl}/subscription" style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);color:white;padding:14px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Renew Now</a>
     </div>
     <hr style="border:none;border-top:1px solid #e0e0e0;margin:25px 0;">
-    <p style="color:#888;font-size:13px;margin-bottom:0;">— The MyVoicePost Team</p>
+    <p style="color:#888;font-size:13px;margin-bottom:0;">ï¿½ The MyVoicePost Team</p>
   </div>
   <div style="text-align:center;padding:20px;color:#999;font-size:12px;"><p>&copy; ${new Date().getFullYear()} MyVoicePost. All rights reserved.</p></div>
 </body></html>`;
@@ -1327,7 +1327,7 @@ const HALLUCINATION_PATTERNS = [
   /mr\.\s+smith/i,
   /mrs?\.\s+john/i,
   /^\s*$/,
-  // Prompt leakage — Gemini returning our own prompt text as transcription
+  // Prompt leakage ï¿½ Gemini returning our own prompt text as transcription
   /you are a strict speech-to-text transcription engine/i,
   /speech-to-text transcription engine/i,
   /task:\s*transcribe/i,
@@ -1349,7 +1349,7 @@ function isLikelyHallucination(text: string, audioSizeBytes: number): boolean {
   }
 
   // Density check: only discard if extremely sparse AND nearly empty (< 10 chars).
-  // Do NOT discard real short utterances from long recordings — trust Gemini's hasSpeech/confidence.
+  // Do NOT discard real short utterances from long recordings ï¿½ trust Gemini's hasSpeech/confidence.
   const charsPerKb = trimmed.length / (audioSizeBytes / 1024);
   if (charsPerKb < 0.1 && trimmed.length < 10) {
     console.log(`[Transcribe] Suspiciously low text density: ${charsPerKb.toFixed(2)} chars/KB`);
@@ -1411,7 +1411,7 @@ async function transcribeAudioAuto(audioBuffer: Buffer, mimeType: string): Promi
 
       const prompt = `You are a strict speech-to-text transcription engine.
 
-TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken — every single word from start to finish.
+TASK: Transcribe ALL speech in this audio, in whatever language(s) are spoken ï¿½ every single word from start to finish.
 LANGUAGE: auto (detect language automatically from the audio)
 
 STRICT RULES -- you MUST follow every rule:
@@ -1550,7 +1550,7 @@ async function transcribeAudio(audioBuffer: Buffer, mimeType: string, language: 
 
       const prompt = `You are a strict speech-to-text transcription engine.
 
-TASK: Transcribe the audio attached to this message — every single word from start to finish.
+TASK: Transcribe the audio attached to this message ï¿½ every single word from start to finish.
 EXPECTED LANGUAGE: ${langName} (${language})
 
 STRICT RULES -- you MUST follow every rule:
@@ -2752,7 +2752,7 @@ app.post("/api/v1/p/auth/login", async (req, res) => {
   }
 });
 
-// Auth signup — delegates to shared handleRegistration (same logic as /p/register)
+// Auth signup ï¿½ delegates to shared handleRegistration (same logic as /p/register)
 app.post("/api/v1/p/auth/signup", handleRegistration);
 
 app.post("/api/v1/a/auth/logout", mobileAuthMiddleware, async (req, res) => {
@@ -4005,8 +4005,8 @@ app.post("/api/v1/a/transcribe_l", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// Mobile: Multipart transcribe — accepts up to 6 audio snippets (10s each = 60s batch)
-// Fields: snippet_0 … snippet_N (files), mimeType (optional string body field)
+// Mobile: Multipart transcribe ï¿½ accepts up to 6 audio snippets (10s each = 60s batch)
+// Fields: snippet_0 ï¿½ snippet_N (files), mimeType (optional string body field)
 app.post("/api/v1/a/mp/transcribe", mobileAuthMiddleware, upload.any(), async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
@@ -4050,7 +4050,7 @@ app.post("/api/v1/a/mp/transcribe", mobileAuthMiddleware, upload.any(), async (r
 });
 
 // Mobile: Multipart language-specific transcribe
-// Fields: snippet_0 … snippet_N (files), language (required string body field), mimeType (optional)
+// Fields: snippet_0 ï¿½ snippet_N (files), language (required string body field), mimeType (optional)
 app.post("/api/v1/a/mp/transcribe_l", mobileAuthMiddleware, upload.any(), async (req, res) => {
   try {
     if (!process.env.GEMINI_API_KEY) {
@@ -4288,7 +4288,7 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
     const response = await geminiAi.models.generateImages({
-      model: "imagen-3.0-generate-002",
+      model: "gemini-3.1-flash-image",
       prompt: safePrompt,
       config: {
         numberOfImages: 1,
@@ -4336,7 +4336,7 @@ app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
   }
 });
 
-// Web: Generate image (uses standard Bearer JWT — same secret as mobile, explicit web route)
+// Web: Generate image (uses standard Bearer JWT ï¿½ same secret as mobile, explicit web route)
 app.post("/api/v1/a/generate-image-web", mobileAuthMiddleware, async (req, res) => {
   try {
     const geminiKey = process.env.GEMINI_API_KEY;
@@ -4404,7 +4404,7 @@ app.post("/api/v1/a/generate-image-web", mobileAuthMiddleware, async (req, res) 
 
     const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
     const response = await geminiAi.models.generateImages({
-      model: "imagen-3.0-generate-002",
+      model: "gemini-3.1-flash-image",
       prompt: safePrompt,
       config: {
         numberOfImages: 1,
@@ -5992,7 +5992,7 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
       minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
     });
 
-    // Fire-and-forget push — after response is sent, no risk of blocking
+    // Fire-and-forget push ï¿½ after response is sent, no risk of blocking
     ;(async () => {
       try {
         const { pushEnabled: tcPrefPush, emailEnabled: tcPrefEmail } = await getNotificationPrefApi(userId, "topup_credited");
@@ -6177,7 +6177,7 @@ app.post("/api/v1/a/create-subscription", mobileAuthMiddleware, async (req: any,
   await handleCreateSubscription(req, res, userId);
 });
 
-// POST /api/v1/a/web-subscribe — creates a Stripe Checkout Session for web payment
+// POST /api/v1/a/web-subscribe ï¿½ creates a Stripe Checkout Session for web payment
 app.post("/api/v1/a/web-subscribe", mobileAuthMiddleware, async (req: any, res) => {
   try {
     const userId = req.jwtUser?.userId;
@@ -6703,7 +6703,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 await refreshUserRole(user.id);
                 console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}, access until ${newTrialEndsAt.toISOString()}, ${totalNewMinutesRemaining} mins remaining`);
 
-                // Fire-and-forget push + email — must never block webhook 200 response
+                // Fire-and-forget push + email ï¿½ must never block webhook 200 response
                 ;(async () => {
                   try {
                     const dedupKey = `sub_renewed_${subscriptionId}_${invoice.period_start || ''}`;
@@ -6778,7 +6778,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
             await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${failedSubId}`);
 
-            // Fire-and-forget push + email — must never block webhook 200 response
+            // Fire-and-forget push + email ï¿½ must never block webhook 200 response
             ;(async () => {
               try {
                 const dedupKey = `payment_failed_${failedInvoice.id}`;
@@ -6939,7 +6939,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
             await refreshUserRole(user.id);
             console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
 
-            // Fire-and-forget push — must never block webhook 200 response
+            // Fire-and-forget push ï¿½ must never block webhook 200 response
             ;(async () => {
               try {
                 const dedupKey = `sub_expired_${deletedSub.id}`;
@@ -7474,7 +7474,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       console.error("[Cron] Low minutes check failed:", lowMinErr.message);
     }
 
-    // === LOW MINUTES WARNING — TRIAL USERS (=10 trial minutes remaining) ===
+    // === LOW MINUTES WARNING ï¿½ TRIAL USERS (=10 trial minutes remaining) ===
     try {
       const trialLowMinUsers = await db.select({
         id: users.id,
@@ -7530,7 +7530,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       console.error("[Cron] Trial low minutes check failed:", trialLowMinErr.message);
     }
 
-    // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===
+    // === SUBSCRIPTION EXPIRING SOON ï¿½ 3-DAY WARNING FOR MANUAL PAYERS ===
     try {
       const threeDaysFromNow = new Date(now.getTime() + 3 * oneDayMs);
       const manualPayerSubs = await db.select({
@@ -8621,7 +8621,7 @@ async function extractDocText(file: Express.Multer.File): Promise<string> {
   if (mimetype === "application/pdf") {
     // pdf-parse v2 uses pdfjs-dist which requires @napi-rs/canvas (a native binary
     // not available in Vercel's serverless runtime). Instead, send the PDF directly
-    // to Gemini as inline data — Gemini natively understands PDFs, no native deps needed.
+    // to Gemini as inline data ï¿½ Gemini natively understands PDFs, no native deps needed.
     const pdfApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     if (!pdfApiKey) throw new Error("No Gemini API key configured for PDF text extraction.");
     const pdfGenaiOpts: any = { apiKey: pdfApiKey };
@@ -8648,7 +8648,7 @@ async function extractDocText(file: Express.Multer.File): Promise<string> {
     const result = await mammoth.extractRawText({ buffer });
     const docxText = result.value?.trim() || "";
     if (docxText) return docxText;
-    // mammoth returned empty — fall back to Gemini (handles complex/image-heavy DOCX)
+    // mammoth returned empty ï¿½ fall back to Gemini (handles complex/image-heavy DOCX)
     console.warn("[DocAI] mammoth returned empty text for DOCX, falling back to Gemini");
     const docxApiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
     if (!docxApiKey) throw new Error("No Gemini API key configured and mammoth returned empty text.");
@@ -8684,7 +8684,7 @@ function buildDocPrompt(mode: string, text: string): string {
     case "summarize":
       return `You are an executive summariser. Produce:\n1. A concise Executive Summary (3-5 sentences).\n2. Exactly 5 bulleted Key Takeaways (bold keyword each).\nUse Markdown.\n\n${body}`;
     case "qa":
-      return `You are a customer service auditor. Generate 5–10 Q&A pairs from the document:\n\n**Q: [question]**\nA: [answer]\n\n${body}`;
+      return `You are a customer service auditor. Generate 5ï¿½10 Q&A pairs from the document:\n\n**Q: [question]**\nA: [answer]\n\n${body}`;
     case "blog":
       return `You are an SEO content marketer. Write a complete long-form blog post in Markdown with: H1 SEO title, introduction hook, 3+ H2 sections, H3 sub-sections, closing summary, and a Call-to-Action.\n\n${body}`;
     default:
@@ -8695,11 +8695,11 @@ function buildDocPrompt(mode: string, text: string): string {
 function mockDocResponse(mode: string, filename: string): string {
   switch (mode) {
     case "extract":
-      return `# Extracted Content — ${filename}\n\nThis is a simulated extraction. In production the AI returns fully structured Markdown.\n\n## Section 1\nLorem ipsum dolor sit amet, consectetur adipiscing elit.\n\n## Section 2\n- First key point\n- Second key point\n- Third key point`;
+      return `# Extracted Content ï¿½ ${filename}\n\nThis is a simulated extraction. In production the AI returns fully structured Markdown.\n\n## Section 1\nLorem ipsum dolor sit amet, consectetur adipiscing elit.\n\n## Section 2\n- First key point\n- Second key point\n- Third key point`;
     case "summarize":
-      return `# Executive Summary — ${filename}\n\nThis document presents key findings and strategic recommendations.\n\n## Key Takeaways\n- **Insight 1:** Primary finding establishes clear baseline.\n- **Insight 2:** Efficiency can improve 30% through proposed framework.\n- **Insight 3:** Risk mitigation strategies with actionable timelines.\n- **Insight 4:** Stakeholder alignment is critical.\n- **Insight 5:** Phased rollout roadmap recommended.`;
+      return `# Executive Summary ï¿½ ${filename}\n\nThis document presents key findings and strategic recommendations.\n\n## Key Takeaways\n- **Insight 1:** Primary finding establishes clear baseline.\n- **Insight 2:** Efficiency can improve 30% through proposed framework.\n- **Insight 3:** Risk mitigation strategies with actionable timelines.\n- **Insight 4:** Stakeholder alignment is critical.\n- **Insight 5:** Phased rollout roadmap recommended.`;
     case "qa":
-      return `# Customer Q&A — ${filename}\n\n**Q: What is the main purpose of this document?**\nA: A comprehensive reference guide for decision-makers.\n\n**Q: Who is the intended audience?**\nA: Professionals in strategy, operations, and implementation.\n\n**Q: What are the key recommendations?**\nA: A phased approach starting with a pilot program.\n\n**Q: Are there risks identified?**\nA: Yes, three primary risks with mitigation strategies.\n\n**Q: What is the timeline?**\nA: 90 days split into three 30-day phases.`;
+      return `# Customer Q&A ï¿½ ${filename}\n\n**Q: What is the main purpose of this document?**\nA: A comprehensive reference guide for decision-makers.\n\n**Q: Who is the intended audience?**\nA: Professionals in strategy, operations, and implementation.\n\n**Q: What are the key recommendations?**\nA: A phased approach starting with a pilot program.\n\n**Q: Are there risks identified?**\nA: Yes, three primary risks with mitigation strategies.\n\n**Q: What is the timeline?**\nA: 90 days split into three 30-day phases.`;
     case "blog":
       return `# How to Unlock Value from Your Documents with AI\n\n*Transform raw content into actionable insights.*\n\n---\n\n## Introduction\n\nDocuments hold untapped strategic value. AI-powered document intelligence surfaces insights in seconds.\n\n---\n\n## Why Traditional Review Falls Short\n\n- Knowledge workers spend 2.5 hours/day searching for information\n- Critical insights buried in long documents go unread\n\n---\n\n## How It Works\n\n### Step 1: Upload\nThe system ingests your document and converts it to structured text.\n\n### Step 2: Choose Mode\nSelect Extract, Summarize, Q&A, or Blog Post.\n\n### Step 3: Receive Output\nGet polished, structured output in seconds.\n\n---\n\n## Conclusion\n\nDocument Intelligence is a competitive advantage. **Ready to transform your documents?** Upload your first file today.`;
     default:
