@@ -2254,7 +2254,7 @@ export async function registerRoutes(
       const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
       const response = await geminiAi.models.generateImages({
-        model: "gemini-2.5-flash-image",
+        model: "imagen-3.0-generate-002",
         prompt: safePrompt,
         config: {
           numberOfImages: 1,
@@ -2375,7 +2375,7 @@ export async function registerRoutes(
       const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
 
       const response = await geminiAi.models.generateImages({
-        model: "gemini-2.5-flash-image",
+        model: "imagen-3.0-generate-002",
         prompt: safePrompt,
         config: {
           numberOfImages: 1,
