@@ -7493,7 +7493,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
           sql`${users.trialMinutesTotal} IS NOT NULL`,
           sql`${users.trialMinutesUsed} IS NOT NULL`,
           sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
-          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) > 0`,
+          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) >= 0`,
         ));
 
       for (const trialUser of trialLowMinUsers) {

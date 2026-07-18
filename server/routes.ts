@@ -319,7 +319,7 @@ export async function registerRoutes(
     res.json({ status: "ok" });
   });
 
-  // -- Notification Preferences ----------------------------------------------
+  // ── Notification Preferences ──────────────────────────────────────────────
   app.get("/api/v1/a/notification-preferences", async (req, res) => {
     const userId = getUserId(req);
     if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
@@ -1048,7 +1048,7 @@ export async function registerRoutes(
     }
   };
 
-  // Public: Signup � delegates to shared handler
+  // Public: Signup — delegates to shared handler
   app.post("/api/v1/p/auth/signup", handleRegistrationRequest);
 
   // GET /api/v1/wp/auth/google/config - Web-specific: Get Google Client ID for frontend GSI
@@ -1606,8 +1606,8 @@ export async function registerRoutes(
     }
   });
 
-  // Mobile: Multipart transcribe � accepts up to 6 audio snippets (10s each = 60s batch)
-  // Fields: snippet_0 � snippet_N (files), mimeType (optional string body field)
+  // Mobile: Multipart transcribe — accepts up to 6 audio snippets (10s each = 60s batch)
+  // Fields: snippet_0 … snippet_N (files), mimeType (optional string body field)
   app.post("/api/v1/a/mp/transcribe", mobileAuthMiddleware, upload.any(), async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
@@ -1626,7 +1626,7 @@ export async function registerRoutes(
 
       const mimeType = (req.body.mimeType as string | undefined) || "audio/mp4";
 
-      // Sort files by fieldname (snippet_0, snippet_1, �) for chronological order
+      // Sort files by fieldname (snippet_0, snippet_1, …) for chronological order
       const sorted = [...files].sort((a, b) => {
         const ai = parseInt(a.fieldname.replace(/\D/g, '') || '0', 10);
         const bi = parseInt(b.fieldname.replace(/\D/g, '') || '0', 10);
@@ -1657,7 +1657,7 @@ export async function registerRoutes(
   });
 
   // Mobile: Multipart language-specific transcribe
-  // Fields: snippet_0 � snippet_N (files), language (required string body field), mimeType (optional)
+  // Fields: snippet_0 … snippet_N (files), language (required string body field), mimeType (optional)
   app.post("/api/v1/a/mp/transcribe_l", mobileAuthMiddleware, upload.any(), async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
@@ -2264,7 +2264,7 @@ export async function registerRoutes(
     }
   });
 
-  // Web: Generate image (standard JWT auth � req.jwtUser set by global jwtAuthMiddleware)
+  // Web: Generate image (standard JWT auth — req.jwtUser set by global jwtAuthMiddleware)
   app.post("/api/v1/a/generate-image-web", async (req, res) => {
     try {
       if (!req.jwtUser) {
@@ -3515,7 +3515,7 @@ export async function registerRoutes(
     await handleCreateSubscription(req, res, userId, email);
   });
 
-  // GET /api/v1/p/plans � public endpoint to list visible subscription plans
+  // GET /api/v1/p/plans — public endpoint to list visible subscription plans
   app.get("/api/v1/p/plans", async (req, res) => {
     try {
       const plans = await db.select().from(subscriptionPlans)
@@ -3527,7 +3527,7 @@ export async function registerRoutes(
     }
   });
 
-  // POST /api/v1/a/web-subscribe � creates a Stripe Checkout Session for web payment
+  // POST /api/v1/a/web-subscribe — creates a Stripe Checkout Session for web payment
   app.post("/api/v1/a/web-subscribe", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId!;
@@ -3734,7 +3734,7 @@ export async function registerRoutes(
                   await refreshUserRole(user.id);
                   console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
 
-                  // Fire-and-forget push � must never block webhook 200 response
+                  // Fire-and-forget push — must never block webhook 200 response
                   ;(async () => {
                     try {
                       const dedupKey = `sub_renewed_${subscriptionId}_${invoice.period_start || ''}`;
@@ -3809,7 +3809,7 @@ export async function registerRoutes(
               await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${subscriptionId}`);
 
-              // Fire-and-forget push � must never block webhook 200 response
+              // Fire-and-forget push — must never block webhook 200 response
               ;(async () => {
                 try {
                   const dedupKey = `payment_failed_${invoice.id}`;
@@ -3950,7 +3950,7 @@ export async function registerRoutes(
               await refreshUserRole(user.id);
               console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
 
-              // Fire-and-forget push � must never block webhook 200 response
+              // Fire-and-forget push — must never block webhook 200 response
               ;(async () => {
                 try {
                   const dedupKey = `sub_expired_${subscription.id}`;
@@ -4580,7 +4580,7 @@ export async function registerRoutes(
         console.log(`[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`);
       }
 
-      // === LOW MINUTES WARNING (=10 minutes remaining) ===
+      // === LOW MINUTES WARNING (≤10 minutes remaining) ===
       try {
         const lowMinuteSubs = await db.select({
           subId: userSubscriptions.id,
@@ -4591,17 +4591,25 @@ export async function registerRoutes(
           .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
           .where(eq(userSubscriptions.status, "active"));
 
+        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
         for (const sub of lowMinuteSubs) {
           const remaining = parseFloat(String(sub.minutesRemaining || "0"));
           if (remaining > 10) continue;
 
+          // Only dedup within the last 30 days — allows re-warning after a top-up that depletes again
           const alreadySent = await db.select().from(notificationLog)
             .where(and(
               eq(notificationLog.userId, sub.userId),
               eq(notificationLog.notificationType, "low_minutes"),
               eq(notificationLog.subscriptionId, sub.subId),
+              gte(notificationLog.sentAt, thirtyDaysAgo),
             )).limit(1);
-          if (alreadySent.length > 0) { skippedCount++; continue; }
+          if (alreadySent.length > 0) {
+            console.log(`[Cron] Skipped low_minutes (sent within 30d) for user ${sub.userId} (sub ${sub.subId}, ${remaining} mins left)`);
+            skippedCount++;
+            continue;
+          }
 
           const userTokens = await db.select().from(pushTokens)
             .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
@@ -4635,7 +4643,7 @@ export async function registerRoutes(
         console.error("[Cron] Low minutes check failed:", lowMinErr.message);
       }
 
-      // === LOW MINUTES WARNING � TRIAL USERS (=10 trial minutes remaining) ===
+      // === LOW MINUTES WARNING — TRIAL USERS (≤10 trial minutes remaining) ===
       try {
         const trialLowMinUsers = await db.select({
           id: users.id,
@@ -4645,9 +4653,8 @@ export async function registerRoutes(
         }).from(users)
           .where(and(
             sql`${users.trialMinutesTotal} IS NOT NULL`,
-            sql`${users.trialMinutesUsed} IS NOT NULL`,
             sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
-            sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) > 0`,
+            sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) >= 0`,
           ));
 
         for (const trialUser of trialLowMinUsers) {
@@ -4655,12 +4662,18 @@ export async function registerRoutes(
             (Number(trialUser.trialMinutesTotal) || 0) - (Number(trialUser.trialMinutesUsed) || 0)
           ));
 
+          // Only dedup within the last 30 days
           const alreadySent = await db.select().from(notificationLog)
             .where(and(
               eq(notificationLog.userId, trialUser.id),
               eq(notificationLog.notificationType, "low_minutes_trial"),
+              gte(notificationLog.sentAt, thirtyDaysAgo),
             )).limit(1);
-          if (alreadySent.length > 0) { skippedCount++; continue; }
+          if (alreadySent.length > 0) {
+            console.log(`[Cron] Skipped low_minutes_trial (sent within 30d) for user ${trialUser.id} (${minsLeft} trial mins left)`);
+            skippedCount++;
+            continue;
+          }
 
           const userTokens = await db.select().from(pushTokens)
             .where(and(eq(pushTokens.userId, trialUser.id), eq(pushTokens.isActive, true)));
@@ -4690,7 +4703,7 @@ export async function registerRoutes(
         console.error("[Cron] Trial low minutes check failed:", trialLowMinErr.message);
       }
 
-      // === SUBSCRIPTION EXPIRING SOON � 3-DAY WARNING FOR MANUAL PAYERS ===
+      // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===
       try {
         const threeDaysFromNow = new Date(now.getTime() + 3 * oneDayMs);
         const manualPayerSubs = await db.select({
@@ -4978,7 +4991,7 @@ export async function registerRoutes(
     (app as any).handle(req, res, next);
   });
 
-  // Mobile: Register � delegates to shared handler (same as /p/auth/signup)
+  // Mobile: Register — delegates to shared handler (same as /p/auth/signup)
   app.post("/api/v1/p/register", handleRegistrationRequest);
 
   app.post("/api/v1/a/logout", mobileAuthMiddleware, async (req: any, res) => {
@@ -5035,7 +5048,7 @@ export async function registerRoutes(
   });
 
   // ============================================================
-  // PASSWORD RESET (mobile � 6-char code based)
+  // PASSWORD RESET (mobile — 6-char code based)
   // ============================================================
 
   app.post("/api/v1/p/forgot-password", async (req, res) => {
@@ -5547,7 +5560,7 @@ export async function registerRoutes(
         minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
       });
 
-      // Fire-and-forget push � after response is sent, no risk of blocking
+      // Fire-and-forget push — after response is sent, no risk of blocking
       ;(async () => {
         try {
           const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(userId, "topup_credited");
@@ -6080,9 +6093,9 @@ export async function registerRoutes(
     }
   });
 
-  // --------------------------------------------------------------------------
-  // POST /api/v1/a/doc-ai � Document Intelligence & Q&A Engine
-  // --------------------------------------------------------------------------
+  // ──────────────────────────────────────────────────────────────────────────
+  // POST /api/v1/a/doc-ai — Document Intelligence & Q&A Engine
+  // ──────────────────────────────────────────────────────────────────────────
 
   const docUpload = multer({
     storage: multer.memoryStorage(),
@@ -6152,16 +6165,16 @@ export async function registerRoutes(
   function mockResponse(mode: string, filename: string): string {
     switch (mode) {
       case "extract":
-        return `# Extracted Content � ${filename}\n\nThis is a simulated extraction of your document. In production, the AI will parse and return the full structured text of your uploaded file, preserving headings, lists, tables, and logical flow in clean Markdown format.\n\n## Section 1: Introduction\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n\n## Section 2: Key Points\n\n- First important point from the document\n- Second important point with supporting detail\n- Third conclusion drawn from the content\n\n## Section 3: Conclusion\n\nFinal remarks and summary of the document content.`;
+        return `# Extracted Content — ${filename}\n\nThis is a simulated extraction of your document. In production, the AI will parse and return the full structured text of your uploaded file, preserving headings, lists, tables, and logical flow in clean Markdown format.\n\n## Section 1: Introduction\n\nLorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.\n\n## Section 2: Key Points\n\n- First important point from the document\n- Second important point with supporting detail\n- Third conclusion drawn from the content\n\n## Section 3: Conclusion\n\nFinal remarks and summary of the document content.`;
 
       case "summarize":
-        return `# Executive Summary � ${filename}\n\nThis document presents a comprehensive analysis of the subject matter, highlighting critical findings and strategic recommendations for stakeholders. The content is well-structured and covers core areas with empirical evidence and data-driven insights.\n\n## Key Takeaways\n\n- **Insight 1:** The primary finding establishes a clear baseline for decision-making.\n- **Insight 2:** Operational efficiency can be improved by 30% through the proposed framework.\n- **Insight 3:** Risk mitigation strategies are outlined with actionable timelines.\n- **Insight 4:** Stakeholder alignment is critical for successful implementation.\n- **Insight 5:** The recommended next steps provide a phased rollout roadmap.`;
+        return `# Executive Summary — ${filename}\n\nThis document presents a comprehensive analysis of the subject matter, highlighting critical findings and strategic recommendations for stakeholders. The content is well-structured and covers core areas with empirical evidence and data-driven insights.\n\n## Key Takeaways\n\n- **Insight 1:** The primary finding establishes a clear baseline for decision-making.\n- **Insight 2:** Operational efficiency can be improved by 30% through the proposed framework.\n- **Insight 3:** Risk mitigation strategies are outlined with actionable timelines.\n- **Insight 4:** Stakeholder alignment is critical for successful implementation.\n- **Insight 5:** The recommended next steps provide a phased rollout roadmap.`;
 
       case "qa":
-        return `# Customer Q&A � ${filename}\n\n**Q: What is the main purpose of this document?**\nA: This document provides a comprehensive overview of the subject matter, serving as a reference guide for decision-makers and stakeholders.\n\n**Q: Who is the intended audience?**\nA: The document is intended for professionals and teams involved in strategy, operations, and implementation.\n\n**Q: What are the key recommendations?**\nA: The document recommends a phased approach, starting with a pilot program, followed by full-scale deployment with continuous monitoring.\n\n**Q: Are there any risks identified?**\nA: Yes, three primary risks are identified along with mitigation strategies for each.\n\n**Q: What is the expected timeline for implementation?**\nA: The proposed timeline spans 90 days, broken into three 30-day phases.\n\n**Q: How can I get started?**\nA: Begin with the onboarding checklist in the appendix and schedule an alignment meeting with key stakeholders.`;
+        return `# Customer Q&A — ${filename}\n\n**Q: What is the main purpose of this document?**\nA: This document provides a comprehensive overview of the subject matter, serving as a reference guide for decision-makers and stakeholders.\n\n**Q: Who is the intended audience?**\nA: The document is intended for professionals and teams involved in strategy, operations, and implementation.\n\n**Q: What are the key recommendations?**\nA: The document recommends a phased approach, starting with a pilot program, followed by full-scale deployment with continuous monitoring.\n\n**Q: Are there any risks identified?**\nA: Yes, three primary risks are identified along with mitigation strategies for each.\n\n**Q: What is the expected timeline for implementation?**\nA: The proposed timeline spans 90 days, broken into three 30-day phases.\n\n**Q: How can I get started?**\nA: Begin with the onboarding checklist in the appendix and schedule an alignment meeting with key stakeholders.`;
 
       case "blog":
-        return `# How to Unlock Maximum Value from Your Documents with AI\n\n*Discover how modern document intelligence transforms raw content into actionable insights.*\n\n---\n\n## Introduction\n\nIn today's fast-paced business environment, documents hold untapped strategic value. Whether it's a dense PDF report, a Word document packed with research, or a scanned image, the information inside is only useful if you can access it quickly and intelligently. That's where Document AI changes the game.\n\n---\n\n## Why Traditional Document Review Falls Short\n\nManual document review is slow, error-prone, and doesn't scale. Teams spend hours extracting insights that an AI can surface in seconds.\n\n### The Hidden Cost of Manual Processing\n\n- Average knowledge worker spends 2.5 hours/day searching for information\n- Critical insights buried in long documents go unread\n- Inconsistent summaries lead to misaligned decision-making\n\n---\n\n## How Document Intelligence Works\n\nModern AI-powered document processing uses large language models to understand context, not just keywords.\n\n### Step 1: Upload & Extract\n\nThe system ingests your document and converts it to clean, structured text, regardless of format.\n\n### Step 2: Choose Your Mode\n\nSelect from Extract, Summarize, Q&A, or Blog Post generation based on your specific need.\n\n### Step 3: Receive AI-Powered Output\n\nWithin seconds, you receive a polished, structured output ready to use or share.\n\n---\n\n## Real-World Use Cases\n\n- **Marketing teams** converting research PDFs into blog content\n- **Customer success teams** generating FAQ pages from product documentation\n- **Executives** getting instant summaries of lengthy reports\n\n---\n\n## Conclusion\n\nDocument Intelligence is no longer a luxury � it's a competitive advantage. By automating extraction, summarisation, and content generation, teams move faster and make better decisions.\n\n**Ready to transform your documents?** Upload your first file and experience the difference today.`;
+        return `# How to Unlock Maximum Value from Your Documents with AI\n\n*Discover how modern document intelligence transforms raw content into actionable insights.*\n\n---\n\n## Introduction\n\nIn today's fast-paced business environment, documents hold untapped strategic value. Whether it's a dense PDF report, a Word document packed with research, or a scanned image, the information inside is only useful if you can access it quickly and intelligently. That's where Document AI changes the game.\n\n---\n\n## Why Traditional Document Review Falls Short\n\nManual document review is slow, error-prone, and doesn't scale. Teams spend hours extracting insights that an AI can surface in seconds.\n\n### The Hidden Cost of Manual Processing\n\n- Average knowledge worker spends 2.5 hours/day searching for information\n- Critical insights buried in long documents go unread\n- Inconsistent summaries lead to misaligned decision-making\n\n---\n\n## How Document Intelligence Works\n\nModern AI-powered document processing uses large language models to understand context, not just keywords.\n\n### Step 1: Upload & Extract\n\nThe system ingests your document and converts it to clean, structured text, regardless of format.\n\n### Step 2: Choose Your Mode\n\nSelect from Extract, Summarize, Q&A, or Blog Post generation based on your specific need.\n\n### Step 3: Receive AI-Powered Output\n\nWithin seconds, you receive a polished, structured output ready to use or share.\n\n---\n\n## Real-World Use Cases\n\n- **Marketing teams** converting research PDFs into blog content\n- **Customer success teams** generating FAQ pages from product documentation\n- **Executives** getting instant summaries of lengthy reports\n\n---\n\n## Conclusion\n\nDocument Intelligence is no longer a luxury — it's a competitive advantage. By automating extraction, summarisation, and content generation, teams move faster and make better decisions.\n\n**Ready to transform your documents?** Upload your first file and experience the difference today.`;
 
       default:
         return `Mock output for mode "${mode}" on file "${filename}". Connect your AI key for real results.`;
@@ -6199,7 +6212,7 @@ export async function registerRoutes(
           return res.status(422).json({ success: false, error: "No readable text found in this file." });
         }
 
-        // Step 2: Call AI � with mock fallback
+        // Step 2: Call AI — with mock fallback
         const aiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
         let aiResult: string;
 
@@ -6222,7 +6235,7 @@ export async function registerRoutes(
             aiResult = mockResponse(mode, file.originalname);
           }
         } else {
-          console.log("[DocAI] No AI key configured � returning mock response.");
+          console.log("[DocAI] No AI key configured — returning mock response.");
           aiResult = mockResponse(mode, file.originalname);
         }
 
