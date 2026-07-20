@@ -5,7 +5,7 @@
  *   1. Connect the RevenueCat integration in Replit (it will overwrite this file).
  *   2. OR manually set REVENUECAT_SECRET_API_KEY and run: npx tsx scripts/seedRevenueCat.ts
  */
-import { createClient, createConfig } from '@replit/revenuecat-sdk/dist/client';
+import { createClient, createConfig } from '@replit/revenuecat-sdk/client';
 
 export async function getUncachableRevenueCatClient() {
   const secretKey = process.env.REVENUECAT_SECRET_API_KEY;

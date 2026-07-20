@@ -1749,16 +1749,16 @@ This is a transcription task for ${langName} ONLY. Output ONLY the ${langName} s
           ]
         }]
       });
-      
+
       const transcribedText = response.text?.trim() || "";
-      
+
       if (transcribedText === "[NO_SPEECH_DETECTED]" || 
           transcribedText.includes("[NO_SPEECH_DETECTED]") ||
           transcribedText === "") {
         console.log(`[TranscribeLang] No ${langName} speech detected in audio`);
         throw new Error(`No ${langName} speech detected in the audio. Please try speaking more clearly.`);
       }
-      
+
       return transcribedText;
     } catch (error: any) {
       if (isRateLimitError(error)) throw error;
@@ -2473,14 +2473,14 @@ app.post("/api/v1/p/login", async (req, res) => {
     const { identifier, password } = parseResult.data;
     console.log(`[DEBUG /p/login] INPUT: identifier=${identifier}, isEmail=${identifier.includes("@")}`);
     const isEmail = identifier.includes('@');
-    
+
     let result;
     if (isEmail) {
       result = await db.select().from(users).where(eq(users.email, identifier)).limit(1);
     } else {
       result = await db.select().from(users).where(eq(users.username, identifier)).limit(1);
     }
-    
+
     const user = result[0];
     if (!user) {
       return res.status(401).json({
@@ -3702,7 +3702,7 @@ function generateErrorPage(title: string, message: string): string {
 // Mobile JWT middleware
 async function mobileAuthMiddleware(req: Request, res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
-  
+
   if (!authHeader || !authHeader.startsWith("Bearer ")) {
     return res.status(401).json({
       success: false,
@@ -3714,7 +3714,7 @@ async function mobileAuthMiddleware(req: Request, res: Response, next: NextFunct
   try {
     const decoded = jwt.verify(token, JWT_SECRET) as any;
     (req as any).jwtUser = decoded;
-    
+
     if (decoded.exp && decoded.exp * 1000 < Date.now()) {
       return res.status(401).json({
         success: false,
@@ -3732,7 +3732,7 @@ async function mobileAuthMiddleware(req: Request, res: Response, next: NextFunct
         });
       }
     }
-    
+
     next();
   } catch (err: any) {
     if (err.name === 'TokenExpiredError') {
@@ -7493,7 +7493,7 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
           sql`${users.trialMinutesTotal} IS NOT NULL`,
           sql`${users.trialMinutesUsed} IS NOT NULL`,
           sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
-          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) >= 0`,
+          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) > 0`,
         ));
 
       for (const trialUser of trialLowMinUsers) {
@@ -8251,7 +8251,7 @@ async function extractWebpageText(url: string): Promise<{ text: string; detected
   mainText = mainText.replace(/\s+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
   if (mainText.length > 15000) mainText = mainText.substring(0, 15000);
   if (!mainText || mainText.length < 20) throw new Error("Could not extract meaningful text from the URL");
-  
+
   const htmlLang = $("html").attr("lang") || "";
   const detectedLanguage = htmlLang ? htmlLang.substring(0, 2).toLowerCase() : "auto";
   return { text: mainText, detectedLanguage };
@@ -8423,7 +8423,7 @@ app.post("/api/v1/p/process-url", async (req, res) => {
 
     const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
     let extracted: { text: string; detectedLanguage: string };
-    
+
     if (isYouTube) {
       extracted = await extractYouTubeTranscript(url);
     } else {
@@ -8473,7 +8473,7 @@ app.post("/api/v1/a/process-url", mobileAuthMiddleware, async (req, res) => {
 
     const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
     let extracted: { text: string; detectedLanguage: string };
-    
+
     if (isYouTube) {
       extracted = await extractYouTubeTranscript(url);
     } else {

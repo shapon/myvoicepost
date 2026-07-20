@@ -45,6 +45,8 @@ type ProductConfig = {
   displayName: string;
   title: string;
   type: 'subscription' | 'non_renewing_subscription';
+  testStoreType: 'subscription' | 'non_renewing_subscription' | null;
+  playStoreType: 'subscription' | null;
   duration?: 'P1W' | 'P1M' | 'P2M' | 'P3M' | 'P6M' | 'P1Y';
   prices: { amount_micros: number; currency: string }[];
   packageId: string;
@@ -59,6 +61,8 @@ const PRODUCTS: ProductConfig[] = [
     displayName: 'Monthly Pro',
     title: 'MyVoicePost Pro - Monthly',
     type: 'subscription',
+    testStoreType: 'subscription',
+    playStoreType: 'subscription',
     duration: 'P1M',
     prices: [
       { amount_micros: 9_990_000, currency: 'USD' },
@@ -74,6 +78,8 @@ const PRODUCTS: ProductConfig[] = [
     displayName: 'Yearly Pro',
     title: 'MyVoicePost Pro - Yearly',
     type: 'subscription',
+    testStoreType: 'subscription',
+    playStoreType: 'subscription',
     duration: 'P1Y',
     prices: [
       { amount_micros: 59_990_000, currency: 'USD' },
@@ -89,6 +95,8 @@ const PRODUCTS: ProductConfig[] = [
     displayName: 'Lifetime Pro',
     title: 'MyVoicePost Pro - Lifetime',
     type: 'non_renewing_subscription',
+    testStoreType: null,
+    playStoreType: null,
     duration: undefined,
     prices: [
       { amount_micros: 149_990_000, currency: 'USD' },
@@ -111,7 +119,18 @@ async function ensureProduct(
   config: ProductConfig,
   isTestStore: boolean,
   existingProducts: Product[],
-): Promise<Product> {
+): Promise<Product | null> {
+  const effectiveType = isTestStore
+    ? config.testStoreType
+    : targetApp.type === 'play_store'
+      ? config.playStoreType
+      : config.type;
+
+  if (effectiveType === null) {
+    console.log(`  [${config.label}] Skipping ${isTestStore ? 'Test Store' : targetApp.type} (not supported for this product type)`);
+    return null;
+  }
+
   const storeId = isTestStore ? config.storeId : (targetApp.type === 'play_store' ? config.playStoreId : config.storeId);
   const existing = existingProducts.find(
     (p) => p.store_identifier === storeId && p.app_id === targetApp.id,
@@ -125,12 +144,12 @@ async function ensureProduct(
   const body: CreateProductData['body'] = {
     store_identifier: storeId,
     app_id: targetApp.id,
-    type: config.type,
+    type: effectiveType,
     display_name: config.displayName,
   };
 
   if (isTestStore) {
-    if (config.type === 'subscription' && config.duration) {
+    if (effectiveType === 'subscription' && config.duration) {
       body.subscription = { duration: config.duration };
     }
     body.title = config.title;
@@ -285,9 +304,9 @@ async function seedRevenueCat(): Promise<void> {
   if (listProductsError) throw new Error('Failed to list products');
   const existingProducts = existingProductsData.items ?? [];
 
-  const testStoreProducts: Product[] = [];
-  const appStoreProducts: Product[] = [];
-  const playStoreProducts: Product[] = [];
+  const testStoreProducts: (Product | null)[] = [];
+  const appStoreProducts: (Product | null)[] = [];
+  const playStoreProducts: (Product | null)[] = [];
 
   for (const config of PRODUCTS) {
     const testProd = await ensureProduct(client, project.id, testStoreApp, config, true, existingProducts);
@@ -298,7 +317,9 @@ async function seedRevenueCat(): Promise<void> {
     appStoreProducts.push(appProd);
     playStoreProducts.push(playProd);
 
-    await addTestStorePrices(client, project.id, testProd, config.prices, config.label);
+    if (testProd) {
+      await addTestStorePrices(client, project.id, testProd, config.prices, config.label);
+    }
   }
 
   // ── Entitlement ───────────────────────────────────────────────────────────
@@ -311,8 +332,9 @@ async function seedRevenueCat(): Promise<void> {
   });
   if (listEntitlementsError) throw new Error('Failed to list entitlements');
 
+  const normalize = (s: string) => s.toLowerCase().replace(/\s+/g, '_');
   const existingEntitlement = entitlementsData.items?.find(
-    (e) => e.lookup_key === ENTITLEMENT_IDENTIFIER,
+    (e) => e.lookup_key === ENTITLEMENT_IDENTIFIER || normalize(e.lookup_key) === ENTITLEMENT_IDENTIFIER,
   );
   if (existingEntitlement) {
     console.log(`  Entitlement found: ${existingEntitlement.id}`);
@@ -326,15 +348,15 @@ async function seedRevenueCat(): Promise<void> {
         display_name: ENTITLEMENT_DISPLAY_NAME,
       },
     });
-    if (error) throw new Error('Failed to create entitlement');
+    if (error) throw new Error(`Failed to create entitlement: ${JSON.stringify(error)}`);
     console.log(`  Entitlement created: ${newEntitlement.id}`);
     entitlement = newEntitlement;
   }
 
   const allProductIds = [
-    ...testStoreProducts.map((p) => p.id),
-    ...appStoreProducts.map((p) => p.id),
-    ...playStoreProducts.map((p) => p.id),
+    ...testStoreProducts.filter((p): p is Product => p !== null).map((p) => p.id),
+    ...appStoreProducts.filter((p): p is Product => p !== null).map((p) => p.id),
+    ...playStoreProducts.filter((p): p is Product => p !== null).map((p) => p.id),
   ];
 
   const { error: attachEntErr } = await attachProductsToEntitlement({
@@ -408,10 +430,10 @@ async function seedRevenueCat(): Promise<void> {
     const pkg = await ensurePackage(client, project.id, offering.id, config, existingPackages);
 
     const products = [
-      { product_id: testStoreProducts[i].id, eligibility_criteria: 'all' as const },
-      { product_id: appStoreProducts[i].id, eligibility_criteria: 'all' as const },
-      { product_id: playStoreProducts[i].id, eligibility_criteria: 'all' as const },
-    ];
+      testStoreProducts[i] ? { product_id: testStoreProducts[i]!.id, eligibility_criteria: 'all' as const } : null,
+      appStoreProducts[i] ? { product_id: appStoreProducts[i]!.id, eligibility_criteria: 'all' as const } : null,
+      playStoreProducts[i] ? { product_id: playStoreProducts[i]!.id, eligibility_criteria: 'all' as const } : null,
+    ].filter((p): p is { product_id: string; eligibility_criteria: 'all' } => p !== null);
 
     const { error: attachPkgErr } = await attachProductsToPackage({
       client,
