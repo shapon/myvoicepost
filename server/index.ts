@@ -138,4 +138,31 @@ app.use((req, res, next) => {
       log(`serving on port ${port}`);
     },
   );
+
+  // Internal cron scheduler — runs the notification cron every hour.
+  // Falls back gracefully when CRON_SECRET is not configured.
+  const runInternalCron = async () => {
+    const cronSecret = process.env.CRON_SECRET;
+    if (!cronSecret) {
+      log("CRON_SECRET not set — skipping scheduled notification run", "cron");
+      return;
+    }
+    try {
+      log("Running scheduled notification cron...", "cron");
+      const res = await fetch(`http://localhost:${port}/api/cron/subscription-expiry-notifications`, {
+        headers: { Authorization: `Bearer ${cronSecret}` },
+      });
+      const body = await res.json().catch(() => ({}));
+      log(`Cron finished: ${res.status} — sent=${body.notifications?.sent ?? "?"} skipped=${body.notifications?.skipped ?? "?"}`, "cron");
+    } catch (err: any) {
+      log(`Cron fetch error: ${err.message}`, "cron");
+    }
+  };
+
+  // Run once after a 60-second delay (gives the server time to fully start),
+  // then every hour thereafter.
+  setTimeout(() => {
+    runInternalCron();
+    setInterval(runInternalCron, 60 * 60 * 1000);
+  }, 60 * 1000);
 })();
