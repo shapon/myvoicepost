@@ -445,12 +445,10 @@ export async function registerRoutes(
       res.json({ success: true, preferences });
     } catch (error: any) {
       console.error("[NotifPrefs] GET error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: "Failed to fetch notification preferences",
-        });
+      res.status(500).json({
+        success: false,
+        error: "Failed to fetch notification preferences",
+      });
     }
   });
 
@@ -479,12 +477,10 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error: any) {
       console.error("[NotifPrefs] PATCH error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: "Failed to update notification preference",
-        });
+      res.status(500).json({
+        success: false,
+        error: "Failed to update notification preference",
+      });
     }
   });
 
@@ -1122,25 +1118,21 @@ export async function registerRoutes(
           `[${routeName}] DB error during OTP lookup:`,
           dbErr.message,
         );
-        return res
-          .status(503)
-          .json({
-            success: false,
-            error:
-              "Service temporarily unavailable. Please try again in a moment.",
-          });
+        return res.status(503).json({
+          success: false,
+          error:
+            "Service temporarily unavailable. Please try again in a moment.",
+        });
       }
 
       if (otpRecords.length === 0) {
         console.log(
           `[${routeName}] OTP not found: email_domain=${emailDomain} otp_len=${otp.length}`,
         );
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid verification code. Please request a new one.",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid verification code. Please request a new one.",
+        });
       }
 
       const otpRecord = otpRecords[0];
@@ -1148,12 +1140,10 @@ export async function registerRoutes(
         console.log(
           `[${routeName}] OTP expired: email_domain=${emailDomain} expiredAt=${otpRecord.expiresAt.toISOString()}`,
         );
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Verification code has expired. Please request a new one.",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Verification code has expired. Please request a new one.",
+        });
       }
 
       const existingUser = await storage.getUserByUsername(username);
@@ -1958,22 +1948,18 @@ export async function registerRoutes(
           !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
           !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
         ) {
-          return res
-            .status(500)
-            .json({
-              success: false,
-              error: "Gemini AI integration not configured",
-            });
+          return res.status(500).json({
+            success: false,
+            error: "Gemini AI integration not configured",
+          });
         }
 
         const files = (req.files as Express.Multer.File[]) || [];
         if (files.length === 0) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: "At least one audio snippet is required",
-            });
+          return res.status(400).json({
+            success: false,
+            error: "At least one audio snippet is required",
+          });
         }
 
         const mimeType =
@@ -1999,13 +1985,11 @@ export async function registerRoutes(
         const originalText = parts.join(" ");
 
         if (!originalText) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error:
-                "Could not transcribe audio. Please try speaking more clearly.",
-            });
+          return res.status(400).json({
+            success: false,
+            error:
+              "Could not transcribe audio. Please try speaking more clearly.",
+          });
         }
 
         console.log(
@@ -2015,12 +1999,10 @@ export async function registerRoutes(
         return res.json({ success: true, originalText });
       } catch (error: any) {
         console.error("[MP Transcribe Auto] Error:", error);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            error: error.message || "Failed to transcribe audio",
-          });
+        return res.status(500).json({
+          success: false,
+          error: error.message || "Failed to transcribe audio",
+        });
       }
     },
   );
@@ -2039,22 +2021,18 @@ export async function registerRoutes(
           !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
           !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
         ) {
-          return res
-            .status(500)
-            .json({
-              success: false,
-              error: "Gemini AI integration not configured",
-            });
+          return res.status(500).json({
+            success: false,
+            error: "Gemini AI integration not configured",
+          });
         }
 
         const files = (req.files as Express.Multer.File[]) || [];
         if (files.length === 0) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: "At least one audio snippet is required",
-            });
+          return res.status(400).json({
+            success: false,
+            error: "At least one audio snippet is required",
+          });
         }
 
         const language = req.body.language as string | undefined;
@@ -2086,13 +2064,11 @@ export async function registerRoutes(
         const originalText = parts.join(" ");
 
         if (!originalText) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error:
-                "Could not transcribe audio. Please try speaking more clearly.",
-            });
+          return res.status(400).json({
+            success: false,
+            error:
+              "Could not transcribe audio. Please try speaking more clearly.",
+          });
         }
 
         console.log(
@@ -2102,12 +2078,10 @@ export async function registerRoutes(
         return res.json({ success: true, originalText, language });
       } catch (error: any) {
         console.error("[MP Transcribe Lang] Error:", error);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            error: error.message || "Failed to transcribe audio",
-          });
+        return res.status(500).json({
+          success: false,
+          error: error.message || "Failed to transcribe audio",
+        });
       }
     },
   );
@@ -2439,13 +2413,11 @@ export async function registerRoutes(
       });
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid request",
-            details: parseResult.error.errors,
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
       }
       const { url, targetLanguage } = parseResult.data;
       console.log(
@@ -2487,12 +2459,10 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Process-URL Public] Error:", error.message);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: error.message || "Failed to process URL",
-        });
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to process URL",
+      });
     }
   });
 
@@ -2505,13 +2475,11 @@ export async function registerRoutes(
       });
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid request",
-            details: parseResult.error.errors,
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
       }
       const { url, targetLanguage } = parseResult.data;
       const userId = req.jwtUser?.userId;
@@ -2554,12 +2522,10 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Process-URL Mobile] Error:", error.message);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: error.message || "Failed to process URL",
-        });
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to process URL",
+      });
     }
   });
 
@@ -2708,13 +2674,11 @@ export async function registerRoutes(
 
         const parseResult = schema.safeParse(req.body);
         if (!parseResult.success) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: "Invalid request",
-              details: parseResult.error.errors,
-            });
+          return res.status(400).json({
+            success: false,
+            error: "Invalid request",
+            details: parseResult.error.errors,
+          });
         }
 
         const { prompt, size, quality } = parseResult.data;
@@ -2892,32 +2856,26 @@ export async function registerRoutes(
           errorMsg.includes("blocked") ||
           errorMsg.includes("policy")
         ) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error:
-                "Image rejected by safety filter. Please modify your description.",
-            });
+          return res.status(400).json({
+            success: false,
+            error:
+              "Image rejected by safety filter. Please modify your description.",
+          });
         }
         if (
           errorMsg.includes("quota") ||
           errorMsg.includes("rate") ||
           error?.status === 429
         ) {
-          return res
-            .status(429)
-            .json({
-              success: false,
-              error: "Too many requests. Please try again later.",
-            });
-        }
-        res
-          .status(500)
-          .json({
+          return res.status(429).json({
             success: false,
-            error: error.message || "Failed to generate image",
+            error: "Too many requests. Please try again later.",
           });
+        }
+        res.status(500).json({
+          success: false,
+          error: error.message || "Failed to generate image",
+        });
       }
     },
   );
@@ -2954,13 +2912,11 @@ export async function registerRoutes(
 
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid request",
-            details: parseResult.error.errors,
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid request",
+          details: parseResult.error.errors,
+        });
       }
 
       const { prompt, size } = parseResult.data;
@@ -3109,12 +3065,15 @@ export async function registerRoutes(
         response_format: {
           type: "image",
           aspect_ratio: aspectRatio, // Valid inputs: "1:1", "16:9", "9:16", etc.
-          image_size: "1K",          // Resolution tier: "1K", "2K", or "4K"
+          image_size: "1K", // Resolution tier: "1K", "2K", or "4K"
         },
       });
 
       // 2. Extract the base64 string directly from the convenience property
-      const imageBase64 = interaction.output_image?.data;if (!imageBase64) throw new Error("No image data received from Imagen");
+      const imageBase64 = interaction.output_image?.data;
+      if (!imageBase64) throw new Error("No image data received from Imagen");
+
+      if (!imageBase64) throw new Error("No image data received from Imagen");
 
       console.log(`[IMAGE GEN WEB] Success for user ${userId}`);
       res.json({ success: true, imageBase64, revisedPrompt: truncatedPrompt });
@@ -3126,32 +3085,26 @@ export async function registerRoutes(
         errorMsg.includes("blocked") ||
         errorMsg.includes("policy")
       ) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error:
-              "Image rejected by safety filter. Please modify your description.",
-          });
+        return res.status(400).json({
+          success: false,
+          error:
+            "Image rejected by safety filter. Please modify your description.",
+        });
       }
       if (
         errorMsg.includes("quota") ||
         errorMsg.includes("rate") ||
         error?.status === 429
       ) {
-        return res
-          .status(429)
-          .json({
-            success: false,
-            error: "Too many requests. Please try again later.",
-          });
-      }
-      res
-        .status(500)
-        .json({
+        return res.status(429).json({
           success: false,
-          error: error.message || "Failed to generate image",
+          error: "Too many requests. Please try again later.",
         });
+      }
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to generate image",
+      });
     }
   });
 
@@ -4452,13 +4405,11 @@ export async function registerRoutes(
         });
         const parseResult = schema.safeParse(req.body);
         if (!parseResult.success) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: "Validation failed",
-              details: parseResult.error.errors,
-            });
+          return res.status(400).json({
+            success: false,
+            error: "Validation failed",
+            details: parseResult.error.errors,
+          });
         }
         const { priceId, autoRenew } = parseResult.data;
         const stripe = await getUncachableStripeClient();
@@ -4513,12 +4464,10 @@ export async function registerRoutes(
         res.json({ success: true, url: session.url });
       } catch (error: any) {
         console.error("[Web Subscribe] Error:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            error: error.message || "Failed to create checkout session",
-          });
+        res.status(500).json({
+          success: false,
+          error: error.message || "Failed to create checkout session",
+        });
       }
     },
   );
@@ -4558,12 +4507,10 @@ export async function registerRoutes(
       }
 
       if (user.stripeSubscriptionId !== subscriptionId) {
-        return res
-          .status(403)
-          .json({
-            success: false,
-            error: "You can only cancel your own subscription",
-          });
+        return res.status(403).json({
+          success: false,
+          error: "You can only cancel your own subscription",
+        });
       }
 
       const stripe = await getUncachableStripeClient();
@@ -5138,7 +5085,9 @@ export async function registerRoutes(
           return res.status(401).json({ error: "Unauthorized" });
         }
       } else {
-        console.warn("[RC Webhook] REVENUECAT_WEBHOOK_SECRET not set — skipping verification");
+        console.warn(
+          "[RC Webhook] REVENUECAT_WEBHOOK_SECRET not set — skipping verification",
+        );
       }
 
       const event = req.body?.event;
@@ -5158,7 +5107,9 @@ export async function registerRoutes(
         id: eventId,
       } = event;
 
-      console.log(`[RC Webhook] type=${eventType} user=${appUserId} product=${productId} env=${environment}`);
+      console.log(
+        `[RC Webhook] type=${eventType} user=${appUserId} product=${productId} env=${environment}`,
+      );
 
       const userId = appUserId || originalAppUserId;
       if (!userId) {
@@ -5166,7 +5117,11 @@ export async function registerRoutes(
         return res.json({ received: true });
       }
 
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       if (userResult.length === 0) {
         console.warn(`[RC Webhook] User not found: ${userId}`);
         return res.json({ received: true });
@@ -5174,16 +5129,25 @@ export async function registerRoutes(
       const user = userResult[0];
 
       const normalizedProductId = (productId ?? "").split(":")[0];
-      const paymentToken = originalTransactionId || transactionId || eventId || "";
+      const paymentToken =
+        originalTransactionId || transactionId || eventId || "";
 
       const findPlan = async () => {
         if (normalizedProductId) {
-          const r = await db.select().from(subscriptionPlans)
-            .where(eq(subscriptionPlans.rcProductIdentifier, normalizedProductId)).limit(1);
+          const r = await db
+            .select()
+            .from(subscriptionPlans)
+            .where(
+              eq(subscriptionPlans.rcProductIdentifier, normalizedProductId),
+            )
+            .limit(1);
           if (r.length > 0) return r[0];
         }
-        const fb = await db.select().from(subscriptionPlans)
-          .where(gte(subscriptionPlans.priceMonthly, 1)).limit(1);
+        const fb = await db
+          .select()
+          .from(subscriptionPlans)
+          .where(gte(subscriptionPlans.priceMonthly, 1))
+          .limit(1);
         return fb[0] ?? null;
       };
 
@@ -5195,20 +5159,52 @@ export async function registerRoutes(
         emailFn?: () => void,
       ) => {
         try {
-          const existing = await db.select().from(notificationLog)
-            .where(and(eq(notificationLog.userId, user.id), eq(notificationLog.notificationType, notifType), eq(notificationLog.message, dedupKey)))
+          const existing = await db
+            .select()
+            .from(notificationLog)
+            .where(
+              and(
+                eq(notificationLog.userId, user.id),
+                eq(notificationLog.notificationType, notifType),
+                eq(notificationLog.message, dedupKey),
+              ),
+            )
             .limit(1);
           if (existing.length > 0) return;
-          const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, notifType);
-          const tokens = await db.select().from(pushTokens)
-            .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+          const { pushEnabled: prefPush, emailEnabled: prefEmail } =
+            await getNotificationPref(user.id, notifType);
+          const tokens = await db
+            .select()
+            .from(pushTokens)
+            .where(
+              and(
+                eq(pushTokens.userId, user.id),
+                eq(pushTokens.isActive, true),
+              ),
+            );
           if (tokens.length > 0 && prefPush) {
-            await sendExpoPushNotifications(tokens.map((t) => t.pushToken), title, body, { type: notifType, screen: "subscription" });
+            await sendExpoPushNotifications(
+              tokens.map((t) => t.pushToken),
+              title,
+              body,
+              { type: notifType, screen: "subscription" },
+            );
           }
-          await db.insert(notificationLog).values({ userId: user.id, notificationType: notifType, title, status: "sent", message: dedupKey });
+          await db
+            .insert(notificationLog)
+            .values({
+              userId: user.id,
+              notificationType: notifType,
+              title,
+              status: "sent",
+              message: dedupKey,
+            });
           if (user.email && prefEmail && emailFn) emailFn();
         } catch (e: any) {
-          console.error(`[RC Webhook] Notification error (${notifType}):`, e.message);
+          console.error(
+            `[RC Webhook] Notification error (${notifType}):`,
+            e.message,
+          );
         }
       };
 
@@ -5216,22 +5212,43 @@ export async function registerRoutes(
         case "INITIAL_PURCHASE":
         case "NON_RENEWING_PURCHASE": {
           const plan = await findPlan();
-          if (!plan) { console.warn(`[RC Webhook] No plan for product: ${normalizedProductId}`); break; }
+          if (!plan) {
+            console.warn(
+              `[RC Webhook] No plan for product: ${normalizedProductId}`,
+            );
+            break;
+          }
 
-          const existingActive = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+          const existingActive = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, user.id),
+                eq(userSubscriptions.status, "active"),
+              ),
+            )
+            .limit(1);
           if (existingActive.length > 0) {
-            await db.update(userSubscriptions).set({ status: "superseded" }).where(eq(userSubscriptions.id, existingActive[0].id));
+            await db
+              .update(userSubscriptions)
+              .set({ status: "superseded" })
+              .where(eq(userSubscriptions.id, existingActive[0].id));
           }
 
           const isLifetime = eventType === "NON_RENEWING_PURCHASE";
           const validDateUpto = isLifetime
             ? new Date("2099-12-31T23:59:59Z")
             : expirationAtMs
-            ? new Date(expirationAtMs)
-            : (() => { const d = new Date(); d.setDate(d.getDate() + plan.validDays); return d; })();
+              ? new Date(expirationAtMs)
+              : (() => {
+                  const d = new Date();
+                  d.setDate(d.getDate() + plan.validDays);
+                  return d;
+                })();
 
-          const totalMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
+          const totalMinutes =
+            plan.validTotalMinutes || (isLifetime ? 99999 : 0);
 
           await db.insert(userSubscriptions).values({
             userId: user.id,
@@ -5244,37 +5261,70 @@ export async function registerRoutes(
             status: "active",
           });
           await refreshUserRole(user.id);
-          console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name}`);
+          console.log(
+            `[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name}`,
+          );
 
-          const notifTitle = isLifetime ? "Lifetime Access Activated" : "Subscription Activated";
+          const notifTitle = isLifetime
+            ? "Lifetime Access Activated"
+            : "Subscription Activated";
           (async () => {
             await fireNotification(
-              "subscription_renewed", notifTitle,
+              "subscription_renewed",
+              notifTitle,
               `Your ${plan.name} plan is now active. Enjoy MyVoicePost Pro!`,
               `rc_purchase_${paymentToken}`,
-              () => sendSubscriptionRenewedEmail(user.email!, plan.name).catch((e: any) => console.error("[RC Email] initial_purchase:", e.message)),
+              () =>
+                sendSubscriptionRenewedEmail(user.email!, plan.name).catch(
+                  (e: any) =>
+                    console.error("[RC Email] initial_purchase:", e.message),
+                ),
             );
           })();
           break;
         }
 
         case "RENEWAL": {
-          const validDateUpto = expirationAtMs ? new Date(expirationAtMs) : null;
-          const existingResult = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, paymentToken))).limit(1);
+          const validDateUpto = expirationAtMs
+            ? new Date(expirationAtMs)
+            : null;
+          const existingResult = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, user.id),
+                eq(userSubscriptions.paymentToken, paymentToken),
+              ),
+            )
+            .limit(1);
 
           if (existingResult.length > 0) {
             const updates: Record<string, any> = { status: "active" };
             if (validDateUpto) updates.validDateUpto = validDateUpto;
-            await db.update(userSubscriptions).set(updates).where(eq(userSubscriptions.id, existingResult[0].id));
+            await db
+              .update(userSubscriptions)
+              .set(updates)
+              .where(eq(userSubscriptions.id, existingResult[0].id));
           } else {
             const plan = await findPlan();
             if (plan) {
-              const d = validDateUpto || (() => { const dt = new Date(); dt.setDate(dt.getDate() + plan.validDays); return dt; })();
+              const d =
+                validDateUpto ||
+                (() => {
+                  const dt = new Date();
+                  dt.setDate(dt.getDate() + plan.validDays);
+                  return dt;
+                })();
               await db.insert(userSubscriptions).values({
-                userId: user.id, planId: plan.id, validDateUpto: d,
-                minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(plan.validTotalMinutes || 0),
-                paymentToken, status: "active",
+                userId: user.id,
+                planId: plan.id,
+                validDateUpto: d,
+                minutesUsed: 0,
+                chunksUsed: 0,
+                minutesRemaining: String(plan.validTotalMinutes || 0),
+                paymentToken,
+                status: "active",
               });
             }
           }
@@ -5285,64 +5335,128 @@ export async function registerRoutes(
             const plan = await findPlan();
             const planName = plan?.name ?? "Pro";
             await fireNotification(
-              "subscription_renewed", "Subscription Renewed",
+              "subscription_renewed",
+              "Subscription Renewed",
               `Your ${planName} plan has been renewed. Enjoy your recording minutes!`,
               `rc_renewal_${paymentToken}_${expirationAtMs || Date.now()}`,
-              () => sendSubscriptionRenewedEmail(user.email!, planName).catch((e: any) => console.error("[RC Email] renewal:", e.message)),
+              () =>
+                sendSubscriptionRenewedEmail(user.email!, planName).catch(
+                  (e: any) => console.error("[RC Email] renewal:", e.message),
+                ),
             );
           })();
           break;
         }
 
         case "CANCELLATION": {
-          const r = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
-          if (r.length > 0) await db.update(userSubscriptions).set({ status: "cancelled" }).where(eq(userSubscriptions.id, r[0].id));
+          const r = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, user.id),
+                eq(userSubscriptions.status, "active"),
+              ),
+            )
+            .limit(1);
+          if (r.length > 0)
+            await db
+              .update(userSubscriptions)
+              .set({ status: "cancelled" })
+              .where(eq(userSubscriptions.id, r[0].id));
           await refreshUserRole(user.id);
           console.log(`[RC Webhook] CANCELLATION: User ${user.id} cancelled`);
           break;
         }
 
         case "EXPIRATION": {
-          const r = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, user.id), inArray(userSubscriptions.status, ["active", "cancelled"]))).limit(1);
-          if (r.length > 0) await db.update(userSubscriptions).set({ status: "expired" }).where(eq(userSubscriptions.id, r[0].id));
+          const r = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, user.id),
+                inArray(userSubscriptions.status, ["active", "cancelled"]),
+              ),
+            )
+            .limit(1);
+          if (r.length > 0)
+            await db
+              .update(userSubscriptions)
+              .set({ status: "expired" })
+              .where(eq(userSubscriptions.id, r[0].id));
           await refreshUserRole(user.id);
           console.log(`[RC Webhook] EXPIRATION: User ${user.id} expired`);
           (async () => {
             await fireNotification(
-              "subscription_expired", "Subscription Expired",
+              "subscription_expired",
+              "Subscription Expired",
               "Your subscription has ended. Subscribe again to continue enjoying MyVoicePost.",
               `rc_expired_${paymentToken}`,
-              () => sendSubscriptionExpiredEmail(user.email!).catch((e: any) => console.error("[RC Email] expired:", e.message)),
+              () =>
+                sendSubscriptionExpiredEmail(user.email!).catch((e: any) =>
+                  console.error("[RC Email] expired:", e.message),
+                ),
             );
           })();
           break;
         }
 
         case "BILLING_ISSUE": {
-          const r = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
-          if (r.length > 0) await db.update(userSubscriptions).set({ status: "payment_failed" }).where(eq(userSubscriptions.id, r[0].id));
+          const r = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, user.id),
+                eq(userSubscriptions.status, "active"),
+              ),
+            )
+            .limit(1);
+          if (r.length > 0)
+            await db
+              .update(userSubscriptions)
+              .set({ status: "payment_failed" })
+              .where(eq(userSubscriptions.id, r[0].id));
           await refreshUserRole(user.id);
-          console.log(`[RC Webhook] BILLING_ISSUE: User ${user.id} billing issue`);
+          console.log(
+            `[RC Webhook] BILLING_ISSUE: User ${user.id} billing issue`,
+          );
           (async () => {
             await fireNotification(
-              "payment_failed", "Payment Issue",
+              "payment_failed",
+              "Payment Issue",
               "We couldn't process your payment. Please update your payment method.",
               `rc_billing_${paymentToken}`,
-              () => sendPaymentFailedEmail(user.email!).catch((e: any) => console.error("[RC Email] billing_issue:", e.message)),
+              () =>
+                sendPaymentFailedEmail(user.email!).catch((e: any) =>
+                  console.error("[RC Email] billing_issue:", e.message),
+                ),
             );
           })();
           break;
         }
 
         case "UNCANCELLATION": {
-          const r = await db.select().from(userSubscriptions)
-            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "cancelled"))).limit(1);
-          if (r.length > 0) await db.update(userSubscriptions).set({ status: "active" }).where(eq(userSubscriptions.id, r[0].id));
+          const r = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, user.id),
+                eq(userSubscriptions.status, "cancelled"),
+              ),
+            )
+            .limit(1);
+          if (r.length > 0)
+            await db
+              .update(userSubscriptions)
+              .set({ status: "active" })
+              .where(eq(userSubscriptions.id, r[0].id));
           await refreshUserRole(user.id);
-          console.log(`[RC Webhook] UNCANCELLATION: User ${user.id} re-enabled auto-renew`);
+          console.log(
+            `[RC Webhook] UNCANCELLATION: User ${user.id} re-enabled auto-renew`,
+          );
           break;
         }
 
@@ -5800,12 +5914,10 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const { subject, message, email, platform } = req.body;
       if (!subject || !message || !email) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Subject, message, and email are required",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Subject, message, and email are required",
+        });
       }
       await db.insert(supportRequests).values({
         userId: userId || undefined,
@@ -6186,15 +6298,13 @@ export async function registerRoutes(
           },
         );
 
-        await db
-          .insert(notificationLog)
-          .values({
-            userId: user.id,
-            notificationType,
-            title: notificationTitle,
-            status: "sent",
-            message: notificationBody,
-          });
+        await db.insert(notificationLog).values({
+          userId: user.id,
+          notificationType,
+          title: notificationTitle,
+          status: "sent",
+          message: notificationBody,
+        });
         sentCount++;
         console.log(
           `[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`,
@@ -6735,14 +6845,12 @@ export async function registerRoutes(
         const seconds = totalSec % 60;
         const usageTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 
-        await db
-          .insert(audioLogs)
-          .values({
-            userId,
-            usageTime,
-            usageSeconds: totalSec,
-            sourceLanguage: language || "auto",
-          });
+        await db.insert(audioLogs).values({
+          userId,
+          usageTime,
+          usageSeconds: totalSec,
+          sourceLanguage: language || "auto",
+        });
 
         const usageMinutes = totalSec / 60;
         await db
@@ -6908,13 +7016,11 @@ export async function registerRoutes(
       });
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid email",
-            details: parseResult.error.errors,
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid email",
+          details: parseResult.error.errors,
+        });
 
       const { email } = parseResult.data;
       const result = await db
@@ -6953,12 +7059,10 @@ export async function registerRoutes(
       res.json(buildResetResponse(code));
     } catch (error: any) {
       console.error("[Forgot Password] Error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: "Failed to process password reset request",
-        });
+      res.status(500).json({
+        success: false,
+        error: "Failed to process password reset request",
+      });
     }
   });
 
@@ -6980,13 +7084,11 @@ export async function registerRoutes(
 
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Validation failed",
-            details: parseResult.error.errors,
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: parseResult.error.errors,
+        });
 
       const { email, code, newPassword } = parseResult.data;
 
@@ -7018,28 +7120,22 @@ export async function registerRoutes(
         .limit(1);
 
       if (tokenResult.length === 0)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid or expired reset code. Please request a new one.",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid or expired reset code. Please request a new one.",
+        });
 
       const tokenRecord = tokenResult[0];
       if (new Date() > tokenRecord.expiresAt)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "This reset code has expired. Please request a new one.",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "This reset code has expired. Please request a new one.",
+        });
       if (tokenRecord.used)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "This reset code has already been used.",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "This reset code has already been used.",
+        });
 
       const bcryptjs = await import("bcryptjs");
       const hashedPassword = await bcryptjs.default.hash(newPassword, 10);
@@ -7515,12 +7611,10 @@ export async function registerRoutes(
         });
       } catch (error: any) {
         console.error("[Pre-Subscribe Check] Error:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            error: "Failed to check subscription status",
-          });
+        res.status(500).json({
+          success: false,
+          error: "Failed to check subscription status",
+        });
       }
     },
   );
@@ -7533,12 +7627,10 @@ export async function registerRoutes(
     try {
       const priceId = process.env.STRIPE_TOPUP_PRICE_ID;
       if (!priceId)
-        return res
-          .status(500)
-          .json({
-            success: false,
-            error: "Top-up is not configured. Please contact support.",
-          });
+        return res.status(500).json({
+          success: false,
+          error: "Top-up is not configured. Please contact support.",
+        });
 
       const stripe = await getUncachableStripeClient();
       const userResult = await db
@@ -7568,13 +7660,11 @@ export async function registerRoutes(
           )
           .limit(1);
         if (activeSub.length === 0) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error:
-                "Top-up requires an active trial or subscription period. Please subscribe first.",
-            });
+          return res.status(400).json({
+            success: false,
+            error:
+              "Top-up requires an active trial or subscription period. Please subscribe first.",
+          });
         }
       }
 
@@ -7631,12 +7721,10 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Create Topup Checkout] Error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: error.message || "Failed to create top-up checkout",
-        });
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to create top-up checkout",
+      });
     }
   }
 
@@ -7665,22 +7753,18 @@ export async function registerRoutes(
       const paymentIntent =
         await stripe.paymentIntents.retrieve(paymentIntentId);
       if (paymentIntent.status !== "succeeded") {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: `Payment not completed. Status: ${paymentIntent.status}`,
-          });
+        return res.status(400).json({
+          success: false,
+          error: `Payment not completed. Status: ${paymentIntent.status}`,
+        });
       }
 
       const piMetadata = paymentIntent.metadata || {};
       if (piMetadata.type !== "topup" || piMetadata.userId !== userId) {
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Invalid payment intent for this user",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Invalid payment intent for this user",
+        });
       }
 
       const topupMinutes = parseInt(piMetadata.topup_minutes || "60", 10);
@@ -7876,12 +7960,10 @@ export async function registerRoutes(
       })();
     } catch (error: any) {
       console.error("[Confirm Topup] Error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: error.message || "Failed to confirm top-up",
-        });
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to confirm top-up",
+      });
     }
   }
 
@@ -8066,12 +8148,10 @@ export async function registerRoutes(
           !user.stripeCustomerId ||
           stripeCustomerId !== user.stripeCustomerId
         ) {
-          return res
-            .status(403)
-            .json({
-              success: false,
-              error: "This subscription does not belong to your account",
-            });
+          return res.status(403).json({
+            success: false,
+            error: "This subscription does not belong to your account",
+          });
         }
 
         if (user.stripeSubscriptionId !== subscriptionId) {
@@ -8190,12 +8270,10 @@ export async function registerRoutes(
         });
       } catch (error: any) {
         console.error("[Confirm Subscription] Error:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            error: error.message || "Failed to confirm subscription",
-          });
+        res.status(500).json({
+          success: false,
+          error: error.message || "Failed to confirm subscription",
+        });
       }
     },
   );
@@ -8211,13 +8289,11 @@ export async function registerRoutes(
       });
       const parseResult = schema.safeParse(_req.body);
       if (!parseResult.success)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "Validation failed",
-            details: parseResult.error.errors,
-          });
+        return res.status(400).json({
+          success: false,
+          error: "Validation failed",
+          details: parseResult.error.errors,
+        });
 
       const { subscriptionId } = parseResult.data;
       const userResult = await db
@@ -8231,12 +8307,10 @@ export async function registerRoutes(
           .status(404)
           .json({ success: false, error: "User not found" });
       if (user.stripeSubscriptionId !== subscriptionId)
-        return res
-          .status(403)
-          .json({
-            success: false,
-            error: "You can only reactivate your own subscription",
-          });
+        return res.status(403).json({
+          success: false,
+          error: "You can only reactivate your own subscription",
+        });
 
       const stripe = await getUncachableStripeClient();
       const subscription = await stripe.subscriptions.update(subscriptionId, {
@@ -8253,12 +8327,10 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Reactivate Subscription] Error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: error.message || "Failed to reactivate subscription",
-        });
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to reactivate subscription",
+      });
     }
   }
 
@@ -8288,12 +8360,10 @@ export async function registerRoutes(
           .status(404)
           .json({ success: false, error: "User not found" });
       if (!user.stripeCustomerId)
-        return res
-          .status(400)
-          .json({
-            success: false,
-            error: "No Stripe customer found. Please subscribe first.",
-          });
+        return res.status(400).json({
+          success: false,
+          error: "No Stripe customer found. Please subscribe first.",
+        });
 
       const stripe = await getUncachableStripeClient();
       try {
@@ -8325,12 +8395,10 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Update Payment Method] Error:", error);
-      res
-        .status(500)
-        .json({
-          success: false,
-          error: error.message || "Failed to create setup intent",
-        });
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to create setup intent",
+      });
     }
   }
 
@@ -8386,14 +8454,12 @@ export async function registerRoutes(
             })
             .where(eq(pushTokens.id, existing[0].id));
         } else {
-          await db
-            .insert(pushTokens)
-            .values({
-              userId,
-              pushToken,
-              platform: platform || "expo",
-              deviceId: deviceId || null,
-            });
+          await db.insert(pushTokens).values({
+            userId,
+            pushToken,
+            platform: platform || "expo",
+            deviceId: deviceId || null,
+          });
         }
 
         res.json({ success: true, message: "Push token registered" });
@@ -8502,12 +8568,10 @@ export async function registerRoutes(
         res.json({ success: true });
       } catch (error: any) {
         console.error("[Notifications] Error marking read:", error.message);
-        res
-          .status(500)
-          .json({
-            success: false,
-            error: "Failed to mark notifications as read",
-          });
+        res.status(500).json({
+          success: false,
+          error: "Failed to mark notifications as read",
+        });
       }
     },
   );
@@ -8533,12 +8597,10 @@ export async function registerRoutes(
       }
       crashReportRateLimit[clientIp].count++;
       if (crashReportRateLimit[clientIp].count > CRASH_RATE_LIMIT_MAX) {
-        return res
-          .status(429)
-          .json({
-            success: false,
-            error: "Too many crash reports. Please try again later.",
-          });
+        return res.status(429).json({
+          success: false,
+          error: "Too many crash reports. Please try again later.",
+        });
       }
 
       const { errorMessage, stackTrace, deviceInfo, appVersion, userId } =
@@ -8634,12 +8696,10 @@ export async function registerRoutes(
       try {
         const { adminMail } = req.body;
         if (typeof adminMail !== "string") {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: "adminMail must be a string of comma-separated emails",
-            });
+          return res.status(400).json({
+            success: false,
+            error: "adminMail must be a string of comma-separated emails",
+          });
         }
 
         const emails = adminMail
@@ -8649,12 +8709,10 @@ export async function registerRoutes(
         const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
         for (const email of emails) {
           if (!emailRegex.test(email))
-            return res
-              .status(400)
-              .json({
-                success: false,
-                error: `Invalid email address: ${email}`,
-              });
+            return res.status(400).json({
+              success: false,
+              error: `Invalid email address: ${email}`,
+            });
         }
 
         const existing = await db
@@ -8668,12 +8726,10 @@ export async function registerRoutes(
             .set({ settingValue: emails.join(","), updatedAt: new Date() })
             .where(eq(appSettings.settingKey, "admin_mail"));
         } else {
-          await db
-            .insert(appSettings)
-            .values({
-              settingKey: "admin_mail",
-              settingValue: emails.join(","),
-            });
+          await db.insert(appSettings).values({
+            settingKey: "admin_mail",
+            settingValue: emails.join(","),
+          });
         }
 
         res.json({ success: true, adminMail: emails.join(",") });
@@ -8712,12 +8768,10 @@ export async function registerRoutes(
         }
 
         if (req.file.size > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.`,
-            });
+          return res.status(400).json({
+            success: false,
+            error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.`,
+          });
         }
 
         const userId = req.jwtUser?.userId || req.jwtUser?.id;
@@ -8726,13 +8780,11 @@ export async function registerRoutes(
           await transcribeAudioAuto(audioBuffer, audioMimeType);
 
         if (!transcribedText || transcribedText.trim() === "") {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error:
-                "Could not transcribe audio. Please speak clearly or check the file format.",
-            });
+          return res.status(400).json({
+            success: false,
+            error:
+              "Could not transcribe audio. Please speak clearly or check the file format.",
+          });
         }
 
         const sourceLanguage =
@@ -8760,12 +8812,10 @@ export async function registerRoutes(
         });
       } catch (error: any) {
         console.error("[Process Audio] Error:", error);
-        res
-          .status(500)
-          .json({
-            success: false,
-            error: error.message || "Failed to process audio",
-          });
+        res.status(500).json({
+          success: false,
+          error: error.message || "Failed to process audio",
+        });
       }
     },
   );
@@ -8889,12 +8939,10 @@ export async function registerRoutes(
 
         const validModes = ["extract", "summarize", "qa", "blog"];
         if (!validModes.includes(mode)) {
-          return res
-            .status(400)
-            .json({
-              success: false,
-              error: "Invalid mode. Use extract, summarize, qa, or blog.",
-            });
+          return res.status(400).json({
+            success: false,
+            error: "Invalid mode. Use extract, summarize, qa, or blog.",
+          });
         }
 
         // Step 1: Extract text from the file
@@ -8903,22 +8951,18 @@ export async function registerRoutes(
           extractedText = await extractTextFromBuffer(file);
         } catch (extractErr: any) {
           console.error("[DocAI] Text extraction failed:", extractErr.message);
-          return res
-            .status(422)
-            .json({
-              success: false,
-              error:
-                "Could not extract text from this file. Please check the file is not corrupted or password-protected.",
-            });
+          return res.status(422).json({
+            success: false,
+            error:
+              "Could not extract text from this file. Please check the file is not corrupted or password-protected.",
+          });
         }
 
         if (!extractedText) {
-          return res
-            .status(422)
-            .json({
-              success: false,
-              error: "No readable text found in this file.",
-            });
+          return res.status(422).json({
+            success: false,
+            error: "No readable text found in this file.",
+          });
         }
 
         // Step 2: Call AI — with mock fallback
@@ -8963,12 +9007,10 @@ export async function registerRoutes(
         });
       } catch (err: any) {
         console.error("[DocAI] Unhandled error:", err);
-        return res
-          .status(500)
-          .json({
-            success: false,
-            error: err.message || "Internal server error.",
-          });
+        return res.status(500).json({
+          success: false,
+          error: err.message || "Internal server error.",
+        });
       }
     },
   );
