@@ -7223,6 +7223,16 @@ async function handleRCWebhook(req: Request, res: Response) {
           await db.update(userSubscriptions).set({ status: "superseded" }).where(eq(userSubscriptions.id, existingActive[0].id));
         }
 
+        // FIX 1+2: Carry over unused trial minutes, then mark trial as converted
+        let carryoverMinutes = 0;
+        if (!user.trialUsed && user.trialEndsAt && new Date() < user.trialEndsAt) {
+          const trialUsed = parseFloat(String(user.trialMinutesUsed || "0"));
+          const trialTotal = user.trialMinutesTotal || 90;
+          const remaining = trialTotal - trialUsed;
+          if (remaining > 0) carryoverMinutes = remaining;
+        }
+        await db.update(users).set({ trialUsed: true, updatedAt: new Date() }).where(eq(users.id, user.id));
+
         const isLifetime = eventType === "NON_RENEWING_PURCHASE";
         const validDateUpto = isLifetime
           ? new Date("2099-12-31T23:59:59Z")
@@ -7230,7 +7240,8 @@ async function handleRCWebhook(req: Request, res: Response) {
           ? new Date(expirationAtMs)
           : (() => { const d = new Date(); d.setDate(d.getDate() + plan.validDays); return d; })();
 
-        const totalMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
+        const planMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
+        const totalMinutes = planMinutes + carryoverMinutes;
 
         await db.insert(userSubscriptions).values({
           userId: user.id,
@@ -7243,7 +7254,7 @@ async function handleRCWebhook(req: Request, res: Response) {
           status: "active",
         });
         await refreshUserRole(user.id);
-        console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name}`);
+        console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins)`);
 
         const notifTitle = isLifetime ? "Lifetime Access Activated" : "Subscription Activated";
         (async () => {
@@ -7259,20 +7270,31 @@ async function handleRCWebhook(req: Request, res: Response) {
 
       case "RENEWAL": {
         const validDateUpto = expirationAtMs ? new Date(expirationAtMs) : null;
+        // FIX 3+4: resolve plan upfront for both branches
+        const renewalPlan = await findPlan();
         const existingResult = await db.select().from(userSubscriptions)
           .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, paymentToken))).limit(1);
 
         if (existingResult.length > 0) {
-          const updates: Record<string, any> = { status: "active" };
+          // FIX 3: reset minutes to fresh plan allocation for new billing period
+          const freshMinutes = renewalPlan?.validTotalMinutes || 0;
+          const updates: Record<string, any> = {
+            status: "active",
+            minutesUsed: 0,
+            minutesRemaining: String(freshMinutes),
+          };
           if (validDateUpto) updates.validDateUpto = validDateUpto;
           await db.update(userSubscriptions).set(updates).where(eq(userSubscriptions.id, existingResult[0].id));
         } else {
-          const plan = await findPlan();
-          if (plan) {
-            const d = validDateUpto || (() => { const dt = new Date(); dt.setDate(dt.getDate() + plan.validDays); return dt; })();
+          if (renewalPlan) {
+            // FIX 4: supersede any existing active sub before inserting the new renewal row
+            await db.update(userSubscriptions)
+              .set({ status: "superseded" })
+              .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active")));
+            const d = validDateUpto || (() => { const dt = new Date(); dt.setDate(dt.getDate() + renewalPlan.validDays); return dt; })();
             await db.insert(userSubscriptions).values({
-              userId: user.id, planId: plan.id, validDateUpto: d,
-              minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(plan.validTotalMinutes || 0),
+              userId: user.id, planId: renewalPlan.id, validDateUpto: d,
+              minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(renewalPlan.validTotalMinutes || 0),
               paymentToken, status: "active",
             });
           }
