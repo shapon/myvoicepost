@@ -34,14 +34,26 @@ import {
   sendLowMinutesEmail,
   sendSubscriptionExpiringSoonEmail,
 } from "./email";
-import { transcribeAudio, transcribeAudioAuto, translateAndPolish, polishText, transformTextWithTone, transcribeAudioFromUrl, toneCategories } from "./gemini";
+import {
+  transcribeAudio,
+  transcribeAudioAuto,
+  translateAndPolish,
+  polishText,
+  transformTextWithTone,
+  transcribeAudioFromUrl,
+  toneCategories,
+} from "./gemini";
 import { db } from "./supabase-db";
-import { eq, and, gte, desc, sql, count, lt, lte } from "drizzle-orm";
+import { eq, and, gte, desc, sql, count, lt, lte, inArray } from "drizzle-orm";
 import multer, { FileFilterCallback } from "multer";
 import { z } from "zod";
 import jwt from "jsonwebtoken";
 import crypto from "crypto";
-import { getUncachableStripeClient, getStripePublishableKey, getStripeSync } from "./stripeClient";
+import {
+  getUncachableStripeClient,
+  getStripePublishableKey,
+  getStripeSync,
+} from "./stripeClient";
 import { runMigrations } from "stripe-replit-sync";
 import { YoutubeTranscript } from "youtube-transcript";
 import { promisify } from "util";
@@ -51,7 +63,9 @@ import * as path from "path";
 import * as cheerio from "cheerio";
 import { createRequire } from "module";
 const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse") as (buffer: Buffer) => Promise<{ text: string; numpages: number }>;
+const pdfParse = require("pdf-parse") as (
+  buffer: Buffer,
+) => Promise<{ text: string; numpages: number }>;
 import mammoth from "mammoth";
 
 // JWT configuration - JWT_SECRET is required for security
@@ -117,19 +131,42 @@ function generateSessionId(): string {
 }
 
 // Helper to generate JWT token with sessionId for single-device enforcement
-function generateToken(userId: string, username: string, role: UserRole = "GUEST", sessionId?: string, email?: string): string {
-  return jwt.sign({ userId, username, role, sessionId, ...(email ? { email } : {}) }, JWT_SECRET, {
-    expiresIn: JWT_EXPIRES_IN,
-  });
+function generateToken(
+  userId: string,
+  username: string,
+  role: UserRole = "GUEST",
+  sessionId?: string,
+  email?: string,
+): string {
+  return jwt.sign(
+    { userId, username, role, sessionId, ...(email ? { email } : {}) },
+    JWT_SECRET,
+    {
+      expiresIn: JWT_EXPIRES_IN,
+    },
+  );
 }
 
-async function storeSessionId(userId: string, sessionId: string): Promise<void> {
-  await db.update(users).set({ activeSessionId: sessionId }).where(eq(users.id, userId));
+async function storeSessionId(
+  userId: string,
+  sessionId: string,
+): Promise<void> {
+  await db
+    .update(users)
+    .set({ activeSessionId: sessionId })
+    .where(eq(users.id, userId));
 }
 
-async function validateSessionId(userId: string, sessionId?: string): Promise<boolean> {
+async function validateSessionId(
+  userId: string,
+  sessionId?: string,
+): Promise<boolean> {
   if (!sessionId) return true;
-  const userRows = await db.select({ activeSessionId: users.activeSessionId }).from(users).where(eq(users.id, userId)).limit(1);
+  const userRows = await db
+    .select({ activeSessionId: users.activeSessionId })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
   if (userRows.length === 0) return false;
   return userRows[0].activeSessionId === sessionId;
 }
@@ -140,18 +177,26 @@ const storage = supabaseStorage;
 // ============ RBAC: Role Refresh & Middleware ============
 
 async function refreshUserRole(userId: string): Promise<UserRole> {
-  const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const userResult = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
   const user = userResult[0];
   if (!user) return "GUEST";
 
   if (user.role === "ADMIN") return "ADMIN";
 
-  const activeSubResult = await db.select().from(userSubscriptions)
-    .where(and(
-      eq(userSubscriptions.userId, userId),
-      eq(userSubscriptions.status, "active"),
-      gte(userSubscriptions.validDateUpto, new Date()),
-    ))
+  const activeSubResult = await db
+    .select()
+    .from(userSubscriptions)
+    .where(
+      and(
+        eq(userSubscriptions.userId, userId),
+        eq(userSubscriptions.status, "active"),
+        gte(userSubscriptions.validDateUpto, new Date()),
+      ),
+    )
     .limit(1);
 
   const hasActiveSub = activeSubResult.length > 0;
@@ -161,10 +206,11 @@ async function refreshUserRole(userId: string): Promise<UserRole> {
     newRole = "USER";
   } else {
     const now = new Date();
-    const trialActive = user.trialEndsAt && !user.trialUsed && now < user.trialEndsAt;
+    const trialActive =
+      user.trialEndsAt && !user.trialUsed && now < user.trialEndsAt;
     const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
     const trialMinutesTotal = user.trialMinutesTotal || 90;
-    const trialHasMinutes = (trialMinutesTotal - trialMinutesUsed) > 0;
+    const trialHasMinutes = trialMinutesTotal - trialMinutesUsed > 0;
 
     if (trialActive && trialHasMinutes) {
       newRole = "TRIAL";
@@ -175,7 +221,9 @@ async function refreshUserRole(userId: string): Promise<UserRole> {
 
   if (user.role !== newRole) {
     await storage.updateUserRole(userId, newRole);
-    console.log(`[RBAC] User ${userId} role changed: ${user.role} -> ${newRole}`);
+    console.log(
+      `[RBAC] User ${userId} role changed: ${user.role} -> ${newRole}`,
+    );
   }
 
   return newRole;
@@ -185,7 +233,9 @@ function checkRole(...allowedRoles: UserRole[]) {
   return async (req: Request, res: Response, next: NextFunction) => {
     const userId = getUserId(req);
     if (!userId) {
-      return res.status(401).json({ success: false, error: "Authentication required" });
+      return res
+        .status(401)
+        .json({ success: false, error: "Authentication required" });
     }
 
     const currentRole = await refreshUserRole(userId);
@@ -222,25 +272,44 @@ const PROCESS_AUDIO_CFG = {
   PROCESS_AUDIO_MAX_SIZE_MB: 4,
   PROCESS_AUDIO_MAX_SIZE_BYTES: 4 * 1024 * 1024,
   PROCESS_AUDIO_SUPPORTED_TYPES: [
-    'audio/mp4', 'audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
-    'audio/webm', 'audio/ogg', 'audio/aac', 'audio/x-m4a', 'audio/m4a', 'audio/flac',
+    "audio/mp4",
+    "audio/mpeg",
+    "audio/mp3",
+    "audio/wav",
+    "audio/x-wav",
+    "audio/webm",
+    "audio/ogg",
+    "audio/aac",
+    "audio/x-m4a",
+    "audio/m4a",
+    "audio/flac",
   ] as const,
   PROCESS_AUDIO_SUPPORTED_EXTENSIONS: [
-    'mp4', 'mp3', 'mpeg', 'wav', 'webm', 'ogg', 'aac', 'm4a', 'flac',
+    "mp4",
+    "mp3",
+    "mpeg",
+    "wav",
+    "webm",
+    "ogg",
+    "aac",
+    "m4a",
+    "flac",
   ] as const,
   isAudioTypeSupported(mimeType: string): boolean {
-    const normalized = mimeType.split(';')[0].trim().toLowerCase();
-    return (this.PROCESS_AUDIO_SUPPORTED_TYPES as readonly string[]).includes(normalized);
+    const normalized = mimeType.split(";")[0].trim().toLowerCase();
+    return (this.PROCESS_AUDIO_SUPPORTED_TYPES as readonly string[]).includes(
+      normalized,
+    );
   },
   formatMaxSize(): string {
     return `${this.PROCESS_AUDIO_MAX_SIZE_MB}MB`;
   },
 };
 
-const crashReportRateLimit: Record<string, { count: number; resetAt: number }> = {};
+const crashReportRateLimit: Record<string, { count: number; resetAt: number }> =
+  {};
 const CRASH_RATE_LIMIT_WINDOW_MS = 60 * 1000;
 const CRASH_RATE_LIMIT_MAX = 5;
-
 
 const crashEmailThrottle: Record<string, number> = {};
 const CRASH_EMAIL_COOLDOWN_MS = 5 * 60 * 1000;
@@ -265,15 +334,26 @@ const upload = multer({
   },
 });
 
-async function getNotificationPref(userId: string, notificationType: string): Promise<{ pushEnabled: boolean; emailEnabled: boolean }> {
+async function getNotificationPref(
+  userId: string,
+  notificationType: string,
+): Promise<{ pushEnabled: boolean; emailEnabled: boolean }> {
   try {
-    const pref = await db.select().from(notificationPreferences)
-      .where(and(
-        eq(notificationPreferences.userId, userId),
-        eq(notificationPreferences.notificationType, notificationType),
-      )).limit(1);
+    const pref = await db
+      .select()
+      .from(notificationPreferences)
+      .where(
+        and(
+          eq(notificationPreferences.userId, userId),
+          eq(notificationPreferences.notificationType, notificationType),
+        ),
+      )
+      .limit(1);
     if (pref.length === 0) return { pushEnabled: true, emailEnabled: true };
-    return { pushEnabled: pref[0].pushEnabled, emailEnabled: pref[0].emailEnabled };
+    return {
+      pushEnabled: pref[0].pushEnabled,
+      emailEnabled: pref[0].emailEnabled,
+    };
   } catch {
     return { pushEnabled: true, emailEnabled: true };
   }
@@ -294,7 +374,10 @@ export async function registerRoutes(
         ADD COLUMN IF NOT EXISTS read_at timestamp
     `);
   } catch (_migErr: any) {
-    console.warn("[Migration] mvp_notification_log column check skipped:", _migErr?.message);
+    console.warn(
+      "[Migration] mvp_notification_log column check skipped:",
+      _migErr?.message,
+    );
   }
 
   // Ensure notification preferences table exists
@@ -311,7 +394,10 @@ export async function registerRoutes(
       )
     `);
   } catch (_migErr2: any) {
-    console.warn("[Migration] mvp_notification_preferences check skipped:", _migErr2?.message);
+    console.warn(
+      "[Migration] mvp_notification_preferences check skipped:",
+      _migErr2?.message,
+    );
   }
 
   // Health check endpoint
@@ -322,42 +408,66 @@ export async function registerRoutes(
   // ── Notification Preferences ──────────────────────────────────────────────
   app.get("/api/v1/a/notification-preferences", async (req, res) => {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+    if (!userId)
+      return res
+        .status(401)
+        .json({ success: false, error: "Authentication required" });
     try {
-      const existing = await db.select().from(notificationPreferences)
+      const existing = await db
+        .select()
+        .from(notificationPreferences)
         .where(eq(notificationPreferences.userId, userId));
-      const existingMap = new Map(existing.map(p => [p.notificationType, p]));
-      const toInsert = NOTIFICATION_TYPES.filter(t => !existingMap.has(t)).map(t => ({
+      const existingMap = new Map(existing.map((p) => [p.notificationType, p]));
+      const toInsert = NOTIFICATION_TYPES.filter(
+        (t) => !existingMap.has(t),
+      ).map((t) => ({
         userId,
         notificationType: t,
         pushEnabled: true,
         emailEnabled: true,
       }));
       if (toInsert.length > 0) {
-        const inserted = await db.insert(notificationPreferences).values(toInsert).onConflictDoNothing().returning();
-        inserted.forEach(p => existingMap.set(p.notificationType, p));
+        const inserted = await db
+          .insert(notificationPreferences)
+          .values(toInsert)
+          .onConflictDoNothing()
+          .returning();
+        inserted.forEach((p) => existingMap.set(p.notificationType, p));
       }
-      const preferences = NOTIFICATION_TYPES.map(t => {
+      const preferences = NOTIFICATION_TYPES.map((t) => {
         const p = existingMap.get(t);
-        return { notificationType: t, pushEnabled: p?.pushEnabled ?? true, emailEnabled: p?.emailEnabled ?? true };
+        return {
+          notificationType: t,
+          pushEnabled: p?.pushEnabled ?? true,
+          emailEnabled: p?.emailEnabled ?? true,
+        };
       });
       res.json({ success: true, preferences });
     } catch (error: any) {
       console.error("[NotifPrefs] GET error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch notification preferences" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: "Failed to fetch notification preferences",
+        });
     }
   });
 
   app.patch("/api/v1/a/notification-preferences", async (req, res) => {
     const userId = getUserId(req);
-    if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+    if (!userId)
+      return res
+        .status(401)
+        .json({ success: false, error: "Authentication required" });
     const schema = z.object({
       notificationType: z.string().min(1),
       pushEnabled: z.boolean(),
       emailEnabled: z.boolean(),
     });
     const parsed = schema.safeParse(req.body);
-    if (!parsed.success) return res.status(400).json({ success: false, error: "Invalid request" });
+    if (!parsed.success)
+      return res.status(400).json({ success: false, error: "Invalid request" });
     const { notificationType, pushEnabled, emailEnabled } = parsed.data;
     try {
       await db.execute(sql`
@@ -369,11 +479,14 @@ export async function registerRoutes(
       res.json({ success: true });
     } catch (error: any) {
       console.error("[NotifPrefs] PATCH error:", error);
-      res.status(500).json({ success: false, error: "Failed to update notification preference" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: "Failed to update notification preference",
+        });
     }
   });
-
-
 
   // ============ EMAIL OTP ENDPOINTS ============
 
@@ -395,10 +508,11 @@ export async function registerRoutes(
       port: smtpPort,
       secure: smtpSecure,
       auth: { user: smtpUser, pass: smtpPass },
-      ...(smtpPort === 587 && !smtpSecure && {
-        requireTLS: true,
-        tls: { ciphers: "SSLv3", rejectUnauthorized: false },
-      }),
+      ...(smtpPort === 587 &&
+        !smtpSecure && {
+          requireTLS: true,
+          tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+        }),
     });
 
     await transporter.verify();
@@ -482,13 +596,16 @@ export async function registerRoutes(
         console.error("[OTP] DB error storing OTP code:", dbErr.message);
         return res.status(503).json({
           success: false,
-          error: "Service temporarily unavailable. Please try again in a moment.",
+          error:
+            "Service temporarily unavailable. Please try again in a moment.",
         });
       }
 
       await sendOtpEmail(normalizedEmail, otp);
 
-      console.log(`[OTP] Code generated for ${normalizedEmail}, expires at ${expiresAt.toISOString()}`);
+      console.log(
+        `[OTP] Code generated for ${normalizedEmail}, expires at ${expiresAt.toISOString()}`,
+      );
 
       res.json({
         success: true,
@@ -502,7 +619,6 @@ export async function registerRoutes(
       });
     }
   });
-
 
   // ============================================================
   // PUBLIC API ENDPOINTS - /api/v1/p/
@@ -542,7 +658,10 @@ export async function registerRoutes(
 
       const { audio, mimeType, durationSeconds } = parseResult.data;
 
-      if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
+      if (
+        durationSeconds !== undefined &&
+        durationSeconds > GUEST_MAX_DURATION_SECONDS
+      ) {
         return res.status(400).json({
           success: false,
           error: `Guest recordings are limited to ${GUEST_MAX_DURATION_SECONDS} seconds. Please register for a free account to record longer.`,
@@ -562,12 +681,14 @@ export async function registerRoutes(
         `[Public Transcribe Auto] Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}, durationSeconds: ${durationSeconds}`,
       );
 
-      const { text: originalText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, mimeType);
+      const { text: originalText, detectedLanguage } =
+        await transcribeAudioAuto(audioBuffer, mimeType);
 
       if (!originalText || originalText.trim() === "") {
         return res.status(400).json({
           success: false,
-          error: "Could not transcribe audio. Please try speaking more clearly.",
+          error:
+            "Could not transcribe audio. Please try speaking more clearly.",
         });
       }
 
@@ -623,7 +744,10 @@ export async function registerRoutes(
 
       const { audio, mimeType, language, durationSeconds } = parseResult.data;
 
-      if (durationSeconds !== undefined && durationSeconds > GUEST_MAX_DURATION_SECONDS) {
+      if (
+        durationSeconds !== undefined &&
+        durationSeconds > GUEST_MAX_DURATION_SECONDS
+      ) {
         return res.status(400).json({
           success: false,
           error: `Guest recordings are limited to ${GUEST_MAX_DURATION_SECONDS} seconds. Please register for a free account to record longer.`,
@@ -643,12 +767,17 @@ export async function registerRoutes(
         `[Public Transcribe Lang] Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}, language: ${language}, durationSeconds: ${durationSeconds}`,
       );
 
-      const originalText = await transcribeAudio(audioBuffer, mimeType, language);
+      const originalText = await transcribeAudio(
+        audioBuffer,
+        mimeType,
+        language,
+      );
 
       if (!originalText || originalText.trim() === "") {
         return res.status(400).json({
           success: false,
-          error: "Could not transcribe audio. Please try speaking more clearly.",
+          error:
+            "Could not transcribe audio. Please try speaking more clearly.",
         });
       }
 
@@ -822,7 +951,8 @@ export async function registerRoutes(
       if (!user) {
         return res.status(401).json({
           success: false,
-          error: "No account found with this email. Please check your email or sign up.",
+          error:
+            "No account found with this email. Please check your email or sign up.",
         });
       }
 
@@ -841,7 +971,12 @@ export async function registerRoutes(
 
       // Generate JWT token (valid for 60 days)
       const token = jwt.sign(
-        { userId: user.id, email: user.email, username: user.username, sessionId },
+        {
+          userId: user.id,
+          email: user.email,
+          username: user.username,
+          sessionId,
+        },
         JWT_SECRET,
         { expiresIn: "60d" },
       );
@@ -899,7 +1034,9 @@ export async function registerRoutes(
       }
 
       const currentRole = await refreshUserRole(user.id);
-      console.log(`[Public Login] User ${user.username} logged in successfully, role: ${currentRole}`);
+      console.log(
+        `[Public Login] User ${user.username} logged in successfully, role: ${currentRole}`,
+      );
 
       res.json({
         success: true,
@@ -927,15 +1064,17 @@ export async function registerRoutes(
   // Called by both /api/v1/p/auth/signup (web) and /api/v1/p/register (mobile)
   // ============================================================
   const handleRegistrationRequest = async (req: any, res: any) => {
-    const routeName = (req.path || "").includes("auth") ? "/p/auth/signup" : "/p/register";
+    const routeName = (req.path || "").includes("auth")
+      ? "/p/auth/signup"
+      : "/p/register";
     const body = req.body || {};
     console.log(
       `[${routeName}] INPUT: fields=[${Object.keys(body).join(",")}]` +
-      ` username_len=${String(body.username ?? "").length}` +
-      ` email_len=${String(body.email ?? "").length}` +
-      ` password=${body.password ? "provided" : "MISSING"}` +
-      ` confirmPassword=${body.confirmPassword ? "provided" : "MISSING"}` +
-      ` otp_len=${String(body.otp ?? "").length}`
+        ` username_len=${String(body.username ?? "").length}` +
+        ` email_len=${String(body.email ?? "").length}` +
+        ` password=${body.password ? "provided" : "MISSING"}` +
+        ` confirmPassword=${body.confirmPassword ? "provided" : "MISSING"}` +
+        ` otp_len=${String(body.otp ?? "").length}`,
     );
 
     const signupSchema = z
@@ -954,7 +1093,9 @@ export async function registerRoutes(
     const parseResult = signupSchema.safeParse(body);
     if (!parseResult.success) {
       const errs = parseResult.error.errors;
-      console.log(`[${routeName}] VALIDATION FAILED: ${JSON.stringify(errs.map((e) => ({ field: e.path.join("."), msg: e.message })))}`);
+      console.log(
+        `[${routeName}] VALIDATION FAILED: ${JSON.stringify(errs.map((e) => ({ field: e.path.join("."), msg: e.message })))}`,
+      );
       return res.status(400).json({
         success: false,
         error: errs[0]?.message || "Validation failed",
@@ -969,38 +1110,73 @@ export async function registerRoutes(
 
       let otpRecords;
       try {
-        otpRecords = await db.select().from(emailOtps)
-          .where(and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)))
+        otpRecords = await db
+          .select()
+          .from(emailOtps)
+          .where(
+            and(eq(emailOtps.email, normalizedEmail), eq(emailOtps.otp, otp)),
+          )
           .limit(1);
       } catch (dbErr: any) {
-        console.error(`[${routeName}] DB error during OTP lookup:`, dbErr.message);
-        return res.status(503).json({ success: false, error: "Service temporarily unavailable. Please try again in a moment." });
+        console.error(
+          `[${routeName}] DB error during OTP lookup:`,
+          dbErr.message,
+        );
+        return res
+          .status(503)
+          .json({
+            success: false,
+            error:
+              "Service temporarily unavailable. Please try again in a moment.",
+          });
       }
 
       if (otpRecords.length === 0) {
-        console.log(`[${routeName}] OTP not found: email_domain=${emailDomain} otp_len=${otp.length}`);
-        return res.status(400).json({ success: false, error: "Invalid verification code. Please request a new one." });
+        console.log(
+          `[${routeName}] OTP not found: email_domain=${emailDomain} otp_len=${otp.length}`,
+        );
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid verification code. Please request a new one.",
+          });
       }
 
       const otpRecord = otpRecords[0];
       if (new Date() > otpRecord.expiresAt) {
-        console.log(`[${routeName}] OTP expired: email_domain=${emailDomain} expiredAt=${otpRecord.expiresAt.toISOString()}`);
-        return res.status(400).json({ success: false, error: "Verification code has expired. Please request a new one." });
+        console.log(
+          `[${routeName}] OTP expired: email_domain=${emailDomain} expiredAt=${otpRecord.expiresAt.toISOString()}`,
+        );
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Verification code has expired. Please request a new one.",
+          });
       }
 
       const existingUser = await storage.getUserByUsername(username);
       if (existingUser) {
-        return res.status(409).json({ success: false, error: "Username already exists" });
+        return res
+          .status(409)
+          .json({ success: false, error: "Username already exists" });
       }
 
       const existingEmailUser = await storage.getUserByEmail?.(normalizedEmail);
       if (existingEmailUser) {
-        return res.status(409).json({ success: false, error: "Email already exists" });
+        return res
+          .status(409)
+          .json({ success: false, error: "Email already exists" });
       }
 
       await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
 
-      const user = await storage.createUser({ username, email: normalizedEmail, password });
+      const user = await storage.createUser({
+        username,
+        email: normalizedEmail,
+        password,
+      });
 
       const trialStartsAt = new Date();
       const trialEndsAt = new Date();
@@ -1021,12 +1197,19 @@ export async function registerRoutes(
       await storeSessionId(user.id, sessionId);
 
       const token = jwt.sign(
-        { userId: user.id, email: user.email, username: user.username, sessionId },
+        {
+          userId: user.id,
+          email: user.email,
+          username: user.username,
+          sessionId,
+        },
         JWT_SECRET,
         { expiresIn: "60d" },
       );
 
-      console.log(`[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${trialEndsAt.toISOString()}`);
+      console.log(
+        `[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${trialEndsAt.toISOString()}`,
+      );
 
       return res.status(201).json({
         success: true,
@@ -1044,7 +1227,9 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error(`[${routeName}] Unhandled error:`, error.message);
-      return res.status(500).json({ success: false, error: "Failed to create account" });
+      return res
+        .status(500)
+        .json({ success: false, error: "Failed to create account" });
     }
   };
 
@@ -1080,18 +1265,21 @@ export async function registerRoutes(
       const { idToken } = parseResult.data;
 
       const googleResponse = await fetch(
-        `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`,
       );
 
       if (!googleResponse.ok) {
-        console.error("[Google SSO] Token verification failed:", googleResponse.status);
+        console.error(
+          "[Google SSO] Token verification failed:",
+          googleResponse.status,
+        );
         return res.status(401).json({
           success: false,
           error: "Invalid Google token. Please try again.",
         });
       }
 
-      const googleUser = await googleResponse.json() as {
+      const googleUser = (await googleResponse.json()) as {
         sub: string;
         email: string;
         email_verified: string;
@@ -1109,74 +1297,123 @@ export async function registerRoutes(
       const normalizedEmail = googleUser.email.toLowerCase().trim();
       const googleId = googleUser.sub;
 
-      console.log(`[Google SSO] Verified Google user: email=${normalizedEmail}, googleId=${googleId}`);
+      console.log(
+        `[Google SSO] Verified Google user: email=${normalizedEmail}, googleId=${googleId}`,
+      );
 
-      const existingSso = await db.select().from(userSsoAccounts)
-        .where(and(eq(userSsoAccounts.provider, "google"), eq(userSsoAccounts.providerUserId, googleId)))
+      const existingSso = await db
+        .select()
+        .from(userSsoAccounts)
+        .where(
+          and(
+            eq(userSsoAccounts.provider, "google"),
+            eq(userSsoAccounts.providerUserId, googleId),
+          ),
+        )
         .limit(1);
 
       if (existingSso.length > 0) {
         const sso = existingSso[0];
-        const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
+        const userRows = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, sso.userId))
+          .limit(1);
         if (userRows.length > 0) {
           const user = userRows[0];
           const currentRole = await refreshUserRole(user.id);
           const ssoSessionId = generateSessionId();
           await storeSessionId(user.id, ssoSessionId);
-          const token = generateToken(user.id, user.username, currentRole, ssoSessionId);
+          const token = generateToken(
+            user.id,
+            user.username,
+            currentRole,
+            ssoSessionId,
+          );
 
-          await db.update(userSsoAccounts)
-            .set({ providerEmail: normalizedEmail, providerName: googleUser.name, providerAvatar: googleUser.picture, updatedAt: new Date() })
+          await db
+            .update(userSsoAccounts)
+            .set({
+              providerEmail: normalizedEmail,
+              providerName: googleUser.name,
+              providerAvatar: googleUser.picture,
+              updatedAt: new Date(),
+            })
             .where(eq(userSsoAccounts.id, sso.id));
 
           return res.json({
             success: true,
             token,
             expiresIn: 60 * 24 * 60 * 60,
-            user: { id: user.id, email: user.email, username: user.username, role: currentRole },
+            user: {
+              id: user.id,
+              email: user.email,
+              username: user.username,
+              role: currentRole,
+            },
             isNewUser: false,
           });
         }
       }
 
-      const existingEmailUser = await db.select().from(users)
+      const existingEmailUser = await db
+        .select()
+        .from(users)
         .where(eq(users.email, normalizedEmail))
         .limit(1);
 
       if (existingEmailUser.length > 0) {
         const user = existingEmailUser[0];
 
-        await db.insert(userSsoAccounts).values({
-          userId: user.id,
-          provider: "google",
-          providerUserId: googleId,
-          providerEmail: normalizedEmail,
-          providerName: googleUser.name,
-          providerAvatar: googleUser.picture,
-        }).onConflictDoNothing();
+        await db
+          .insert(userSsoAccounts)
+          .values({
+            userId: user.id,
+            provider: "google",
+            providerUserId: googleId,
+            providerEmail: normalizedEmail,
+            providerName: googleUser.name,
+            providerAvatar: googleUser.picture,
+          })
+          .onConflictDoNothing();
 
         const currentRole = await refreshUserRole(user.id);
         const emailSsoSessionId = generateSessionId();
         await storeSessionId(user.id, emailSsoSessionId);
-        const token = generateToken(user.id, user.username, currentRole, emailSsoSessionId);
+        const token = generateToken(
+          user.id,
+          user.username,
+          currentRole,
+          emailSsoSessionId,
+        );
 
         return res.json({
           success: true,
           token,
           expiresIn: 60 * 24 * 60 * 60,
-          user: { id: user.id, email: user.email, username: user.username, role: currentRole },
+          user: {
+            id: user.id,
+            email: user.email,
+            username: user.username,
+            role: currentRole,
+          },
           isNewUser: false,
         });
       }
 
       const googleName = googleUser.name || normalizedEmail.split("@")[0];
-      let baseUsername = googleName.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20);
+      let baseUsername = googleName
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "")
+        .substring(0, 20);
       if (baseUsername.length < 3) baseUsername = "user" + baseUsername;
 
       let finalUsername = baseUsername;
       let suffix = 1;
       while (true) {
-        const existing = await db.select().from(users)
+        const existing = await db
+          .select()
+          .from(users)
           .where(eq(users.username, finalUsername))
           .limit(1);
         if (existing.length === 0) break;
@@ -1188,7 +1425,11 @@ export async function registerRoutes(
         }
       }
 
-      const user = await storage.createUser({ username: finalUsername, email: normalizedEmail, password: crypto.randomUUID() });
+      const user = await storage.createUser({
+        username: finalUsername,
+        email: normalizedEmail,
+        password: crypto.randomUUID(),
+      });
 
       const trialStartsAt = new Date();
       const trialEndsAt = new Date();
@@ -1217,15 +1458,27 @@ export async function registerRoutes(
 
       const newUserSessionId = generateSessionId();
       await storeSessionId(user.id, newUserSessionId);
-      const token = generateToken(user.id, user.username, "GUEST", newUserSessionId);
+      const token = generateToken(
+        user.id,
+        user.username,
+        "GUEST",
+        newUserSessionId,
+      );
 
-      console.log(`[Google SSO] New user created: userId=${user.id}, username=${user.username}`);
+      console.log(
+        `[Google SSO] New user created: userId=${user.id}, username=${user.username}`,
+      );
 
       res.status(201).json({
         success: true,
         token,
         expiresIn: 60 * 24 * 60 * 60,
-        user: { id: user.id, email: user.email, username: user.username, role: "GUEST" },
+        user: {
+          id: user.id,
+          email: user.email,
+          username: user.username,
+          role: "GUEST",
+        },
         isNewUser: true,
         trial: {
           starts_at: trialStartsAt.toISOString(),
@@ -1284,12 +1537,16 @@ export async function registerRoutes(
       }
 
       if (decoded.sessionId && decoded.userId) {
-        const isValidSession = await validateSessionId(decoded.userId, decoded.sessionId);
+        const isValidSession = await validateSessionId(
+          decoded.userId,
+          decoded.sessionId,
+        );
         if (!isValidSession) {
           return res.status(401).json({
             success: false,
             error: "SESSION_REPLACED",
-            message: "Your account has been logged in on another device. You have been logged out from this device.",
+            message:
+              "Your account has been logged in on another device. You have been logged out from this device.",
           });
         }
       }
@@ -1314,7 +1571,10 @@ export async function registerRoutes(
     try {
       const userId = req.jwtUser?.userId;
       if (userId) {
-        await db.update(users).set({ activeSessionId: null }).where(eq(users.id, userId));
+        await db
+          .update(users)
+          .set({ activeSessionId: null })
+          .where(eq(users.id, userId));
       }
     } catch (err) {
       console.error("[Logout] Error clearing session:", err);
@@ -1326,35 +1586,52 @@ export async function registerRoutes(
   });
 
   // Delete account: removes all user data and the user record
-  app.post("/api/v1/a/account/delete", mobileAuthMiddleware, async (req, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
-      if (!userId) {
-        return res.status(401).json({ success: false, error: "Not authenticated" });
+  app.post(
+    "/api/v1/a/account/delete",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      try {
+        const userId = req.jwtUser?.userId;
+        if (!userId) {
+          return res
+            .status(401)
+            .json({ success: false, error: "Not authenticated" });
+        }
+
+        console.log(
+          `[DeleteAccount] Starting account deletion for user: ${userId}`,
+        );
+
+        // Delete all user data in order (child records first)
+        await db.delete(savedTexts).where(eq(savedTexts.userId, userId));
+        await db.delete(userSettings).where(eq(userSettings.userId, userId));
+        await db
+          .delete(userSubscriptions)
+          .where(eq(userSubscriptions.userId, userId));
+        await db.delete(users).where(eq(users.id, userId));
+
+        console.log(
+          `[DeleteAccount] Account deleted successfully for user: ${userId}`,
+        );
+
+        res.json({ success: true, message: "Account deleted successfully" });
+      } catch (err) {
+        console.error("[DeleteAccount] Error:", err);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to delete account" });
       }
-
-      console.log(`[DeleteAccount] Starting account deletion for user: ${userId}`);
-
-      // Delete all user data in order (child records first)
-      await db.delete(savedTexts).where(eq(savedTexts.userId, userId));
-      await db.delete(userSettings).where(eq(userSettings.userId, userId));
-      await db.delete(userSubscriptions).where(eq(userSubscriptions.userId, userId));
-      await db.delete(users).where(eq(users.id, userId));
-
-      console.log(`[DeleteAccount] Account deleted successfully for user: ${userId}`);
-
-      res.json({ success: true, message: "Account deleted successfully" });
-    } catch (err) {
-      console.error("[DeleteAccount] Error:", err);
-      res.status(500).json({ success: false, error: "Failed to delete account" });
-    }
-  });
+    },
+  );
 
   // PUT /api/v1/a/profile - Update username and/or email
   app.put("/api/v1/a/profile", mobileAuthMiddleware, async (req: any, res) => {
     try {
       const userId = req.jwtUser?.userId;
-      if (!userId) return res.status(401).json({ success: false, error: "Not authenticated" });
+      if (!userId)
+        return res
+          .status(401)
+          .json({ success: false, error: "Not authenticated" });
 
       const bodySchema = z.object({
         username: z.string().min(3).max(64).optional(),
@@ -1367,22 +1644,36 @@ export async function registerRoutes(
 
       const { username, email } = parsed.data;
       if (!username && !email) {
-        return res.status(400).json({ success: false, error: "Nothing to update" });
+        return res
+          .status(400)
+          .json({ success: false, error: "Nothing to update" });
       }
 
       if (username) {
-        const existing = await db.select({ id: users.id }).from(users)
-          .where(and(eq(users.username, username), sql`${users.id} != ${userId}`)).limit(1);
+        const existing = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(
+            and(eq(users.username, username), sql`${users.id} != ${userId}`),
+          )
+          .limit(1);
         if (existing.length > 0) {
-          return res.status(409).json({ success: false, error: "Username already taken" });
+          return res
+            .status(409)
+            .json({ success: false, error: "Username already taken" });
         }
       }
 
       if (email) {
-        const existing = await db.select({ id: users.id }).from(users)
-          .where(and(eq(users.email, email), sql`${users.id} != ${userId}`)).limit(1);
+        const existing = await db
+          .select({ id: users.id })
+          .from(users)
+          .where(and(eq(users.email, email), sql`${users.id} != ${userId}`))
+          .limit(1);
         if (existing.length > 0) {
-          return res.status(409).json({ success: false, error: "Email already in use" });
+          return res
+            .status(409)
+            .json({ success: false, error: "Email already in use" });
         }
       }
 
@@ -1391,8 +1682,16 @@ export async function registerRoutes(
       if (email) updates.email = email;
       await db.update(users).set(updates).where(eq(users.id, userId));
 
-      const updated = await db.select({ id: users.id, username: users.username, email: users.email, role: users.role })
-        .from(users).where(eq(users.id, userId)).limit(1);
+      const updated = await db
+        .select({
+          id: users.id,
+          username: users.username,
+          email: users.email,
+          role: users.role,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
 
       const freshToken = generateToken(
         userId,
@@ -1405,51 +1704,81 @@ export async function registerRoutes(
       res.json({ success: true, user: updated[0], token: freshToken });
     } catch (err: any) {
       console.error("[Profile Update] Error:", err);
-      res.status(500).json({ success: false, error: "Failed to update profile" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to update profile" });
     }
   });
 
   // PUT /api/v1/a/change-password - Change user password
-  app.put("/api/v1/a/change-password", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
-      if (!userId) return res.status(401).json({ success: false, error: "Not authenticated" });
+  app.put(
+    "/api/v1/a/change-password",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId;
+        if (!userId)
+          return res
+            .status(401)
+            .json({ success: false, error: "Not authenticated" });
 
-      const bodySchema = z.object({
-        currentPassword: z.string().min(1),
-        newPassword: z.string().min(6),
-      });
-      const parsed = bodySchema.safeParse(req.body);
-      if (!parsed.success) {
-        return res.status(400).json({ success: false, error: "Invalid input" });
+        const bodySchema = z.object({
+          currentPassword: z.string().min(1),
+          newPassword: z.string().min(6),
+        });
+        const parsed = bodySchema.safeParse(req.body);
+        if (!parsed.success) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid input" });
+        }
+
+        const { currentPassword, newPassword } = parsed.data;
+        const userResult = await db
+          .select({ passwordHash: users.passwordHash })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+
+        if (userResult.length === 0)
+          return res
+            .status(404)
+            .json({ success: false, error: "User not found" });
+
+        const bcryptjs = await import("bcryptjs");
+        const isValid = await bcryptjs.default.compare(
+          currentPassword,
+          userResult[0].passwordHash,
+        );
+        if (!isValid)
+          return res
+            .status(400)
+            .json({ success: false, error: "Current password is incorrect" });
+
+        const hashed = await bcryptjs.default.hash(newPassword, 10);
+        await db
+          .update(users)
+          .set({ passwordHash: hashed })
+          .where(eq(users.id, userId));
+
+        res.json({ success: true });
+      } catch (err: any) {
+        console.error("[Change Password] Error:", err);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to change password" });
       }
-
-      const { currentPassword, newPassword } = parsed.data;
-      const userResult = await db.select({ passwordHash: users.passwordHash })
-        .from(users).where(eq(users.id, userId)).limit(1);
-
-      if (userResult.length === 0) return res.status(404).json({ success: false, error: "User not found" });
-
-      const bcryptjs = await import("bcryptjs");
-      const isValid = await bcryptjs.default.compare(currentPassword, userResult[0].passwordHash);
-      if (!isValid) return res.status(400).json({ success: false, error: "Current password is incorrect" });
-
-      const hashed = await bcryptjs.default.hash(newPassword, 10);
-      await db.update(users).set({ passwordHash: hashed }).where(eq(users.id, userId));
-
-      res.json({ success: true });
-    } catch (err: any) {
-      console.error("[Change Password] Error:", err);
-      res.status(500).json({ success: false, error: "Failed to change password" });
-    }
-  });
+    },
+  );
 
   // Mobile Auth: Verify token and get user info (with live role refresh)
   app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
-        return res.status(401).json({ success: false, error: "Not authenticated" });
+        return res
+          .status(401)
+          .json({ success: false, error: "Not authenticated" });
       }
       const currentRole = await refreshUserRole(userId);
       const userRecord = await db
@@ -1518,10 +1847,13 @@ export async function registerRoutes(
         `[Mobile Transcribe Auto] User: ${userId}, Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}, durationSeconds: ${durationSeconds}`,
       );
 
-      const { text: originalText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, mimeType);
+      const { text: originalText, detectedLanguage } =
+        await transcribeAudioAuto(audioBuffer, mimeType);
 
       if (!originalText || originalText.trim() === "") {
-        console.log("[Mobile Transcribe Auto] No speech detected, returning empty");
+        console.log(
+          "[Mobile Transcribe Auto] No speech detected, returning empty",
+        );
         return res.status(200).json({ success: true, originalText: "" });
       }
 
@@ -1581,10 +1913,16 @@ export async function registerRoutes(
         `[Mobile Transcribe Lang] User: ${userId}, Audio size: ${audioBuffer.length} bytes, MIME: ${mimeType}, language: ${language}, durationSeconds: ${durationSeconds}`,
       );
 
-      const originalText = await transcribeAudio(audioBuffer, mimeType, language);
+      const originalText = await transcribeAudio(
+        audioBuffer,
+        mimeType,
+        language,
+      );
 
       if (!originalText || originalText.trim() === "") {
-        console.log("[Mobile Transcribe Lang] No speech detected, returning empty");
+        console.log(
+          "[Mobile Transcribe Lang] No speech detected, returning empty",
+        );
         return res.status(200).json({ success: true, originalText: "" });
       }
 
@@ -1608,107 +1946,171 @@ export async function registerRoutes(
 
   // Mobile: Multipart transcribe — accepts up to 6 audio snippets (10s each = 60s batch)
   // Fields: snippet_0 … snippet_N (files), mimeType (optional string body field)
-  app.post("/api/v1/a/mp/transcribe", mobileAuthMiddleware, upload.any(), async (req, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
+  app.post(
+    "/api/v1/a/mp/transcribe",
+    mobileAuthMiddleware,
+    upload.any(),
+    async (req, res) => {
+      try {
+        const userId = req.jwtUser?.userId;
 
-      if (
-        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
-        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
-      ) {
-        return res.status(500).json({ success: false, error: "Gemini AI integration not configured" });
+        if (
+          !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+          !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+        ) {
+          return res
+            .status(500)
+            .json({
+              success: false,
+              error: "Gemini AI integration not configured",
+            });
+        }
+
+        const files = (req.files as Express.Multer.File[]) || [];
+        if (files.length === 0) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: "At least one audio snippet is required",
+            });
+        }
+
+        const mimeType =
+          (req.body.mimeType as string | undefined) || "audio/mp4";
+
+        // Sort files by fieldname (snippet_0, snippet_1, …) for chronological order
+        const sorted = [...files].sort((a, b) => {
+          const ai = parseInt(a.fieldname.replace(/\D/g, "") || "0", 10);
+          const bi = parseInt(b.fieldname.replace(/\D/g, "") || "0", 10);
+          return ai - bi;
+        });
+
+        console.log(
+          `[MP Transcribe Auto] User: ${userId}, snippets: ${sorted.length}, mimeType: ${mimeType}`,
+        );
+
+        const parts: string[] = [];
+        for (const file of sorted) {
+          const text = await transcribeAudioAuto(file.buffer, mimeType);
+          if (text.text && text.text.trim()) parts.push(text.text.trim());
+        }
+
+        const originalText = parts.join(" ");
+
+        if (!originalText) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error:
+                "Could not transcribe audio. Please try speaking more clearly.",
+            });
+        }
+
+        console.log(
+          `[MP Transcribe Auto] Success: ${parts.length} snippets, ${originalText.length} chars`,
+        );
+
+        return res.json({ success: true, originalText });
+      } catch (error: any) {
+        console.error("[MP Transcribe Auto] Error:", error);
+        return res
+          .status(500)
+          .json({
+            success: false,
+            error: error.message || "Failed to transcribe audio",
+          });
       }
-
-      const files = (req.files as Express.Multer.File[]) || [];
-      if (files.length === 0) {
-        return res.status(400).json({ success: false, error: "At least one audio snippet is required" });
-      }
-
-      const mimeType = (req.body.mimeType as string | undefined) || "audio/mp4";
-
-      // Sort files by fieldname (snippet_0, snippet_1, …) for chronological order
-      const sorted = [...files].sort((a, b) => {
-        const ai = parseInt(a.fieldname.replace(/\D/g, '') || '0', 10);
-        const bi = parseInt(b.fieldname.replace(/\D/g, '') || '0', 10);
-        return ai - bi;
-      });
-
-      console.log(`[MP Transcribe Auto] User: ${userId}, snippets: ${sorted.length}, mimeType: ${mimeType}`);
-
-      const parts: string[] = [];
-      for (const file of sorted) {
-        const text = await transcribeAudioAuto(file.buffer, mimeType);
-        if (text.text && text.text.trim()) parts.push(text.text.trim());
-      }
-
-      const originalText = parts.join(' ');
-
-      if (!originalText) {
-        return res.status(400).json({ success: false, error: "Could not transcribe audio. Please try speaking more clearly." });
-      }
-
-      console.log(`[MP Transcribe Auto] Success: ${parts.length} snippets, ${originalText.length} chars`);
-
-      return res.json({ success: true, originalText });
-    } catch (error: any) {
-      console.error("[MP Transcribe Auto] Error:", error);
-      return res.status(500).json({ success: false, error: error.message || "Failed to transcribe audio" });
-    }
-  });
+    },
+  );
 
   // Mobile: Multipart language-specific transcribe
   // Fields: snippet_0 … snippet_N (files), language (required string body field), mimeType (optional)
-  app.post("/api/v1/a/mp/transcribe_l", mobileAuthMiddleware, upload.any(), async (req, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
+  app.post(
+    "/api/v1/a/mp/transcribe_l",
+    mobileAuthMiddleware,
+    upload.any(),
+    async (req, res) => {
+      try {
+        const userId = req.jwtUser?.userId;
 
-      if (
-        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
-        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
-      ) {
-        return res.status(500).json({ success: false, error: "Gemini AI integration not configured" });
+        if (
+          !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+          !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+        ) {
+          return res
+            .status(500)
+            .json({
+              success: false,
+              error: "Gemini AI integration not configured",
+            });
+        }
+
+        const files = (req.files as Express.Multer.File[]) || [];
+        if (files.length === 0) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: "At least one audio snippet is required",
+            });
+        }
+
+        const language = req.body.language as string | undefined;
+        if (!language) {
+          return res
+            .status(400)
+            .json({ success: false, error: "language is required" });
+        }
+        const mimeType =
+          (req.body.mimeType as string | undefined) || "audio/mp4";
+
+        // Sort files by fieldname for chronological order
+        const sorted = [...files].sort((a, b) => {
+          const ai = parseInt(a.fieldname.replace(/\D/g, "") || "0", 10);
+          const bi = parseInt(b.fieldname.replace(/\D/g, "") || "0", 10);
+          return ai - bi;
+        });
+
+        console.log(
+          `[MP Transcribe Lang] User: ${userId}, snippets: ${sorted.length}, language: ${language}, mimeType: ${mimeType}`,
+        );
+
+        const parts: string[] = [];
+        for (const file of sorted) {
+          const text = await transcribeAudio(file.buffer, mimeType, language);
+          if (text && text.trim()) parts.push(text.trim());
+        }
+
+        const originalText = parts.join(" ");
+
+        if (!originalText) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error:
+                "Could not transcribe audio. Please try speaking more clearly.",
+            });
+        }
+
+        console.log(
+          `[MP Transcribe Lang] Success: ${parts.length} snippets, ${originalText.length} chars`,
+        );
+
+        return res.json({ success: true, originalText, language });
+      } catch (error: any) {
+        console.error("[MP Transcribe Lang] Error:", error);
+        return res
+          .status(500)
+          .json({
+            success: false,
+            error: error.message || "Failed to transcribe audio",
+          });
       }
-
-      const files = (req.files as Express.Multer.File[]) || [];
-      if (files.length === 0) {
-        return res.status(400).json({ success: false, error: "At least one audio snippet is required" });
-      }
-
-      const language = req.body.language as string | undefined;
-      if (!language) {
-        return res.status(400).json({ success: false, error: "language is required" });
-      }
-      const mimeType = (req.body.mimeType as string | undefined) || "audio/mp4";
-
-      // Sort files by fieldname for chronological order
-      const sorted = [...files].sort((a, b) => {
-        const ai = parseInt(a.fieldname.replace(/\D/g, '') || '0', 10);
-        const bi = parseInt(b.fieldname.replace(/\D/g, '') || '0', 10);
-        return ai - bi;
-      });
-
-      console.log(`[MP Transcribe Lang] User: ${userId}, snippets: ${sorted.length}, language: ${language}, mimeType: ${mimeType}`);
-
-      const parts: string[] = [];
-      for (const file of sorted) {
-        const text = await transcribeAudio(file.buffer, mimeType, language);
-        if (text && text.trim()) parts.push(text.trim());
-      }
-
-      const originalText = parts.join(' ');
-
-      if (!originalText) {
-        return res.status(400).json({ success: false, error: "Could not transcribe audio. Please try speaking more clearly." });
-      }
-
-      console.log(`[MP Transcribe Lang] Success: ${parts.length} snippets, ${originalText.length} chars`);
-
-      return res.json({ success: true, originalText, language });
-    } catch (error: any) {
-      console.error("[MP Transcribe Lang] Error:", error);
-      return res.status(500).json({ success: false, error: error.message || "Failed to transcribe audio" });
-    }
-  });
+    },
+  );
 
   // Mobile: Polish text
   app.post("/api/v1/a/polish", mobileAuthMiddleware, async (req, res) => {
@@ -1853,22 +2255,29 @@ export async function registerRoutes(
   function extractYouTubeVideoId(url: string): string | null {
     try {
       const parsed = new URL(url);
-      if (parsed.hostname === "youtu.be") return parsed.pathname.slice(1).split("/")[0] || null;
+      if (parsed.hostname === "youtu.be")
+        return parsed.pathname.slice(1).split("/")[0] || null;
       if (parsed.hostname.includes("youtube.com")) {
         const v = parsed.searchParams.get("v");
         if (v) return v;
-        const pathMatch = parsed.pathname.match(/\/(?:embed|v|shorts)\/([^/?]+)/);
+        const pathMatch = parsed.pathname.match(
+          /\/(?:embed|v|shorts)\/([^/?]+)/,
+        );
         if (pathMatch) return pathMatch[1];
       }
       return null;
-    } catch { return null; }
+    } catch {
+      return null;
+    }
   }
 
   async function transcribeYouTubeViaGemini(videoId: string): Promise<string> {
     console.log(`[YouTube] Transcribing video via Gemini AI for: ${videoId}`);
     const { GoogleGenAI } = await import("@google/genai");
-    const geminiKey = process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
-    if (!geminiKey) throw new Error("No Gemini API key configured for YouTube transcription");
+    const geminiKey =
+      process.env.GEMINI_API_KEY || process.env.AI_INTEGRATIONS_GEMINI_API_KEY;
+    if (!geminiKey)
+      throw new Error("No Gemini API key configured for YouTube transcription");
     const youtubeAi = new GoogleGenAI({
       apiKey: geminiKey,
     });
@@ -1895,55 +2304,102 @@ export async function registerRoutes(
 
     const text = response.text?.trim();
     if (!text) throw new Error("Gemini returned empty transcription");
-    console.log(`[YouTube] Gemini transcribed ${text.length} chars for video: ${videoId}`);
+    console.log(
+      `[YouTube] Gemini transcribed ${text.length} chars for video: ${videoId}`,
+    );
     return text;
   }
 
-  async function extractYouTubeTranscript(url: string): Promise<{ text: string; detectedLanguage: string }> {
+  async function extractYouTubeTranscript(
+    url: string,
+  ): Promise<{ text: string; detectedLanguage: string }> {
     const videoId = extractYouTubeVideoId(url);
     if (!videoId) throw new Error("Invalid YouTube URL");
 
     try {
       const transcriptItems = await YoutubeTranscript.fetchTranscript(videoId);
-      if (!transcriptItems || transcriptItems.length === 0) throw new Error("No transcript available");
-      const text = transcriptItems.map((item: any) => item.text).join(" ").replace(/\s+/g, " ").trim();
+      if (!transcriptItems || transcriptItems.length === 0)
+        throw new Error("No transcript available");
+      const text = transcriptItems
+        .map((item: any) => item.text)
+        .join(" ")
+        .replace(/\s+/g, " ")
+        .trim();
       if (!text) throw new Error("Transcript is empty");
-      console.log(`[YouTube] Got transcript via caption API for video: ${videoId}`);
+      console.log(
+        `[YouTube] Got transcript via caption API for video: ${videoId}`,
+      );
       return { text, detectedLanguage: "auto" };
     } catch (transcriptError: any) {
-      console.log(`[YouTube] Caption API failed for ${videoId}: ${transcriptError.message}`);
-      console.log(`[YouTube] Falling back to Gemini AI direct video transcription...`);
+      console.log(
+        `[YouTube] Caption API failed for ${videoId}: ${transcriptError.message}`,
+      );
+      console.log(
+        `[YouTube] Falling back to Gemini AI direct video transcription...`,
+      );
       try {
         const transcribedText = await transcribeYouTubeViaGemini(videoId);
         return { text: transcribedText, detectedLanguage: "auto" };
       } catch (geminiError: any) {
-        console.error(`[YouTube] Gemini transcription also failed for ${videoId}:`, geminiError.message);
-        throw new Error(`Could not process this YouTube video. Captions are not available and AI transcription failed: ${geminiError.message}`);
+        console.error(
+          `[YouTube] Gemini transcription also failed for ${videoId}:`,
+          geminiError.message,
+        );
+        throw new Error(
+          `Could not process this YouTube video. Captions are not available and AI transcription failed: ${geminiError.message}`,
+        );
       }
     }
   }
 
-  async function extractWebpageText(url: string): Promise<{ text: string; detectedLanguage: string }> {
+  async function extractWebpageText(
+    url: string,
+  ): Promise<{ text: string; detectedLanguage: string }> {
     const response = await fetch(url, {
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; MyVoicePost/1.0)", "Accept": "text/html,application/xhtml+xml" },
+      headers: {
+        "User-Agent": "Mozilla/5.0 (compatible; MyVoicePost/1.0)",
+        Accept: "text/html,application/xhtml+xml",
+      },
       signal: AbortSignal.timeout(15000),
     });
-    if (!response.ok) throw new Error(`Failed to fetch URL: ${response.status} ${response.statusText}`);
+    if (!response.ok)
+      throw new Error(
+        `Failed to fetch URL: ${response.status} ${response.statusText}`,
+      );
     const html = await response.text();
     const $ = cheerio.load(html);
-    $("script, style, nav, footer, header, aside, iframe, noscript, .sidebar, .menu, .nav, .footer, .header, .ad, .advertisement, [role='navigation'], [role='banner'], [role='contentinfo']").remove();
+    $(
+      "script, style, nav, footer, header, aside, iframe, noscript, .sidebar, .menu, .nav, .footer, .header, .ad, .advertisement, [role='navigation'], [role='banner'], [role='contentinfo']",
+    ).remove();
     let mainText = "";
-    const mainSelectors = ["article", "main", '[role="main"]', ".post-content", ".entry-content", ".article-body", ".story-body"];
+    const mainSelectors = [
+      "article",
+      "main",
+      '[role="main"]',
+      ".post-content",
+      ".entry-content",
+      ".article-body",
+      ".story-body",
+    ];
     for (const sel of mainSelectors) {
       const el = $(sel);
-      if (el.length && el.text().trim().length > 100) { mainText = el.text().trim(); break; }
+      if (el.length && el.text().trim().length > 100) {
+        mainText = el.text().trim();
+        break;
+      }
     }
     if (!mainText) mainText = $("body").text().trim();
-    mainText = mainText.replace(/\s+/g, " ").replace(/\n{3,}/g, "\n\n").trim();
+    mainText = mainText
+      .replace(/\s+/g, " ")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
     if (mainText.length > 15000) mainText = mainText.substring(0, 15000);
-    if (!mainText || mainText.length < 20) throw new Error("Could not extract meaningful text from the URL");
+    if (!mainText || mainText.length < 20)
+      throw new Error("Could not extract meaningful text from the URL");
     const htmlLang = $("html").attr("lang") || "";
-    const detectedLanguage = htmlLang ? htmlLang.substring(0, 2).toLowerCase() : "auto";
+    const detectedLanguage = htmlLang
+      ? htmlLang.substring(0, 2).toLowerCase()
+      : "auto";
     return { text: mainText, detectedLanguage };
   }
 
@@ -1953,16 +2409,25 @@ export async function registerRoutes(
       const { GoogleGenAI } = await import("@google/genai");
       const genai = new GoogleGenAI({
         apiKey: process.env.AI_INTEGRATIONS_GEMINI_API_KEY,
-        httpOptions: { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL },
+        httpOptions: {
+          apiVersion: "",
+          baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+        },
       });
       const response = await genai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: `Detect the language of this text and return the ISO 639-1 two-letter language code only (e.g. "en", "es", "fr"). Text: "${text.substring(0, 500)}"`,
         config: { temperature: 0 },
       });
-      const code = (response.text || "en").trim().toLowerCase().replace(/[^a-z]/g, "").substring(0, 2);
+      const code = (response.text || "en")
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z]/g, "")
+        .substring(0, 2);
       return code || "en";
-    } catch { return "en"; }
+    } catch {
+      return "en";
+    }
   }
 
   // Process URL (YouTube + Webpage) - Public
@@ -1974,10 +2439,18 @@ export async function registerRoutes(
       });
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
-        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid request",
+            details: parseResult.error.errors,
+          });
       }
       const { url, targetLanguage } = parseResult.data;
-      console.log(`[Process-URL Public] url=${url}, targetLanguage=${targetLanguage}`);
+      console.log(
+        `[Process-URL Public] url=${url}, targetLanguage=${targetLanguage}`,
+      );
 
       const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
       let extracted: { text: string; detectedLanguage: string };
@@ -1994,8 +2467,14 @@ export async function registerRoutes(
 
       let translatedText = extracted.text;
       if (sourceLanguage !== targetLanguage) {
-        const result = await translateAndPolish(extracted.text, sourceLanguage, targetLanguage, "professional");
-        translatedText = result.polishedText || result.translatedText || extracted.text;
+        const result = await translateAndPolish(
+          extracted.text,
+          sourceLanguage,
+          targetLanguage,
+          "professional",
+        );
+        translatedText =
+          result.polishedText || result.translatedText || extracted.text;
       }
 
       res.json({
@@ -2008,7 +2487,12 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Process-URL Public] Error:", error.message);
-      res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to process URL",
+        });
     }
   });
 
@@ -2021,11 +2505,19 @@ export async function registerRoutes(
       });
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
-        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid request",
+            details: parseResult.error.errors,
+          });
       }
       const { url, targetLanguage } = parseResult.data;
       const userId = req.jwtUser?.userId;
-      console.log(`[Process-URL Mobile] userId=${userId}, url=${url}, targetLanguage=${targetLanguage}`);
+      console.log(
+        `[Process-URL Mobile] userId=${userId}, url=${url}, targetLanguage=${targetLanguage}`,
+      );
 
       const isYouTube = /(?:youtube\.com|youtu\.be)/i.test(url);
       let extracted: { text: string; detectedLanguage: string };
@@ -2042,8 +2534,14 @@ export async function registerRoutes(
 
       let translatedText = extracted.text;
       if (sourceLanguage !== targetLanguage) {
-        const result = await translateAndPolish(extracted.text, sourceLanguage, targetLanguage, "professional");
-        translatedText = result.polishedText || result.translatedText || extracted.text;
+        const result = await translateAndPolish(
+          extracted.text,
+          sourceLanguage,
+          targetLanguage,
+          "professional",
+        );
+        translatedText =
+          result.polishedText || result.translatedText || extracted.text;
       }
 
       res.json({
@@ -2056,7 +2554,12 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Process-URL Mobile] Error:", error.message);
-      res.status(500).json({ success: false, error: error.message || "Failed to process URL" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to process URL",
+        });
     }
   });
 
@@ -2094,11 +2597,14 @@ export async function registerRoutes(
       if (!transcribedText || transcribedText.trim() === "") {
         return res.status(400).json({
           success: false,
-          error: "Could not transcribe audio from the provided URL. The file may not contain speech.",
+          error:
+            "Could not transcribe audio from the provided URL. The file may not contain speech.",
         });
       }
 
-      console.log(`[Process Transcribe-URL] Success: "${transcribedText.substring(0, 100)}..."`);
+      console.log(
+        `[Process Transcribe-URL] Success: "${transcribedText.substring(0, 100)}..."`,
+      );
 
       res.json({
         success: true,
@@ -2114,216 +2620,476 @@ export async function registerRoutes(
   });
 
   // Process: Transcribe uploaded audio file
-  app.post("/api/v1/a/transcribe-file", upload.single("audio"), async (req, res) => {
-    try {
-      if (
-        !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
-        !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
-      ) {
-        return res.status(500).json({
+  app.post(
+    "/api/v1/a/transcribe-file",
+    upload.single("audio"),
+    async (req, res) => {
+      try {
+        if (
+          !process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+          !process.env.AI_INTEGRATIONS_GEMINI_BASE_URL
+        ) {
+          return res.status(500).json({
+            success: false,
+            error: "Gemini AI integration not configured",
+          });
+        }
+
+        if (!req.file) {
+          return res.status(400).json({
+            success: false,
+            error: "No audio file provided",
+          });
+        }
+
+        const fileLanguage = (req.body?.language as string) || "en";
+        console.log(
+          `[Process Transcribe-File] File: ${req.file.originalname}, Size: ${req.file.size} bytes, MIME: ${req.file.mimetype}, lang: ${fileLanguage}`,
+        );
+
+        const transcribedText = await transcribeAudio(
+          req.file.buffer,
+          req.file.mimetype,
+          fileLanguage,
+        );
+
+        if (!transcribedText || transcribedText.trim() === "") {
+          return res.status(400).json({
+            success: false,
+            error:
+              "Could not transcribe audio. The file may not contain speech.",
+          });
+        }
+
+        console.log(
+          `[Process Transcribe-File] Success: "${transcribedText.substring(0, 100)}..."`,
+        );
+
+        res.json({
+          success: true,
+          transcribedText: transcribedText.trim(),
+        });
+      } catch (error: any) {
+        console.error("[Process Transcribe-File] Error:", error);
+        res.status(500).json({
           success: false,
-          error: "Gemini AI integration not configured",
+          error: error.message || "Failed to transcribe audio file",
         });
       }
-
-      if (!req.file) {
-        return res.status(400).json({
-          success: false,
-          error: "No audio file provided",
-        });
-      }
-
-      const fileLanguage = (req.body?.language as string) || "en";
-      console.log(`[Process Transcribe-File] File: ${req.file.originalname}, Size: ${req.file.size} bytes, MIME: ${req.file.mimetype}, lang: ${fileLanguage}`);
-
-      const transcribedText = await transcribeAudio(req.file.buffer, req.file.mimetype, fileLanguage);
-
-      if (!transcribedText || transcribedText.trim() === "") {
-        return res.status(400).json({
-          success: false,
-          error: "Could not transcribe audio. The file may not contain speech.",
-        });
-      }
-
-      console.log(`[Process Transcribe-File] Success: "${transcribedText.substring(0, 100)}..."`);
-
-      res.json({
-        success: true,
-        transcribedText: transcribedText.trim(),
-      });
-    } catch (error: any) {
-      console.error("[Process Transcribe-File] Error:", error);
-      res.status(500).json({
-        success: false,
-        error: error.message || "Failed to transcribe audio file",
-      });
-    }
-  });
+    },
+  );
 
   // Image Generation: Generate image from text content
-  app.post("/api/v1/a/generate-image", mobileAuthMiddleware, async (req, res) => {
-    try {
-      const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
-      if (!geminiKey) {
-        return res.status(500).json({ success: false, error: "Gemini API key not configured" });
-      }
+  app.post(
+    "/api/v1/a/generate-image",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      try {
+        const geminiKey =
+          process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+          process.env.GEMINI_API_KEY;
+        if (!geminiKey) {
+          return res
+            .status(500)
+            .json({ success: false, error: "Gemini API key not configured" });
+        }
 
-      const schema = z.object({
-        prompt: z.string().min(1, "Image description is required").max(4000, "Description too long"),
-        size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional().default("1024x1024"),
-        quality: z.enum(["standard", "hd"]).optional().default("standard"),
-      });
-
-      const parseResult = schema.safeParse(req.body);
-      if (!parseResult.success) {
-        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
-      }
-
-      const { prompt, size, quality } = parseResult.data;
-      const userId = req.jwtUser?.userId;
-      console.log(`[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`);
-
-      const UNSAFE_KEYWORDS = [
-        "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
-        "sex", "sexual", "erotic", "hentai", "xxx",
-        "kill", "killing", "murder", "stab", "stabbing", "shoot", "shooting", "decapitate",
-        "gore", "gory", "bloody", "blood", "dismember", "mutilate", "torture", "beheading",
-        "gun", "rifle", "pistol", "shotgun", "firearm", "assault rifle", "machine gun",
-        "bomb", "grenade", "explosive", "missile", "knife attack",
-        "drug", "drugs", "cocaine", "heroin", "meth", "marijuana", "cannabis", "weed",
-        "smoking", "cigarette", "vaping", "alcohol", "drunk", "beer", "wine", "whiskey",
-        "horror", "scary", "terrifying", "nightmare", "demon", "demonic", "satan", "satanic",
-        "zombie", "undead", "corpse", "dead body", "skull", "skeleton",
-        "racist", "racism", "hate", "nazi", "swastika", "terrorist", "terrorism",
-        "suicide", "self-harm", "cutting", "hanging",
-        "child abuse", "abuse", "assault", "kidnap", "trafficking",
-        "bikini", "lingerie", "underwear", "bra", "panties", "thong",
-        "strip", "stripper", "prostitute", "escort",
-      ];
-
-      const promptLower = prompt.toLowerCase();
-      const detectedUnsafe = UNSAFE_KEYWORDS.filter(keyword => {
-        const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
-        return regex.test(promptLower);
-      });
-
-      if (detectedUnsafe.length > 0) {
-        console.log(`[IMAGE GEN] BLOCKED - unsafe keywords for user ${userId}: ${detectedUnsafe.join(', ')}`);
-        return res.status(400).json({
-          success: false,
-          error: "Your image description contains content that is not allowed. Please keep it family-friendly.",
+        const schema = z.object({
+          prompt: z
+            .string()
+            .min(1, "Image description is required")
+            .max(4000, "Description too long"),
+          size: z
+            .enum(["1024x1024", "1024x1792", "1792x1024"])
+            .optional()
+            .default("1024x1024"),
+          quality: z.enum(["standard", "hd"]).optional().default("standard"),
         });
+
+        const parseResult = schema.safeParse(req.body);
+        if (!parseResult.success) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: "Invalid request",
+              details: parseResult.error.errors,
+            });
+        }
+
+        const { prompt, size, quality } = parseResult.data;
+        const userId = req.jwtUser?.userId;
+        console.log(
+          `[IMAGE GEN] userId=${userId}, size=${size}, quality=${quality}, promptLength=${prompt.length}`,
+        );
+
+        const UNSAFE_KEYWORDS = [
+          "nude",
+          "nudity",
+          "naked",
+          "topless",
+          "nsfw",
+          "porn",
+          "pornography",
+          "explicit",
+          "sex",
+          "sexual",
+          "erotic",
+          "hentai",
+          "xxx",
+          "kill",
+          "killing",
+          "murder",
+          "stab",
+          "stabbing",
+          "shoot",
+          "shooting",
+          "decapitate",
+          "gore",
+          "gory",
+          "bloody",
+          "blood",
+          "dismember",
+          "mutilate",
+          "torture",
+          "beheading",
+          "gun",
+          "rifle",
+          "pistol",
+          "shotgun",
+          "firearm",
+          "assault rifle",
+          "machine gun",
+          "bomb",
+          "grenade",
+          "explosive",
+          "missile",
+          "knife attack",
+          "drug",
+          "drugs",
+          "cocaine",
+          "heroin",
+          "meth",
+          "marijuana",
+          "cannabis",
+          "weed",
+          "smoking",
+          "cigarette",
+          "vaping",
+          "alcohol",
+          "drunk",
+          "beer",
+          "wine",
+          "whiskey",
+          "horror",
+          "scary",
+          "terrifying",
+          "nightmare",
+          "demon",
+          "demonic",
+          "satan",
+          "satanic",
+          "zombie",
+          "undead",
+          "corpse",
+          "dead body",
+          "skull",
+          "skeleton",
+          "racist",
+          "racism",
+          "hate",
+          "nazi",
+          "swastika",
+          "terrorist",
+          "terrorism",
+          "suicide",
+          "self-harm",
+          "cutting",
+          "hanging",
+          "child abuse",
+          "abuse",
+          "assault",
+          "kidnap",
+          "trafficking",
+          "bikini",
+          "lingerie",
+          "underwear",
+          "bra",
+          "panties",
+          "thong",
+          "strip",
+          "stripper",
+          "prostitute",
+          "escort",
+        ];
+
+        const promptLower = prompt.toLowerCase();
+        const detectedUnsafe = UNSAFE_KEYWORDS.filter((keyword) => {
+          const regex = new RegExp(
+            `\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+            "i",
+          );
+          return regex.test(promptLower);
+        });
+
+        if (detectedUnsafe.length > 0) {
+          console.log(
+            `[IMAGE GEN] BLOCKED - unsafe keywords for user ${userId}: ${detectedUnsafe.join(", ")}`,
+          );
+          return res.status(400).json({
+            success: false,
+            error:
+              "Your image description contains content that is not allowed. Please keep it family-friendly.",
+          });
+        }
+
+        const truncatedPrompt =
+          prompt.length > 500 ? prompt.slice(0, 500) : prompt;
+
+        const SAFETY_PREFIX =
+          "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
+
+        const safePrompt = SAFETY_PREFIX + truncatedPrompt;
+
+        const aspectRatioMap: Record<string, string> = {
+          "1024x1024": "1:1",
+          "1024x1792": "9:16",
+          "1792x1024": "16:9",
+        };
+        const aspectRatio = aspectRatioMap[size] || "1:1";
+
+        const { GoogleGenAI } = await import("@google/genai");
+        const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
+
+        const interaction = await geminiAi.interactions.create({
+          model: "gemini-3.1-flash-image",
+          input: safePrompt, // 'prompt' is now called 'input'
+          response_format: {
+            type: "image",
+            aspect_ratio: aspectRatio, // Valid inputs: "1:1", "16:9", "9:16", etc.
+            image_size: "1K", // Resolution tier: "1K", "2K", or "4K"
+          },
+        });
+
+        // 2. Extract the base64 string directly from the convenience property
+        const imageBase64 = interaction.output_image?.data;
+
+        if (!imageBase64) {
+          throw new Error("No image data received from Imagen");
+        }
+
+        console.log(`[IMAGE GEN] Success for user ${userId}`);
+        res.json({
+          success: true,
+          imageBase64,
+          revisedPrompt: truncatedPrompt,
+        });
+      } catch (error: any) {
+        console.error("[IMAGE GEN] Error:", error.message);
+        const errorMsg = (error.message || "").toLowerCase();
+        if (
+          errorMsg.includes("safety") ||
+          errorMsg.includes("blocked") ||
+          errorMsg.includes("policy")
+        ) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error:
+                "Image rejected by safety filter. Please modify your description.",
+            });
+        }
+        if (
+          errorMsg.includes("quota") ||
+          errorMsg.includes("rate") ||
+          error?.status === 429
+        ) {
+          return res
+            .status(429)
+            .json({
+              success: false,
+              error: "Too many requests. Please try again later.",
+            });
+        }
+        res
+          .status(500)
+          .json({
+            success: false,
+            error: error.message || "Failed to generate image",
+          });
       }
-
-      const truncatedPrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
-
-      const SAFETY_PREFIX = "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
-
-      const safePrompt = SAFETY_PREFIX + truncatedPrompt;
-
-      const aspectRatioMap: Record<string, string> = {
-        "1024x1024": "1:1",
-        "1024x1792": "9:16",
-        "1792x1024": "16:9",
-      };
-      const aspectRatio = aspectRatioMap[size] || "1:1";
-
-      const { GoogleGenAI } = await import("@google/genai");
-      const geminiAi = new GoogleGenAI({ apiKey: geminiKey });
-
-      // 1. Shift to the unified Interactions pipeline
-      const interaction = await geminiAi.interactions.create({
-        model: "gemini-3.1-flash-image",
-        input: safePrompt, // 'prompt' is now called 'input'
-        response_format: {
-          type: "image",
-          aspect_ratio: aspectRatio, // Valid inputs: "1:1", "16:9", "9:16", etc.
-          image_size: "1K",          // Resolution tier: "1K", "2K", or "4K"
-        },
-      });
-
-      // 2. Extract the base64 string directly from the convenience property
-      const imageBase64 = interaction.output_image?.data;
-
-      if (!imageBase64) {
-        throw new Error("No image data received from Imagen");
-      }
-
-      console.log(`[IMAGE GEN] Success for user ${userId}`);
-      res.json({ success: true, imageBase64, revisedPrompt: truncatedPrompt });
-    } catch (error: any) {
-      console.error("[IMAGE GEN] Error:", error.message);
-      const errorMsg = (error.message || "").toLowerCase();
-      if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
-        return res.status(400).json({ success: false, error: "Image rejected by safety filter. Please modify your description." });
-      }
-      if (errorMsg.includes("quota") || errorMsg.includes("rate") || error?.status === 429) {
-        return res.status(429).json({ success: false, error: "Too many requests. Please try again later." });
-      }
-      res.status(500).json({ success: false, error: error.message || "Failed to generate image" });
-    }
-  });
+    },
+  );
 
   // Web: Generate image (standard JWT auth — req.jwtUser set by global jwtAuthMiddleware)
   app.post("/api/v1/a/generate-image-web", async (req, res) => {
     try {
       if (!req.jwtUser) {
-        return res.status(401).json({ success: false, error: "Authentication required." });
+        return res
+          .status(401)
+          .json({ success: false, error: "Authentication required." });
       }
 
-      const geminiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+      const geminiKey =
+        process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+        process.env.GEMINI_API_KEY;
       if (!geminiKey) {
-        return res.status(500).json({ success: false, error: "Gemini API key not configured" });
+        return res
+          .status(500)
+          .json({ success: false, error: "Gemini API key not configured" });
       }
 
       const schema = z.object({
-        prompt: z.string().min(1, "Image description is required").max(4000, "Description too long"),
-        size: z.enum(["1024x1024", "1024x1792", "1792x1024"]).optional().default("1024x1024"),
+        prompt: z
+          .string()
+          .min(1, "Image description is required")
+          .max(4000, "Description too long"),
+        size: z
+          .enum(["1024x1024", "1024x1792", "1792x1024"])
+          .optional()
+          .default("1024x1024"),
         quality: z.enum(["standard", "hd"]).optional().default("standard"),
       });
 
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
-        return res.status(400).json({ success: false, error: "Invalid request", details: parseResult.error.errors });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid request",
+            details: parseResult.error.errors,
+          });
       }
 
       const { prompt, size } = parseResult.data;
       const userId = req.jwtUser?.userId;
-      console.log(`[IMAGE GEN WEB] userId=${userId}, size=${size}, promptLength=${prompt.length}`);
+      console.log(
+        `[IMAGE GEN WEB] userId=${userId}, size=${size}, promptLength=${prompt.length}`,
+      );
 
       const UNSAFE_KEYWORDS = [
-        "nude", "nudity", "naked", "topless", "nsfw", "porn", "pornography", "explicit",
-        "sex", "sexual", "erotic", "hentai", "xxx",
-        "kill", "killing", "murder", "stab", "stabbing", "shoot", "shooting", "decapitate",
-        "gore", "gory", "bloody", "blood", "dismember", "mutilate", "torture", "beheading",
-        "gun", "rifle", "pistol", "shotgun", "firearm", "assault rifle", "machine gun",
-        "bomb", "grenade", "explosive", "missile", "knife attack",
-        "drug", "drugs", "cocaine", "heroin", "meth", "marijuana", "cannabis", "weed",
-        "smoking", "cigarette", "vaping", "alcohol", "drunk", "beer", "wine", "whiskey",
-        "horror", "scary", "terrifying", "nightmare", "demon", "demonic", "satan", "satanic",
-        "zombie", "undead", "corpse", "dead body", "skull", "skeleton",
-        "racist", "racism", "hate", "nazi", "swastika", "terrorist", "terrorism",
-        "suicide", "self-harm", "cutting", "hanging",
-        "child abuse", "abuse", "assault", "kidnap", "trafficking",
-        "bikini", "lingerie", "underwear", "bra", "panties", "thong",
-        "strip", "stripper", "prostitute", "escort",
+        "nude",
+        "nudity",
+        "naked",
+        "topless",
+        "nsfw",
+        "porn",
+        "pornography",
+        "explicit",
+        "sex",
+        "sexual",
+        "erotic",
+        "hentai",
+        "xxx",
+        "kill",
+        "killing",
+        "murder",
+        "stab",
+        "stabbing",
+        "shoot",
+        "shooting",
+        "decapitate",
+        "gore",
+        "gory",
+        "bloody",
+        "blood",
+        "dismember",
+        "mutilate",
+        "torture",
+        "beheading",
+        "gun",
+        "rifle",
+        "pistol",
+        "shotgun",
+        "firearm",
+        "assault rifle",
+        "machine gun",
+        "bomb",
+        "grenade",
+        "explosive",
+        "missile",
+        "knife attack",
+        "drug",
+        "drugs",
+        "cocaine",
+        "heroin",
+        "meth",
+        "marijuana",
+        "cannabis",
+        "weed",
+        "smoking",
+        "cigarette",
+        "vaping",
+        "alcohol",
+        "drunk",
+        "beer",
+        "wine",
+        "whiskey",
+        "horror",
+        "scary",
+        "terrifying",
+        "nightmare",
+        "demon",
+        "demonic",
+        "satan",
+        "satanic",
+        "zombie",
+        "undead",
+        "corpse",
+        "dead body",
+        "skull",
+        "skeleton",
+        "racist",
+        "racism",
+        "hate",
+        "nazi",
+        "swastika",
+        "terrorist",
+        "terrorism",
+        "suicide",
+        "self-harm",
+        "cutting",
+        "hanging",
+        "child abuse",
+        "abuse",
+        "assault",
+        "kidnap",
+        "trafficking",
+        "bikini",
+        "lingerie",
+        "underwear",
+        "bra",
+        "panties",
+        "thong",
+        "strip",
+        "stripper",
+        "prostitute",
+        "escort",
       ];
 
       const promptLower = prompt.toLowerCase();
-      const detectedUnsafe = UNSAFE_KEYWORDS.filter(keyword => {
-        const regex = new RegExp(`\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i');
+      const detectedUnsafe = UNSAFE_KEYWORDS.filter((keyword) => {
+        const regex = new RegExp(
+          `\\b${keyword.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+          "i",
+        );
         return regex.test(promptLower);
       });
 
       if (detectedUnsafe.length > 0) {
         return res.status(400).json({
           success: false,
-          error: "Your image description contains content that is not allowed. Please keep it family-friendly.",
+          error:
+            "Your image description contains content that is not allowed. Please keep it family-friendly.",
         });
       }
 
-      const truncatedPrompt = prompt.length > 500 ? prompt.slice(0, 500) : prompt;
-      const SAFETY_PREFIX = "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
+      const truncatedPrompt =
+        prompt.length > 500 ? prompt.slice(0, 500) : prompt;
+      const SAFETY_PREFIX =
+        "Family-friendly, safe for all ages, no violence, nudity, weapons, drugs, or disturbing content. ";
       const safePrompt = SAFETY_PREFIX + truncatedPrompt;
 
       const aspectRatioMap: Record<string, string> = {
@@ -2355,13 +3121,37 @@ export async function registerRoutes(
     } catch (error: any) {
       console.error("[IMAGE GEN WEB] Error:", error.message);
       const errorMsg = (error.message || "").toLowerCase();
-      if (errorMsg.includes("safety") || errorMsg.includes("blocked") || errorMsg.includes("policy")) {
-        return res.status(400).json({ success: false, error: "Image rejected by safety filter. Please modify your description." });
+      if (
+        errorMsg.includes("safety") ||
+        errorMsg.includes("blocked") ||
+        errorMsg.includes("policy")
+      ) {
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error:
+              "Image rejected by safety filter. Please modify your description.",
+          });
       }
-      if (errorMsg.includes("quota") || errorMsg.includes("rate") || error?.status === 429) {
-        return res.status(429).json({ success: false, error: "Too many requests. Please try again later." });
+      if (
+        errorMsg.includes("quota") ||
+        errorMsg.includes("rate") ||
+        error?.status === 429
+      ) {
+        return res
+          .status(429)
+          .json({
+            success: false,
+            error: "Too many requests. Please try again later.",
+          });
       }
-      res.status(500).json({ success: false, error: error.message || "Failed to generate image" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to generate image",
+        });
     }
   });
 
@@ -2394,11 +3184,15 @@ export async function registerRoutes(
 
       const { text, toneId } = parseResult.data;
 
-      console.log(`[Process Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`);
+      console.log(
+        `[Process Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`,
+      );
 
       const transformedText = await transformTextWithTone(text, toneId);
 
-      console.log(`[Process Transform-Tone] Success: "${transformedText.substring(0, 100)}..."`);
+      console.log(
+        `[Process Transform-Tone] Success: "${transformedText.substring(0, 100)}..."`,
+      );
 
       res.json({
         success: true,
@@ -2449,7 +3243,9 @@ export async function registerRoutes(
 
       const { text, toneId } = parseResult.data;
 
-      console.log(`[Process Public Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`);
+      console.log(
+        `[Process Public Transform-Tone] Tone: ${toneId}, Text length: ${text.length}`,
+      );
 
       const transformedText = await transformTextWithTone(text, toneId);
 
@@ -2743,7 +3539,8 @@ export async function registerRoutes(
       if (plan.name === "Free") {
         return res.status(400).json({
           success: false,
-          error: "Free plan does not require payment. It is assigned automatically.",
+          error:
+            "Free plan does not require payment. It is assigned automatically.",
         });
       }
 
@@ -2803,7 +3600,8 @@ export async function registerRoutes(
           ),
         );
 
-      const totalMinutesAvailable = (plan.validTotalMinutes || 0) + carryoverMinutes;
+      const totalMinutesAvailable =
+        (plan.validTotalMinutes || 0) + carryoverMinutes;
 
       const [subscription] = await db
         .insert(userSubscriptions)
@@ -2866,7 +3664,10 @@ export async function registerRoutes(
     const now = new Date();
     const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
     const trialMinutesTotal = user.trialMinutesTotal || 90;
-    const trialMinutesRemaining = Math.max(0, trialMinutesTotal - trialMinutesUsed);
+    const trialMinutesRemaining = Math.max(
+      0,
+      trialMinutesTotal - trialMinutesUsed,
+    );
     const timeExpired = now > user.trialEndsAt;
     const minutesExpired = trialMinutesRemaining <= 0;
     const isActive = !user.trialUsed && !timeExpired && !minutesExpired;
@@ -2880,7 +3681,10 @@ export async function registerRoutes(
       status = "active";
     }
 
-    const timeRemainingMs = Math.max(0, user.trialEndsAt.getTime() - now.getTime());
+    const timeRemainingMs = Math.max(
+      0,
+      user.trialEndsAt.getTime() - now.getTime(),
+    );
     const daysRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60 * 24));
     const hoursRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60));
 
@@ -2899,7 +3703,11 @@ export async function registerRoutes(
 
   // Helper: Check if user has access (trial OR active subscription with minutes)
   async function checkUserAccess(userId: string) {
-    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    const userResult = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, userId))
+      .limit(1);
     const userRecord = userResult[0];
 
     if (userRecord?.role === "ADMIN") {
@@ -2950,8 +3758,12 @@ export async function registerRoutes(
       }
     }
 
-    const trialGrantsAccess = trial !== null && trial.is_active && trial.minutes_remaining > 0;
-    const subGrantsAccess = subscription !== null && subscription.status === "active" && subscription.minutes_remaining > 0;
+    const trialGrantsAccess =
+      trial !== null && trial.is_active && trial.minutes_remaining > 0;
+    const subGrantsAccess =
+      subscription !== null &&
+      subscription.status === "active" &&
+      subscription.minutes_remaining > 0;
     const accessGranted = trialGrantsAccess || subGrantsAccess;
 
     let accessSource: string;
@@ -3118,7 +3930,9 @@ export async function registerRoutes(
       res.json({ success: true, settings: result });
     } catch (error: any) {
       console.error("[Settings GET] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch settings" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch settings" });
     }
   });
 
@@ -3134,7 +3948,7 @@ export async function registerRoutes(
         z.object({
           setting_key: z.string().min(1).max(100),
           setting_value: z.string(),
-        })
+        }),
       );
 
       const parseResult = settingsSchema.safeParse(req.body.settings);
@@ -3156,8 +3970,8 @@ export async function registerRoutes(
           .where(
             and(
               eq(userSettings.userId, userId),
-              eq(userSettings.settingKey, setting.setting_key)
-            )
+              eq(userSettings.settingKey, setting.setting_key),
+            ),
           )
           .limit(1);
 
@@ -3197,40 +4011,52 @@ export async function registerRoutes(
       res.json({ success: true, settings: saved });
     } catch (error: any) {
       console.error("[Settings PUT] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to save settings" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to save settings" });
     }
   });
 
   // DELETE /api/v1/a/settings/:key - Delete a specific setting
-  app.delete("/api/v1/a/settings/:key", mobileAuthMiddleware, async (req, res) => {
-    try {
-      const userId = req.jwtUser?.userId;
-      if (!userId) {
-        return res.status(401).json({ success: false, error: "Unauthorized" });
-      }
+  app.delete(
+    "/api/v1/a/settings/:key",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      try {
+        const userId = req.jwtUser?.userId;
+        if (!userId) {
+          return res
+            .status(401)
+            .json({ success: false, error: "Unauthorized" });
+        }
 
-      const { key } = req.params;
+        const { key } = req.params;
 
-      const deleted = await db
-        .delete(userSettings)
-        .where(
-          and(
-            eq(userSettings.userId, userId),
-            eq(userSettings.settingKey, key)
+        const deleted = await db
+          .delete(userSettings)
+          .where(
+            and(
+              eq(userSettings.userId, userId),
+              eq(userSettings.settingKey, key),
+            ),
           )
-        )
-        .returning();
+          .returning();
 
-      if (deleted.length === 0) {
-        return res.status(404).json({ success: false, error: "Setting not found" });
+        if (deleted.length === 0) {
+          return res
+            .status(404)
+            .json({ success: false, error: "Setting not found" });
+        }
+
+        res.json({ success: true, message: "Setting deleted" });
+      } catch (error: any) {
+        console.error("[Settings DELETE] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to delete setting" });
       }
-
-      res.json({ success: true, message: "Setting deleted" });
-    } catch (error: any) {
-      console.error("[Settings DELETE] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to delete setting" });
-    }
-  });
+    },
+  );
 
   // ============================================================
   // STRIPE SUBSCRIPTION ENDPOINTS (Web + Mobile)
@@ -3243,40 +4069,61 @@ export async function registerRoutes(
       res.json({ success: true, publishableKey });
     } catch (error: any) {
       console.error("[Stripe Config] Error:", error.message);
-      res.status(500).json({ success: false, error: "Failed to get Stripe configuration" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to get Stripe configuration" });
     }
   }
 
   app.get("/api/v1/p/stripe-config", handleStripeConfig);
 
   // GET /api/subscription-status + /api/v1/a/subscription-status - Get current subscription status
-  async function handleSubscriptionStatus(_req: Request, res: Response, userId: string) {
+  async function handleSubscriptionStatus(
+    _req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const user = userResult[0];
       if (!user) {
-        return res.status(404).json({ success: false, error: "User not found" });
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
       }
 
       const trial = await getTrialInfo(userId);
 
       if (user.stripeCustomerId) {
-        cleanupStalePayments(user.stripeCustomerId).catch(err =>
-          console.warn("[Subscription Status] Background cleanup error:", err.message)
+        cleanupStalePayments(user.stripeCustomerId).catch((err) =>
+          console.warn(
+            "[Subscription Status] Background cleanup error:",
+            err.message,
+          ),
         );
       }
 
-      const activeSubResult = await db.select().from(userSubscriptions)
-        .where(and(
-          eq(userSubscriptions.userId, userId),
-          eq(userSubscriptions.status, "active"),
-        ))
+      const activeSubResult = await db
+        .select()
+        .from(userSubscriptions)
+        .where(
+          and(
+            eq(userSubscriptions.userId, userId),
+            eq(userSubscriptions.status, "active"),
+          ),
+        )
         .limit(1);
 
       const activeSub = activeSubResult[0];
       let plan = null;
       if (activeSub) {
-        const planResult = await db.select().from(subscriptionPlans)
+        const planResult = await db
+          .select()
+          .from(subscriptionPlans)
           .where(eq(subscriptionPlans.id, activeSub.planId))
           .limit(1);
         plan = planResult[0] || null;
@@ -3289,7 +4136,9 @@ export async function registerRoutes(
       if (user.stripeSubscriptionId) {
         try {
           const stripe = await getUncachableStripeClient();
-          const stripeSub = await stripe.subscriptions.retrieve(user.stripeSubscriptionId);
+          const stripeSub = await stripe.subscriptions.retrieve(
+            user.stripeSubscriptionId,
+          );
           stripeStatus = stripeSub.status;
           cancelAtPeriodEnd = stripeSub.cancel_at_period_end;
           const periodEndTs = (stripeSub as any).current_period_end;
@@ -3297,45 +4146,58 @@ export async function registerRoutes(
             ? new Date(periodEndTs * 1000).toISOString()
             : null;
         } catch (err: any) {
-          console.warn("[Subscription Status] Stripe retrieval failed:", err.message);
+          console.warn(
+            "[Subscription Status] Stripe retrieval failed:",
+            err.message,
+          );
         }
       }
 
       res.json({
         success: true,
-        trial: trial ? {
-          is_active: trial.is_active,
-          days_remaining: trial.days_remaining,
-          minutes_remaining: trial.minutes_remaining,
-          minutes_used: trial.minutes_used,
-          trial_ends_at: trial.ends_at,
-        } : null,
-        subscription: activeSub ? {
-          id: activeSub.id,
-          plan_name: plan?.name || "Unknown",
-          plan_id: activeSub.planId,
-          status: activeSub.status,
-          valid_date_upto: activeSub.validDateUpto,
-          minutes_used: activeSub.minutesUsed,
-          minutes_remaining: activeSub.minutesRemaining,
-          stripe_subscription_id: user.stripeSubscriptionId,
-          stripe_status: stripeStatus,
-          cancel_at_period_end: cancelAtPeriodEnd,
-          current_period_end: currentPeriodEnd,
-        } : null,
+        trial: trial
+          ? {
+              is_active: trial.is_active,
+              days_remaining: trial.days_remaining,
+              minutes_remaining: trial.minutes_remaining,
+              minutes_used: trial.minutes_used,
+              trial_ends_at: trial.ends_at,
+            }
+          : null,
+        subscription: activeSub
+          ? {
+              id: activeSub.id,
+              plan_name: plan?.name || "Unknown",
+              plan_id: activeSub.planId,
+              status: activeSub.status,
+              valid_date_upto: activeSub.validDateUpto,
+              minutes_used: activeSub.minutesUsed,
+              minutes_remaining: activeSub.minutesRemaining,
+              stripe_subscription_id: user.stripeSubscriptionId,
+              stripe_status: stripeStatus,
+              cancel_at_period_end: cancelAtPeriodEnd,
+              current_period_end: currentPeriodEnd,
+            }
+          : null,
         has_active_subscription: !!activeSub,
         has_active_trial: trial?.is_active || false,
       });
     } catch (error: any) {
       console.error("[Subscription Status] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to get subscription status" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to get subscription status" });
     }
   }
 
-  app.get("/api/v1/a/subscription-status", mobileAuthMiddleware, async (req, res) => {
-    const userId = req.jwtUser?.userId!;
-    await handleSubscriptionStatus(req, res, userId);
-  });
+  app.get(
+    "/api/v1/a/subscription-status",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      const userId = req.jwtUser?.userId!;
+      await handleSubscriptionStatus(req, res, userId);
+    },
+  );
 
   const PAYMENT_TIMEOUT_MS = 15 * 60 * 1000;
 
@@ -3355,9 +4217,14 @@ export async function registerRoutes(
             if (sub.created < cutoffTime) {
               try {
                 await stripe.subscriptions.cancel(sub.id);
-                console.log(`[Stripe Cleanup] Cancelled stale ${status} subscription ${sub.id} (created ${new Date(sub.created * 1000).toISOString()})`);
+                console.log(
+                  `[Stripe Cleanup] Cancelled stale ${status} subscription ${sub.id} (created ${new Date(sub.created * 1000).toISOString()})`,
+                );
               } catch (cancelErr: any) {
-                console.warn(`[Stripe Cleanup] Could not cancel sub ${sub.id}:`, cancelErr.message);
+                console.warn(
+                  `[Stripe Cleanup] Could not cancel sub ${sub.id}:`,
+                  cancelErr.message,
+                );
               }
             }
           }
@@ -3370,7 +4237,11 @@ export async function registerRoutes(
 
       let hasMore = true;
       let startingAfter: string | undefined;
-      const cancelableStatuses = ["requires_payment_method", "requires_confirmation", "requires_action"];
+      const cancelableStatuses = [
+        "requires_payment_method",
+        "requires_confirmation",
+        "requires_action",
+      ];
       while (hasMore) {
         const params: any = { customer: customerId, limit: 100 };
         if (startingAfter) params.starting_after = startingAfter;
@@ -3380,9 +4251,14 @@ export async function registerRoutes(
           if (cancelableStatuses.includes(pi.status)) {
             try {
               await stripe.paymentIntents.cancel(pi.id);
-              console.log(`[Stripe Cleanup] Cancelled stale PaymentIntent ${pi.id} (status: ${pi.status}, created ${new Date(pi.created * 1000).toISOString()})`);
+              console.log(
+                `[Stripe Cleanup] Cancelled stale PaymentIntent ${pi.id} (status: ${pi.status}, created ${new Date(pi.created * 1000).toISOString()})`,
+              );
             } catch (cancelErr: any) {
-              console.warn(`[Stripe Cleanup] Could not cancel PI ${pi.id}:`, cancelErr.message);
+              console.warn(
+                `[Stripe Cleanup] Could not cancel PI ${pi.id}:`,
+                cancelErr.message,
+              );
             }
           }
         }
@@ -3392,19 +4268,34 @@ export async function registerRoutes(
         }
       }
     } catch (error: any) {
-      console.error("[Stripe Cleanup] Error cleaning up stale payments:", error.message);
+      console.error(
+        "[Stripe Cleanup] Error cleaning up stale payments:",
+        error.message,
+      );
     }
   }
 
   // POST /api/create-subscription (Web) + POST /api/v1/a/create-subscription (Mobile)
-  async function handleCreateSubscription(req: Request, res: Response, userId: string, userEmail: string) {
+  async function handleCreateSubscription(
+    req: Request,
+    res: Response,
+    userId: string,
+    userEmail: string,
+  ) {
     try {
-      console.log("[Stripe Create Subscription] Raw body:", JSON.stringify(req.body));
+      console.log(
+        "[Stripe Create Subscription] Raw body:",
+        JSON.stringify(req.body),
+      );
 
       const body = req.body || {};
       const normalizedBody = {
         email: body.email,
-        priceId: body.priceId || body.price_id || body.stripePriceId || body.stripe_price_id,
+        priceId:
+          body.priceId ||
+          body.price_id ||
+          body.stripePriceId ||
+          body.stripe_price_id,
         autoRenew: body.autoRenew !== undefined ? body.autoRenew : true,
       };
 
@@ -3426,10 +4317,16 @@ export async function registerRoutes(
       const { email, priceId, autoRenew } = parseResult.data;
       const stripe = await getUncachableStripeClient();
 
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const user = userResult[0];
       if (!user) {
-        return res.status(404).json({ success: false, error: "User not found" });
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
       }
 
       let customerId = user.stripeCustomerId;
@@ -3437,7 +4334,10 @@ export async function registerRoutes(
         try {
           await stripe.customers.retrieve(customerId);
         } catch (custErr: any) {
-          console.log("[Stripe] Stored customer not found in current mode, creating new:", custErr.message);
+          console.log(
+            "[Stripe] Stored customer not found in current mode, creating new:",
+            custErr.message,
+          );
           customerId = null;
         }
       }
@@ -3447,7 +4347,8 @@ export async function registerRoutes(
           metadata: { userId },
         });
         customerId = customer.id;
-        await db.update(users)
+        await db
+          .update(users)
           .set({ stripeCustomerId: customerId, updatedAt: new Date() })
           .where(eq(users.id, userId));
       }
@@ -3486,11 +4387,16 @@ export async function registerRoutes(
       }
 
       if (!autoRenew) {
-        await stripe.subscriptions.update(subscription.id, { cancel_at_period_end: true });
-        console.log(`[Stripe Create Subscription] Set cancel_at_period_end=true for ${subscription.id} (manual renewal)`);
+        await stripe.subscriptions.update(subscription.id, {
+          cancel_at_period_end: true,
+        });
+        console.log(
+          `[Stripe Create Subscription] Set cancel_at_period_end=true for ${subscription.id} (manual renewal)`,
+        );
       }
 
-      await db.update(users)
+      await db
+        .update(users)
         .set({ stripeSubscriptionId: subscription.id, updatedAt: new Date() })
         .where(eq(users.id, userId));
 
@@ -3509,16 +4415,22 @@ export async function registerRoutes(
     }
   }
 
-  app.post("/api/v1/a/create-subscription", mobileAuthMiddleware, async (req, res) => {
-    const userId = req.jwtUser?.userId!;
-    const email = req.body.email;
-    await handleCreateSubscription(req, res, userId, email);
-  });
+  app.post(
+    "/api/v1/a/create-subscription",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      const userId = req.jwtUser?.userId!;
+      const email = req.body.email;
+      await handleCreateSubscription(req, res, userId, email);
+    },
+  );
 
   // GET /api/v1/p/plans — public endpoint to list visible subscription plans
   app.get("/api/v1/p/plans", async (req, res) => {
     try {
-      const plans = await db.select().from(subscriptionPlans)
+      const plans = await db
+        .select()
+        .from(subscriptionPlans)
         .where(eq(subscriptionPlans.isVisible, true));
       res.json({ success: true, plans });
     } catch (error: any) {
@@ -3528,57 +4440,95 @@ export async function registerRoutes(
   });
 
   // POST /api/v1/a/web-subscribe — creates a Stripe Checkout Session for web payment
-  app.post("/api/v1/a/web-subscribe", mobileAuthMiddleware, async (req, res) => {
-    try {
-      const userId = req.jwtUser?.userId!;
-      const schema = z.object({
-        priceId: z.string().min(1, "Price ID is required"),
-        autoRenew: z.boolean().default(true),
-      });
-      const parseResult = schema.safeParse(req.body);
-      if (!parseResult.success) {
-        return res.status(400).json({ success: false, error: "Validation failed", details: parseResult.error.errors });
-      }
-      const { priceId, autoRenew } = parseResult.data;
-      const stripe = await getUncachableStripeClient();
+  app.post(
+    "/api/v1/a/web-subscribe",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      try {
+        const userId = req.jwtUser?.userId!;
+        const schema = z.object({
+          priceId: z.string().min(1, "Price ID is required"),
+          autoRenew: z.boolean().default(true),
+        });
+        const parseResult = schema.safeParse(req.body);
+        if (!parseResult.success) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: "Validation failed",
+              details: parseResult.error.errors,
+            });
+        }
+        const { priceId, autoRenew } = parseResult.data;
+        const stripe = await getUncachableStripeClient();
 
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      const user = userResult[0];
-      if (!user) return res.status(404).json({ success: false, error: "User not found" });
+        const userResult = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        const user = userResult[0];
+        if (!user)
+          return res
+            .status(404)
+            .json({ success: false, error: "User not found" });
 
-      let customerId = user.stripeCustomerId;
-      if (customerId) {
-        try { await stripe.customers.retrieve(customerId); } catch { customerId = null; }
-      }
-      if (!customerId) {
-        const customer = await stripe.customers.create({ email: user.email!, metadata: { userId } });
-        customerId = customer.id;
-        await db.update(users).set({ stripeCustomerId: customerId, updatedAt: new Date() }).where(eq(users.id, userId));
-      }
+        let customerId = user.stripeCustomerId;
+        if (customerId) {
+          try {
+            await stripe.customers.retrieve(customerId);
+          } catch {
+            customerId = null;
+          }
+        }
+        if (!customerId) {
+          const customer = await stripe.customers.create({
+            email: user.email!,
+            metadata: { userId },
+          });
+          customerId = customer.id;
+          await db
+            .update(users)
+            .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+            .where(eq(users.id, userId));
+        }
 
-      const baseUrl = WEB_APP_URL;
-      const session = await stripe.checkout.sessions.create({
-        mode: "subscription",
-        customer: customerId,
-        line_items: [{ price: priceId, quantity: 1 }],
-        success_url: `${baseUrl}/subscribe/success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `${baseUrl}/pricing`,
-        metadata: { userId, autoRenew: String(autoRenew) },
-        subscription_data: {
+        const baseUrl = WEB_APP_URL;
+        const session = await stripe.checkout.sessions.create({
+          mode: "subscription",
+          customer: customerId,
+          line_items: [{ price: priceId, quantity: 1 }],
+          success_url: `${baseUrl}/subscribe/success?session_id={CHECKOUT_SESSION_ID}`,
+          cancel_url: `${baseUrl}/pricing`,
           metadata: { userId, autoRenew: String(autoRenew) },
-        },
-      });
+          subscription_data: {
+            metadata: { userId, autoRenew: String(autoRenew) },
+          },
+        });
 
-      console.log(`[Web Subscribe] Checkout session created: ${session.id} for user ${userId}, autoRenew=${autoRenew}`);
-      res.json({ success: true, url: session.url });
-    } catch (error: any) {
-      console.error("[Web Subscribe] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to create checkout session" });
-    }
-  });
+        console.log(
+          `[Web Subscribe] Checkout session created: ${session.id} for user ${userId}, autoRenew=${autoRenew}`,
+        );
+        res.json({ success: true, url: session.url });
+      } catch (error: any) {
+        console.error("[Web Subscribe] Error:", error);
+        res
+          .status(500)
+          .json({
+            success: false,
+            error: error.message || "Failed to create checkout session",
+          });
+      }
+    },
+  );
 
   // POST /api/cancel-subscription (Web) + POST /api/v1/a/cancel-subscription (Mobile)
-  async function handleCancelSubscription(req: Request, res: Response, userId: string) {
+  async function handleCancelSubscription(
+    req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
       const schema = z.object({
         subscriptionId: z.string().min(1, "Subscription ID is required"),
@@ -3595,14 +4545,25 @@ export async function registerRoutes(
 
       const { subscriptionId } = parseResult.data;
 
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const user = userResult[0];
       if (!user) {
-        return res.status(404).json({ success: false, error: "User not found" });
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
       }
 
       if (user.stripeSubscriptionId !== subscriptionId) {
-        return res.status(403).json({ success: false, error: "You can only cancel your own subscription" });
+        return res
+          .status(403)
+          .json({
+            success: false,
+            error: "You can only cancel your own subscription",
+          });
       }
 
       const stripe = await getUncachableStripeClient();
@@ -3616,9 +4577,12 @@ export async function registerRoutes(
 
       res.json({
         success: true,
-        message: "Subscription will be cancelled at the end of the current billing period",
+        message:
+          "Subscription will be cancelled at the end of the current billing period",
         cancel_at: cancelAt ? new Date(cancelAt * 1000).toISOString() : null,
-        current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+        current_period_end: periodEnd
+          ? new Date(periodEnd * 1000).toISOString()
+          : null,
       });
     } catch (error: any) {
       console.error("[Stripe Cancel Subscription] Error:", error);
@@ -3629,10 +4593,14 @@ export async function registerRoutes(
     }
   }
 
-  app.post("/api/v1/a/cancel-subscription", mobileAuthMiddleware, async (req, res) => {
-    const userId = req.jwtUser?.userId!;
-    await handleCancelSubscription(req, res, userId);
-  });
+  app.post(
+    "/api/v1/a/cancel-subscription",
+    mobileAuthMiddleware,
+    async (req, res) => {
+      const userId = req.jwtUser?.userId!;
+      await handleCancelSubscription(req, res, userId);
+    },
+  );
 
   // POST /api/stripe-webhook + /api/v1/p/stripe-webhook - Stripe webhook handler
   async function handleStripeWebhook(req: Request, res: Response) {
@@ -3641,7 +4609,9 @@ export async function registerRoutes(
       const sig = req.headers["stripe-signature"];
 
       if (!sig) {
-        return res.status(400).json({ error: "Missing stripe-signature header" });
+        return res
+          .status(400)
+          .json({ error: "Missing stripe-signature header" });
       }
 
       const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
@@ -3669,25 +4639,36 @@ export async function registerRoutes(
           const subscriptionId = invoice.subscription;
 
           if (customerId && subscriptionId) {
-            const userResult = await db.select().from(users)
+            const userResult = await db
+              .select()
+              .from(users)
               .where(eq(users.stripeCustomerId, customerId))
               .limit(1);
 
             if (userResult.length > 0) {
               const user = userResult[0];
-              await db.update(users)
-                .set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() })
+              await db
+                .update(users)
+                .set({
+                  stripeSubscriptionId: subscriptionId,
+                  updatedAt: new Date(),
+                })
                 .where(eq(users.id, user.id));
 
-              const stripeSubscription = await stripe.subscriptions.retrieve(subscriptionId);
+              const stripeSubscription =
+                await stripe.subscriptions.retrieve(subscriptionId);
               const priceId = stripeSubscription.items.data[0]?.price?.id;
 
               if (priceId) {
-                let planResult = await db.select().from(subscriptionPlans)
+                let planResult = await db
+                  .select()
+                  .from(subscriptionPlans)
                   .where(eq(subscriptionPlans.stripePriceId, priceId))
                   .limit(1);
                 if (planResult.length === 0) {
-                  planResult = await db.select().from(subscriptionPlans)
+                  planResult = await db
+                    .select()
+                    .from(subscriptionPlans)
                     .where(gte(subscriptionPlans.priceMonthly, 1))
                     .limit(1);
                 }
@@ -3700,25 +4681,35 @@ export async function registerRoutes(
                     carryoverMinutes = trial.minutes_remaining;
                   }
 
-                  await db.update(users)
+                  await db
+                    .update(users)
                     .set({ trialUsed: true, updatedAt: new Date() })
                     .where(eq(users.id, user.id));
 
-                  const existingActive = await db.select().from(userSubscriptions)
-                    .where(and(
-                      eq(userSubscriptions.userId, user.id),
-                      eq(userSubscriptions.status, "active"),
-                    )).limit(1);
+                  const existingActive = await db
+                    .select()
+                    .from(userSubscriptions)
+                    .where(
+                      and(
+                        eq(userSubscriptions.userId, user.id),
+                        eq(userSubscriptions.status, "active"),
+                      ),
+                    )
+                    .limit(1);
 
                   if (existingActive.length > 0) {
-                    await db.update(userSubscriptions)
+                    await db
+                      .update(userSubscriptions)
                       .set({ status: "superseded" })
                       .where(eq(userSubscriptions.id, existingActive[0].id));
                   }
 
                   const validDateUpto = new Date();
-                  validDateUpto.setDate(validDateUpto.getDate() + matchedPlan.validDays);
-                  const totalMinutes = (matchedPlan.validTotalMinutes || 0) + carryoverMinutes;
+                  validDateUpto.setDate(
+                    validDateUpto.getDate() + matchedPlan.validDays,
+                  );
+                  const totalMinutes =
+                    (matchedPlan.validTotalMinutes || 0) + carryoverMinutes;
 
                   await db.insert(userSubscriptions).values({
                     userId: user.id,
@@ -3732,28 +4723,52 @@ export async function registerRoutes(
                   });
 
                   await refreshUserRole(user.id);
-                  console.log(`[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`);
+                  console.log(
+                    `[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`,
+                  );
 
                   // Fire-and-forget push — must never block webhook 200 response
-                  ;(async () => {
+                  (async () => {
                     try {
-                      const dedupKey = `sub_renewed_${subscriptionId}_${invoice.period_start || ''}`;
-                      const existing = await db.select().from(notificationLog)
-                        .where(and(
-                          eq(notificationLog.userId, user.id),
-                          eq(notificationLog.notificationType, "subscription_renewed"),
-                          eq(notificationLog.message, dedupKey),
-                        )).limit(1);
+                      const dedupKey = `sub_renewed_${subscriptionId}_${invoice.period_start || ""}`;
+                      const existing = await db
+                        .select()
+                        .from(notificationLog)
+                        .where(
+                          and(
+                            eq(notificationLog.userId, user.id),
+                            eq(
+                              notificationLog.notificationType,
+                              "subscription_renewed",
+                            ),
+                            eq(notificationLog.message, dedupKey),
+                          ),
+                        )
+                        .limit(1);
                       if (existing.length > 0) return;
-                      const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, "subscription_renewed");
-                      const tokens = await db.select().from(pushTokens)
-                        .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                      const { pushEnabled: prefPush, emailEnabled: prefEmail } =
+                        await getNotificationPref(
+                          user.id,
+                          "subscription_renewed",
+                        );
+                      const tokens = await db
+                        .select()
+                        .from(pushTokens)
+                        .where(
+                          and(
+                            eq(pushTokens.userId, user.id),
+                            eq(pushTokens.isActive, true),
+                          ),
+                        );
                       if (tokens.length > 0 && prefPush) {
                         await sendExpoPushNotifications(
-                          tokens.map(t => t.pushToken),
+                          tokens.map((t) => t.pushToken),
                           "Subscription Renewed",
                           `Your ${matchedPlan.name} plan has been renewed. Enjoy your recording minutes!`,
-                          { type: "subscription_renewed", screen: "subscription" }
+                          {
+                            type: "subscription_renewed",
+                            screen: "subscription",
+                          },
                         );
                       }
                       await db.insert(notificationLog).values({
@@ -3764,11 +4779,21 @@ export async function registerRoutes(
                         message: dedupKey,
                       });
                       if (user.email && prefEmail) {
-                        sendSubscriptionRenewedEmail(user.email, matchedPlan.name)
-                          .catch((e: any) => console.error("[Email] subscription_renewed:", e.message));
+                        sendSubscriptionRenewedEmail(
+                          user.email,
+                          matchedPlan.name,
+                        ).catch((e: any) =>
+                          console.error(
+                            "[Email] subscription_renewed:",
+                            e.message,
+                          ),
+                        );
                       }
                     } catch (pushErr: any) {
-                      console.error("[Push] subscription_renewed failed:", pushErr.message);
+                      console.error(
+                        "[Push] subscription_renewed failed:",
+                        pushErr.message,
+                      );
                     }
                   })();
                 }
@@ -3784,7 +4809,9 @@ export async function registerRoutes(
           const subscriptionId = invoice.subscription;
 
           if (customerId) {
-            const userResult = await db.select().from(users)
+            const userResult = await db
+              .select()
+              .from(users)
               .where(eq(users.stripeCustomerId, customerId))
               .limit(1);
 
@@ -3792,43 +4819,64 @@ export async function registerRoutes(
               const user = userResult[0];
 
               if (subscriptionId) {
-                const activeSubResult = await db.select().from(userSubscriptions)
-                  .where(and(
-                    eq(userSubscriptions.userId, user.id),
-                    eq(userSubscriptions.status, "active"),
-                    eq(userSubscriptions.paymentToken, subscriptionId),
-                  )).limit(1);
+                const activeSubResult = await db
+                  .select()
+                  .from(userSubscriptions)
+                  .where(
+                    and(
+                      eq(userSubscriptions.userId, user.id),
+                      eq(userSubscriptions.status, "active"),
+                      eq(userSubscriptions.paymentToken, subscriptionId),
+                    ),
+                  )
+                  .limit(1);
 
                 if (activeSubResult.length > 0) {
-                  await db.update(userSubscriptions)
+                  await db
+                    .update(userSubscriptions)
                     .set({ status: "payment_failed" })
                     .where(eq(userSubscriptions.id, activeSubResult[0].id));
                 }
               }
 
               await refreshUserRole(user.id);
-              console.log(`[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${subscriptionId}`);
+              console.log(
+                `[Stripe Webhook] invoice.payment_failed: User ${user.id} payment failed for subscription ${subscriptionId}`,
+              );
 
               // Fire-and-forget push — must never block webhook 200 response
-              ;(async () => {
+              (async () => {
                 try {
                   const dedupKey = `payment_failed_${invoice.id}`;
-                  const existing = await db.select().from(notificationLog)
-                    .where(and(
-                      eq(notificationLog.userId, user.id),
-                      eq(notificationLog.notificationType, "payment_failed"),
-                      eq(notificationLog.message, dedupKey),
-                    )).limit(1);
+                  const existing = await db
+                    .select()
+                    .from(notificationLog)
+                    .where(
+                      and(
+                        eq(notificationLog.userId, user.id),
+                        eq(notificationLog.notificationType, "payment_failed"),
+                        eq(notificationLog.message, dedupKey),
+                      ),
+                    )
+                    .limit(1);
                   if (existing.length > 0) return;
-                  const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, "payment_failed");
-                  const tokens = await db.select().from(pushTokens)
-                    .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                  const { pushEnabled: prefPush, emailEnabled: prefEmail } =
+                    await getNotificationPref(user.id, "payment_failed");
+                  const tokens = await db
+                    .select()
+                    .from(pushTokens)
+                    .where(
+                      and(
+                        eq(pushTokens.userId, user.id),
+                        eq(pushTokens.isActive, true),
+                      ),
+                    );
                   if (tokens.length > 0 && prefPush) {
                     await sendExpoPushNotifications(
-                      tokens.map(t => t.pushToken),
+                      tokens.map((t) => t.pushToken),
                       "Payment Failed",
                       "We couldn't process your payment. Please update your payment method to keep your subscription active.",
-                      { type: "payment_failed", screen: "subscription" }
+                      { type: "payment_failed", screen: "subscription" },
                     );
                   }
                   await db.insert(notificationLog).values({
@@ -3839,11 +4887,15 @@ export async function registerRoutes(
                     message: dedupKey,
                   });
                   if (user.email && prefEmail) {
-                    sendPaymentFailedEmail(user.email)
-                      .catch((e: any) => console.error("[Email] payment_failed:", e.message));
+                    sendPaymentFailedEmail(user.email).catch((e: any) =>
+                      console.error("[Email] payment_failed:", e.message),
+                    );
                   }
                 } catch (pushErr: any) {
-                  console.error("[Push] payment_failed notification failed:", pushErr.message);
+                  console.error(
+                    "[Push] payment_failed notification failed:",
+                    pushErr.message,
+                  );
                 }
               })();
             }
@@ -3858,7 +4910,9 @@ export async function registerRoutes(
           const newStatus = subscription.status;
 
           if (customerId && subscriptionId) {
-            const userResult = await db.select().from(users)
+            const userResult = await db
+              .select()
+              .from(users)
               .where(eq(users.stripeCustomerId, customerId))
               .limit(1);
 
@@ -3868,52 +4922,73 @@ export async function registerRoutes(
               if (newStatus === "active") {
                 const priceId = subscription.items?.data?.[0]?.price?.id;
                 if (priceId) {
-                  let planResult = await db.select().from(subscriptionPlans)
+                  let planResult = await db
+                    .select()
+                    .from(subscriptionPlans)
                     .where(eq(subscriptionPlans.stripePriceId, priceId))
                     .limit(1);
                   if (planResult.length === 0) {
-                    planResult = await db.select().from(subscriptionPlans)
+                    planResult = await db
+                      .select()
+                      .from(subscriptionPlans)
                       .where(gte(subscriptionPlans.priceMonthly, 1))
                       .limit(1);
                   }
                   const matchedPlan = planResult[0];
 
                   if (matchedPlan) {
-                    const activeSubResult = await db.select().from(userSubscriptions)
-                      .where(and(
-                        eq(userSubscriptions.userId, user.id),
-                        eq(userSubscriptions.paymentToken, subscriptionId),
-                      )).limit(1);
+                    const activeSubResult = await db
+                      .select()
+                      .from(userSubscriptions)
+                      .where(
+                        and(
+                          eq(userSubscriptions.userId, user.id),
+                          eq(userSubscriptions.paymentToken, subscriptionId),
+                        ),
+                      )
+                      .limit(1);
 
                     if (activeSubResult.length > 0) {
-                      await db.update(userSubscriptions)
+                      await db
+                        .update(userSubscriptions)
                         .set({ status: "active", planId: matchedPlan.id })
                         .where(eq(userSubscriptions.id, activeSubResult[0].id));
                     }
                   }
                 }
 
-                await db.update(users)
-                  .set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() })
+                await db
+                  .update(users)
+                  .set({
+                    stripeSubscriptionId: subscriptionId,
+                    updatedAt: new Date(),
+                  })
                   .where(eq(users.id, user.id));
-
               } else if (newStatus === "past_due" || newStatus === "unpaid") {
-                const activeSubResult = await db.select().from(userSubscriptions)
-                  .where(and(
-                    eq(userSubscriptions.userId, user.id),
-                    eq(userSubscriptions.status, "active"),
-                    eq(userSubscriptions.paymentToken, subscriptionId),
-                  )).limit(1);
+                const activeSubResult = await db
+                  .select()
+                  .from(userSubscriptions)
+                  .where(
+                    and(
+                      eq(userSubscriptions.userId, user.id),
+                      eq(userSubscriptions.status, "active"),
+                      eq(userSubscriptions.paymentToken, subscriptionId),
+                    ),
+                  )
+                  .limit(1);
 
                 if (activeSubResult.length > 0) {
-                  await db.update(userSubscriptions)
+                  await db
+                    .update(userSubscriptions)
                     .set({ status: "payment_failed" })
                     .where(eq(userSubscriptions.id, activeSubResult[0].id));
                 }
               }
 
               await refreshUserRole(user.id);
-              console.log(`[Stripe Webhook] subscription.updated: User ${user.id} status=${newStatus}`);
+              console.log(
+                `[Stripe Webhook] subscription.updated: User ${user.id} status=${newStatus}`,
+              );
             }
           }
           break;
@@ -3924,52 +4999,79 @@ export async function registerRoutes(
           const customerId = subscription.customer;
 
           if (customerId) {
-            const userResult = await db.select().from(users)
+            const userResult = await db
+              .select()
+              .from(users)
               .where(eq(users.stripeCustomerId, customerId))
               .limit(1);
 
             if (userResult.length > 0) {
               const user = userResult[0];
 
-              await db.update(users)
+              await db
+                .update(users)
                 .set({ stripeSubscriptionId: null, updatedAt: new Date() })
                 .where(eq(users.id, user.id));
 
-              const activeSubResult = await db.select().from(userSubscriptions)
-                .where(and(
-                  eq(userSubscriptions.userId, user.id),
-                  eq(userSubscriptions.status, "active"),
-                )).limit(1);
+              const activeSubResult = await db
+                .select()
+                .from(userSubscriptions)
+                .where(
+                  and(
+                    eq(userSubscriptions.userId, user.id),
+                    eq(userSubscriptions.status, "active"),
+                  ),
+                )
+                .limit(1);
 
               if (activeSubResult.length > 0) {
-                await db.update(userSubscriptions)
+                await db
+                  .update(userSubscriptions)
                   .set({ status: "cancelled" })
                   .where(eq(userSubscriptions.id, activeSubResult[0].id));
               }
 
               await refreshUserRole(user.id);
-              console.log(`[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`);
+              console.log(
+                `[Stripe Webhook] subscription.deleted: User ${user.id} subscription cancelled`,
+              );
 
               // Fire-and-forget push — must never block webhook 200 response
-              ;(async () => {
+              (async () => {
                 try {
                   const dedupKey = `sub_expired_${subscription.id}`;
-                  const existing = await db.select().from(notificationLog)
-                    .where(and(
-                      eq(notificationLog.userId, user.id),
-                      eq(notificationLog.notificationType, "subscription_expired"),
-                      eq(notificationLog.message, dedupKey),
-                    )).limit(1);
+                  const existing = await db
+                    .select()
+                    .from(notificationLog)
+                    .where(
+                      and(
+                        eq(notificationLog.userId, user.id),
+                        eq(
+                          notificationLog.notificationType,
+                          "subscription_expired",
+                        ),
+                        eq(notificationLog.message, dedupKey),
+                      ),
+                    )
+                    .limit(1);
                   if (existing.length > 0) return;
-                  const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, "subscription_expired");
-                  const tokens = await db.select().from(pushTokens)
-                    .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+                  const { pushEnabled: prefPush, emailEnabled: prefEmail } =
+                    await getNotificationPref(user.id, "subscription_expired");
+                  const tokens = await db
+                    .select()
+                    .from(pushTokens)
+                    .where(
+                      and(
+                        eq(pushTokens.userId, user.id),
+                        eq(pushTokens.isActive, true),
+                      ),
+                    );
                   if (tokens.length > 0 && prefPush) {
                     await sendExpoPushNotifications(
-                      tokens.map(t => t.pushToken),
+                      tokens.map((t) => t.pushToken),
                       "Subscription Expired",
                       "Your subscription has ended. Subscribe again to continue enjoying MyVoicePost.",
-                      { type: "subscription_expired", screen: "subscription" }
+                      { type: "subscription_expired", screen: "subscription" },
                     );
                   }
                   await db.insert(notificationLog).values({
@@ -3980,11 +5082,15 @@ export async function registerRoutes(
                     message: dedupKey,
                   });
                   if (user.email && prefEmail) {
-                    sendSubscriptionExpiredEmail(user.email)
-                      .catch((e: any) => console.error("[Email] subscription_expired:", e.message));
+                    sendSubscriptionExpiredEmail(user.email).catch((e: any) =>
+                      console.error("[Email] subscription_expired:", e.message),
+                    );
                   }
                 } catch (pushErr: any) {
-                  console.error("[Push] subscription_expired notification failed:", pushErr.message);
+                  console.error(
+                    "[Push] subscription_expired notification failed:",
+                    pushErr.message,
+                  );
                 }
               })();
             }
@@ -3998,8 +5104,12 @@ export async function registerRoutes(
           const subscriptionId = session.subscription;
           const autoRenewMeta = session.metadata?.autoRenew;
           if (subscriptionId && autoRenewMeta === "false") {
-            await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: true });
-            console.log(`[Stripe Webhook] checkout.session.completed: Set cancel_at_period_end for ${subscriptionId}`);
+            await stripe.subscriptions.update(subscriptionId, {
+              cancel_at_period_end: true,
+            });
+            console.log(
+              `[Stripe Webhook] checkout.session.completed: Set cancel_at_period_end for ${subscriptionId}`,
+            );
           }
           break;
         }
@@ -4017,12 +5127,247 @@ export async function registerRoutes(
 
   app.post("/api/v1/p/stripe-webhook", handleStripeWebhook);
 
+  // POST /api/v1/a/revenuecat-webhook - RevenueCat webhook handler
+  async function handleRCWebhook(req: Request, res: Response) {
+    try {
+      const webhookSecret = process.env.REVENUECAT_WEBHOOK_SECRET;
+      if (webhookSecret) {
+        const authHeader = req.headers.authorization;
+        if (!authHeader || authHeader !== webhookSecret) {
+          console.warn("[RC Webhook] Invalid or missing Authorization header");
+          return res.status(401).json({ error: "Unauthorized" });
+        }
+      } else {
+        console.warn("[RC Webhook] REVENUECAT_WEBHOOK_SECRET not set — skipping verification");
+      }
+
+      const event = req.body?.event;
+      if (!event) {
+        return res.status(400).json({ error: "Invalid webhook payload" });
+      }
+
+      const {
+        type: eventType,
+        app_user_id: appUserId,
+        original_app_user_id: originalAppUserId,
+        product_id: productId,
+        expiration_at_ms: expirationAtMs,
+        original_transaction_id: originalTransactionId,
+        transaction_id: transactionId,
+        environment,
+        id: eventId,
+      } = event;
+
+      console.log(`[RC Webhook] type=${eventType} user=${appUserId} product=${productId} env=${environment}`);
+
+      const userId = appUserId || originalAppUserId;
+      if (!userId) {
+        console.warn("[RC Webhook] No app_user_id in event");
+        return res.json({ received: true });
+      }
+
+      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      if (userResult.length === 0) {
+        console.warn(`[RC Webhook] User not found: ${userId}`);
+        return res.json({ received: true });
+      }
+      const user = userResult[0];
+
+      const normalizedProductId = (productId ?? "").split(":")[0];
+      const paymentToken = originalTransactionId || transactionId || eventId || "";
+
+      const findPlan = async () => {
+        if (normalizedProductId) {
+          const r = await db.select().from(subscriptionPlans)
+            .where(eq(subscriptionPlans.rcProductIdentifier, normalizedProductId)).limit(1);
+          if (r.length > 0) return r[0];
+        }
+        const fb = await db.select().from(subscriptionPlans)
+          .where(gte(subscriptionPlans.priceMonthly, 1)).limit(1);
+        return fb[0] ?? null;
+      };
+
+      const fireNotification = async (
+        notifType: string,
+        title: string,
+        body: string,
+        dedupKey: string,
+        emailFn?: () => void,
+      ) => {
+        try {
+          const existing = await db.select().from(notificationLog)
+            .where(and(eq(notificationLog.userId, user.id), eq(notificationLog.notificationType, notifType), eq(notificationLog.message, dedupKey)))
+            .limit(1);
+          if (existing.length > 0) return;
+          const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(user.id, notifType);
+          const tokens = await db.select().from(pushTokens)
+            .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+          if (tokens.length > 0 && prefPush) {
+            await sendExpoPushNotifications(tokens.map((t) => t.pushToken), title, body, { type: notifType, screen: "subscription" });
+          }
+          await db.insert(notificationLog).values({ userId: user.id, notificationType: notifType, title, status: "sent", message: dedupKey });
+          if (user.email && prefEmail && emailFn) emailFn();
+        } catch (e: any) {
+          console.error(`[RC Webhook] Notification error (${notifType}):`, e.message);
+        }
+      };
+
+      switch (eventType) {
+        case "INITIAL_PURCHASE":
+        case "NON_RENEWING_PURCHASE": {
+          const plan = await findPlan();
+          if (!plan) { console.warn(`[RC Webhook] No plan for product: ${normalizedProductId}`); break; }
+
+          const existingActive = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+          if (existingActive.length > 0) {
+            await db.update(userSubscriptions).set({ status: "superseded" }).where(eq(userSubscriptions.id, existingActive[0].id));
+          }
+
+          const isLifetime = eventType === "NON_RENEWING_PURCHASE";
+          const validDateUpto = isLifetime
+            ? new Date("2099-12-31T23:59:59Z")
+            : expirationAtMs
+            ? new Date(expirationAtMs)
+            : (() => { const d = new Date(); d.setDate(d.getDate() + plan.validDays); return d; })();
+
+          const totalMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
+
+          await db.insert(userSubscriptions).values({
+            userId: user.id,
+            planId: plan.id,
+            validDateUpto,
+            minutesUsed: 0,
+            chunksUsed: 0,
+            minutesRemaining: String(totalMinutes),
+            paymentToken,
+            status: "active",
+          });
+          await refreshUserRole(user.id);
+          console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name}`);
+
+          const notifTitle = isLifetime ? "Lifetime Access Activated" : "Subscription Activated";
+          (async () => {
+            await fireNotification(
+              "subscription_renewed", notifTitle,
+              `Your ${plan.name} plan is now active. Enjoy MyVoicePost Pro!`,
+              `rc_purchase_${paymentToken}`,
+              () => sendSubscriptionRenewedEmail(user.email!, plan.name).catch((e: any) => console.error("[RC Email] initial_purchase:", e.message)),
+            );
+          })();
+          break;
+        }
+
+        case "RENEWAL": {
+          const validDateUpto = expirationAtMs ? new Date(expirationAtMs) : null;
+          const existingResult = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, paymentToken))).limit(1);
+
+          if (existingResult.length > 0) {
+            const updates: Record<string, any> = { status: "active" };
+            if (validDateUpto) updates.validDateUpto = validDateUpto;
+            await db.update(userSubscriptions).set(updates).where(eq(userSubscriptions.id, existingResult[0].id));
+          } else {
+            const plan = await findPlan();
+            if (plan) {
+              const d = validDateUpto || (() => { const dt = new Date(); dt.setDate(dt.getDate() + plan.validDays); return dt; })();
+              await db.insert(userSubscriptions).values({
+                userId: user.id, planId: plan.id, validDateUpto: d,
+                minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(plan.validTotalMinutes || 0),
+                paymentToken, status: "active",
+              });
+            }
+          }
+          await refreshUserRole(user.id);
+          console.log(`[RC Webhook] RENEWAL: User ${user.id} renewed`);
+
+          (async () => {
+            const plan = await findPlan();
+            const planName = plan?.name ?? "Pro";
+            await fireNotification(
+              "subscription_renewed", "Subscription Renewed",
+              `Your ${planName} plan has been renewed. Enjoy your recording minutes!`,
+              `rc_renewal_${paymentToken}_${expirationAtMs || Date.now()}`,
+              () => sendSubscriptionRenewedEmail(user.email!, planName).catch((e: any) => console.error("[RC Email] renewal:", e.message)),
+            );
+          })();
+          break;
+        }
+
+        case "CANCELLATION": {
+          const r = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+          if (r.length > 0) await db.update(userSubscriptions).set({ status: "cancelled" }).where(eq(userSubscriptions.id, r[0].id));
+          await refreshUserRole(user.id);
+          console.log(`[RC Webhook] CANCELLATION: User ${user.id} cancelled`);
+          break;
+        }
+
+        case "EXPIRATION": {
+          const r = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, user.id), inArray(userSubscriptions.status, ["active", "cancelled"]))).limit(1);
+          if (r.length > 0) await db.update(userSubscriptions).set({ status: "expired" }).where(eq(userSubscriptions.id, r[0].id));
+          await refreshUserRole(user.id);
+          console.log(`[RC Webhook] EXPIRATION: User ${user.id} expired`);
+          (async () => {
+            await fireNotification(
+              "subscription_expired", "Subscription Expired",
+              "Your subscription has ended. Subscribe again to continue enjoying MyVoicePost.",
+              `rc_expired_${paymentToken}`,
+              () => sendSubscriptionExpiredEmail(user.email!).catch((e: any) => console.error("[RC Email] expired:", e.message)),
+            );
+          })();
+          break;
+        }
+
+        case "BILLING_ISSUE": {
+          const r = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+          if (r.length > 0) await db.update(userSubscriptions).set({ status: "payment_failed" }).where(eq(userSubscriptions.id, r[0].id));
+          await refreshUserRole(user.id);
+          console.log(`[RC Webhook] BILLING_ISSUE: User ${user.id} billing issue`);
+          (async () => {
+            await fireNotification(
+              "payment_failed", "Payment Issue",
+              "We couldn't process your payment. Please update your payment method.",
+              `rc_billing_${paymentToken}`,
+              () => sendPaymentFailedEmail(user.email!).catch((e: any) => console.error("[RC Email] billing_issue:", e.message)),
+            );
+          })();
+          break;
+        }
+
+        case "UNCANCELLATION": {
+          const r = await db.select().from(userSubscriptions)
+            .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "cancelled"))).limit(1);
+          if (r.length > 0) await db.update(userSubscriptions).set({ status: "active" }).where(eq(userSubscriptions.id, r[0].id));
+          await refreshUserRole(user.id);
+          console.log(`[RC Webhook] UNCANCELLATION: User ${user.id} re-enabled auto-renew`);
+          break;
+        }
+
+        default:
+          console.log(`[RC Webhook] Unhandled event type: ${eventType}`);
+      }
+
+      res.json({ received: true });
+    } catch (error: any) {
+      console.error("[RC Webhook] Error:", error.message);
+      res.status(400).json({ error: "Webhook processing failed" });
+    }
+  }
+
+  app.post("/api/v1/a/revenuecat-webhook", handleRCWebhook);
+
   // Stripe Sync: Initialize Stripe schema and sync data
   async function initStripeSync() {
     try {
-      const databaseUrl = process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
+      const databaseUrl =
+        process.env.SUPABASE_DATABASE_URL || process.env.DATABASE_URL;
       if (!databaseUrl) {
-        console.warn("[Stripe] No database URL found, skipping Stripe initialization");
+        console.warn(
+          "[Stripe] No database URL found, skipping Stripe initialization",
+        );
         return;
       }
 
@@ -4039,13 +5384,19 @@ export async function registerRoutes(
           const result = await stripeSync.findOrCreateManagedWebhook(
             `${webhookBaseUrl}/api/stripe-webhook`,
           );
-          console.log(`[Stripe] Webhook configured: ${result?.webhook?.url || 'managed'}`);
+          console.log(
+            `[Stripe] Webhook configured: ${result?.webhook?.url || "managed"}`,
+          );
         } catch (webhookErr: any) {
-          console.warn("[Stripe] Managed webhook setup skipped:", webhookErr.message);
+          console.warn(
+            "[Stripe] Managed webhook setup skipped:",
+            webhookErr.message,
+          );
         }
       }
 
-      stripeSync.syncBackfill()
+      stripeSync
+        .syncBackfill()
         .then(() => console.log("[Stripe] Data synced"))
         .catch((err: any) => console.error("[Stripe] Sync error:", err));
     } catch (error: any) {
@@ -4061,10 +5412,15 @@ export async function registerRoutes(
     const adminEmails = process.env.ADMIN_EMAILS;
     if (!adminEmails) return;
 
-    const emails = adminEmails.split(",").map(e => e.trim().toLowerCase()).filter(Boolean);
+    const emails = adminEmails
+      .split(",")
+      .map((e) => e.trim().toLowerCase())
+      .filter(Boolean);
     for (const email of emails) {
       try {
-        const userResult = await db.select().from(users)
+        const userResult = await db
+          .select()
+          .from(users)
           .where(eq(users.email, email))
           .limit(1);
 
@@ -4073,7 +5429,10 @@ export async function registerRoutes(
           console.log(`[RBAC] Bootstrapped ADMIN role for ${email}`);
         }
       } catch (err: any) {
-        console.warn(`[RBAC] Failed to bootstrap admin for ${email}:`, err.message);
+        console.warn(
+          `[RBAC] Failed to bootstrap admin for ${email}:`,
+          err.message,
+        );
       }
     }
   }
@@ -4085,13 +5444,17 @@ export async function registerRoutes(
     try {
       const userId = req.jwtUser?.userId;
       if (!userId) {
-        return res.status(401).json({ success: false, error: "Not authenticated" });
+        return res
+          .status(401)
+          .json({ success: false, error: "Not authenticated" });
       }
       const role = await refreshUserRole(userId);
       res.json({ success: true, role });
     } catch (error: any) {
       console.error("[User Role] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch user role" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch user role" });
     }
   });
 
@@ -4100,215 +5463,336 @@ export async function registerRoutes(
   // ==========================================
 
   // GET /api/v1/a/admin/stats - Dashboard summary stats
-  app.get("/api/v1/a/admin/stats", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const [userCount] = await db.select({ value: count() }).from(users);
-      const [subCount] = await db.select({ value: count() }).from(userSubscriptions).where(eq(userSubscriptions.status, "active"));
-      const [supportCount] = await db.select({ value: count() }).from(supportRequests).where(eq(supportRequests.status, "open"));
-      const [errorCount] = await db.select({ value: count() }).from(errorLogs);
+  app.get(
+    "/api/v1/a/admin/stats",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const [userCount] = await db.select({ value: count() }).from(users);
+        const [subCount] = await db
+          .select({ value: count() })
+          .from(userSubscriptions)
+          .where(eq(userSubscriptions.status, "active"));
+        const [supportCount] = await db
+          .select({ value: count() })
+          .from(supportRequests)
+          .where(eq(supportRequests.status, "open"));
+        const [errorCount] = await db
+          .select({ value: count() })
+          .from(errorLogs);
 
-      res.json({
-        success: true,
-        stats: {
-          totalUsers: userCount.value,
-          activeSubscriptions: subCount.value,
-          openSupportRequests: supportCount.value,
-          totalErrors: errorCount.value,
-        },
-      });
-    } catch (error: any) {
-      console.error("[Admin Stats] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch stats" });
-    }
-  });
+        res.json({
+          success: true,
+          stats: {
+            totalUsers: userCount.value,
+            activeSubscriptions: subCount.value,
+            openSupportRequests: supportCount.value,
+            totalErrors: errorCount.value,
+          },
+        });
+      } catch (error: any) {
+        console.error("[Admin Stats] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch stats" });
+      }
+    },
+  );
 
   // GET /api/v1/a/admin/users - List all users
-  app.get("/api/v1/a/admin/users", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      const offset = (page - 1) * limit;
+  app.get(
+    "/api/v1/a/admin/users",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const offset = (page - 1) * limit;
 
-      const allUsers = await db.select({
-        id: users.id,
-        username: users.username,
-        email: users.email,
-        role: users.role,
-        trialStartsAt: users.trialStartsAt,
-        trialEndsAt: users.trialEndsAt,
-        trialUsed: users.trialUsed,
-        stripeCustomerId: users.stripeCustomerId,
-        stripeSubscriptionId: users.stripeSubscriptionId,
-        createdAt: users.createdAt,
-        updatedAt: users.updatedAt,
-      }).from(users).orderBy(desc(users.createdAt)).limit(limit).offset(offset);
+        const allUsers = await db
+          .select({
+            id: users.id,
+            username: users.username,
+            email: users.email,
+            role: users.role,
+            trialStartsAt: users.trialStartsAt,
+            trialEndsAt: users.trialEndsAt,
+            trialUsed: users.trialUsed,
+            stripeCustomerId: users.stripeCustomerId,
+            stripeSubscriptionId: users.stripeSubscriptionId,
+            createdAt: users.createdAt,
+            updatedAt: users.updatedAt,
+          })
+          .from(users)
+          .orderBy(desc(users.createdAt))
+          .limit(limit)
+          .offset(offset);
 
-      const [totalResult] = await db.select({ value: count() }).from(users);
+        const [totalResult] = await db.select({ value: count() }).from(users);
 
-      res.json({
-        success: true,
-        users: allUsers,
-        pagination: { page, limit, total: totalResult.value },
-      });
-    } catch (error: any) {
-      console.error("[Admin Users] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch users" });
-    }
-  });
+        res.json({
+          success: true,
+          users: allUsers,
+          pagination: { page, limit, total: totalResult.value },
+        });
+      } catch (error: any) {
+        console.error("[Admin Users] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch users" });
+      }
+    },
+  );
 
   // GET /api/v1/a/admin/subscriptions - List all subscriptions
-  app.get("/api/v1/a/admin/subscriptions", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      const offset = (page - 1) * limit;
+  app.get(
+    "/api/v1/a/admin/subscriptions",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const offset = (page - 1) * limit;
 
-      const allSubs = await db.select({
-        id: userSubscriptions.id,
-        userId: userSubscriptions.userId,
-        planId: userSubscriptions.planId,
-        validDateUpto: userSubscriptions.validDateUpto,
-        minutesUsed: userSubscriptions.minutesUsed,
-        minutesRemaining: userSubscriptions.minutesRemaining,
-        status: userSubscriptions.status,
-        createdAt: userSubscriptions.createdAt,
-      }).from(userSubscriptions).orderBy(desc(userSubscriptions.createdAt)).limit(limit).offset(offset);
+        const allSubs = await db
+          .select({
+            id: userSubscriptions.id,
+            userId: userSubscriptions.userId,
+            planId: userSubscriptions.planId,
+            validDateUpto: userSubscriptions.validDateUpto,
+            minutesUsed: userSubscriptions.minutesUsed,
+            minutesRemaining: userSubscriptions.minutesRemaining,
+            status: userSubscriptions.status,
+            createdAt: userSubscriptions.createdAt,
+          })
+          .from(userSubscriptions)
+          .orderBy(desc(userSubscriptions.createdAt))
+          .limit(limit)
+          .offset(offset);
 
-      const [totalResult] = await db.select({ value: count() }).from(userSubscriptions);
+        const [totalResult] = await db
+          .select({ value: count() })
+          .from(userSubscriptions);
 
-      const plans = await db.select().from(subscriptionPlans);
-      const planMap = Object.fromEntries(plans.map(p => [p.id, p]));
+        const plans = await db.select().from(subscriptionPlans);
+        const planMap = Object.fromEntries(plans.map((p) => [p.id, p]));
 
-      const subsWithUser = await Promise.all(allSubs.map(async (sub) => {
-        const userResult = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, sub.userId)).limit(1);
-        return {
-          ...sub,
-          username: userResult[0]?.username || "Unknown",
-          email: userResult[0]?.email || "Unknown",
-          planName: planMap[sub.planId]?.name || "Unknown",
-        };
-      }));
+        const subsWithUser = await Promise.all(
+          allSubs.map(async (sub) => {
+            const userResult = await db
+              .select({ username: users.username, email: users.email })
+              .from(users)
+              .where(eq(users.id, sub.userId))
+              .limit(1);
+            return {
+              ...sub,
+              username: userResult[0]?.username || "Unknown",
+              email: userResult[0]?.email || "Unknown",
+              planName: planMap[sub.planId]?.name || "Unknown",
+            };
+          }),
+        );
 
-      res.json({
-        success: true,
-        subscriptions: subsWithUser,
-        pagination: { page, limit, total: totalResult.value },
-      });
-    } catch (error: any) {
-      console.error("[Admin Subscriptions] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch subscriptions" });
-    }
-  });
+        res.json({
+          success: true,
+          subscriptions: subsWithUser,
+          pagination: { page, limit, total: totalResult.value },
+        });
+      } catch (error: any) {
+        console.error("[Admin Subscriptions] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch subscriptions" });
+      }
+    },
+  );
 
   // GET /api/v1/a/admin/payments - List Stripe payment history
-  app.get("/api/v1/a/admin/payments", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const limit = parseInt(req.query.limit as string) || 20;
-      const startingAfter = req.query.starting_after as string | undefined;
+  app.get(
+    "/api/v1/a/admin/payments",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const limit = parseInt(req.query.limit as string) || 20;
+        const startingAfter = req.query.starting_after as string | undefined;
 
-      const stripe = await getUncachableStripeClient();
-      const params: any = { limit, expand: ["data.customer"] };
-      if (startingAfter) params.starting_after = startingAfter;
+        const stripe = await getUncachableStripeClient();
+        const params: any = { limit, expand: ["data.customer"] };
+        if (startingAfter) params.starting_after = startingAfter;
 
-      const charges = await stripe.charges.list(params);
+        const charges = await stripe.charges.list(params);
 
-      const payments = charges.data.map((charge: any) => ({
-        id: charge.id,
-        amount: charge.amount / 100,
-        currency: charge.currency,
-        status: charge.status,
-        customerEmail: charge.customer?.email || charge.billing_details?.email || "N/A",
-        customerName: charge.customer?.name || charge.billing_details?.name || "N/A",
-        description: charge.description || "Subscription payment",
-        created: new Date(charge.created * 1000).toISOString(),
-        receiptUrl: charge.receipt_url,
-      }));
+        const payments = charges.data.map((charge: any) => ({
+          id: charge.id,
+          amount: charge.amount / 100,
+          currency: charge.currency,
+          status: charge.status,
+          customerEmail:
+            charge.customer?.email || charge.billing_details?.email || "N/A",
+          customerName:
+            charge.customer?.name || charge.billing_details?.name || "N/A",
+          description: charge.description || "Subscription payment",
+          created: new Date(charge.created * 1000).toISOString(),
+          receiptUrl: charge.receipt_url,
+        }));
 
-      res.json({
-        success: true,
-        payments,
-        hasMore: charges.has_more,
-        lastId: charges.data.length > 0 ? charges.data[charges.data.length - 1].id : null,
-      });
-    } catch (error: any) {
-      console.error("[Admin Payments] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch payments" });
-    }
-  });
+        res.json({
+          success: true,
+          payments,
+          hasMore: charges.has_more,
+          lastId:
+            charges.data.length > 0
+              ? charges.data[charges.data.length - 1].id
+              : null,
+        });
+      } catch (error: any) {
+        console.error("[Admin Payments] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch payments" });
+      }
+    },
+  );
 
   // GET /api/v1/a/admin/support - List support requests
-  app.get("/api/v1/a/admin/support", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      const offset = (page - 1) * limit;
-      const status = req.query.status as string | undefined;
+  app.get(
+    "/api/v1/a/admin/support",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const offset = (page - 1) * limit;
+        const status = req.query.status as string | undefined;
 
-      let query = db.select().from(supportRequests).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset);
+        let query = db
+          .select()
+          .from(supportRequests)
+          .orderBy(desc(supportRequests.createdAt))
+          .limit(limit)
+          .offset(offset);
 
-      const allRequests = status
-        ? await db.select().from(supportRequests).where(eq(supportRequests.status, status)).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset)
-        : await db.select().from(supportRequests).orderBy(desc(supportRequests.createdAt)).limit(limit).offset(offset);
+        const allRequests = status
+          ? await db
+              .select()
+              .from(supportRequests)
+              .where(eq(supportRequests.status, status))
+              .orderBy(desc(supportRequests.createdAt))
+              .limit(limit)
+              .offset(offset)
+          : await db
+              .select()
+              .from(supportRequests)
+              .orderBy(desc(supportRequests.createdAt))
+              .limit(limit)
+              .offset(offset);
 
-      const totalQuery = status
-        ? await db.select({ value: count() }).from(supportRequests).where(eq(supportRequests.status, status))
-        : await db.select({ value: count() }).from(supportRequests);
+        const totalQuery = status
+          ? await db
+              .select({ value: count() })
+              .from(supportRequests)
+              .where(eq(supportRequests.status, status))
+          : await db.select({ value: count() }).from(supportRequests);
 
-      res.json({
-        success: true,
-        requests: allRequests,
-        pagination: { page, limit, total: totalQuery[0].value },
-      });
-    } catch (error: any) {
-      console.error("[Admin Support] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch support requests" });
-    }
-  });
+        res.json({
+          success: true,
+          requests: allRequests,
+          pagination: { page, limit, total: totalQuery[0].value },
+        });
+      } catch (error: any) {
+        console.error("[Admin Support] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch support requests" });
+      }
+    },
+  );
 
   // PATCH /api/v1/a/admin/support/:id - Update support request status
-  app.patch("/api/v1/a/admin/support/:id", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const { id } = req.params;
-      const { status } = req.body;
-      if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
-        return res.status(400).json({ success: false, error: "Invalid status" });
+  app.patch(
+    "/api/v1/a/admin/support/:id",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const { id } = req.params;
+        const { status } = req.body;
+        if (!["open", "in_progress", "resolved", "closed"].includes(status)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid status" });
+        }
+        await db
+          .update(supportRequests)
+          .set({ status, updatedAt: new Date() })
+          .where(eq(supportRequests.id, id));
+        res.json({ success: true });
+      } catch (error: any) {
+        console.error("[Admin Support Update] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to update support request" });
       }
-      await db.update(supportRequests).set({ status, updatedAt: new Date() }).where(eq(supportRequests.id, id));
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[Admin Support Update] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to update support request" });
-    }
-  });
+    },
+  );
 
   // GET /api/v1/a/admin/errors - List error logs
-  app.get("/api/v1/a/admin/errors", jwtAuthMiddleware, checkRole("ADMIN"), async (req, res) => {
-    try {
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = parseInt(req.query.limit as string) || 20;
-      const offset = (page - 1) * limit;
+  app.get(
+    "/api/v1/a/admin/errors",
+    jwtAuthMiddleware,
+    checkRole("ADMIN"),
+    async (req, res) => {
+      try {
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = parseInt(req.query.limit as string) || 20;
+        const offset = (page - 1) * limit;
 
-      const allErrors = await db.select().from(errorLogs).orderBy(desc(errorLogs.createdAt)).limit(limit).offset(offset);
-      const [totalResult] = await db.select({ value: count() }).from(errorLogs);
+        const allErrors = await db
+          .select()
+          .from(errorLogs)
+          .orderBy(desc(errorLogs.createdAt))
+          .limit(limit)
+          .offset(offset);
+        const [totalResult] = await db
+          .select({ value: count() })
+          .from(errorLogs);
 
-      const errorsWithUser = await Promise.all(allErrors.map(async (err) => {
-        if (err.userId) {
-          const userResult = await db.select({ username: users.username, email: users.email }).from(users).where(eq(users.id, err.userId)).limit(1);
-          return { ...err, username: userResult[0]?.username, email: userResult[0]?.email };
-        }
-        return { ...err, username: null, email: null };
-      }));
+        const errorsWithUser = await Promise.all(
+          allErrors.map(async (err) => {
+            if (err.userId) {
+              const userResult = await db
+                .select({ username: users.username, email: users.email })
+                .from(users)
+                .where(eq(users.id, err.userId))
+                .limit(1);
+              return {
+                ...err,
+                username: userResult[0]?.username,
+                email: userResult[0]?.email,
+              };
+            }
+            return { ...err, username: null, email: null };
+          }),
+        );
 
-      res.json({
-        success: true,
-        errors: errorsWithUser,
-        pagination: { page, limit, total: totalResult.value },
-      });
-    } catch (error: any) {
-      console.error("[Admin Errors] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch error logs" });
-    }
-  });
+        res.json({
+          success: true,
+          errors: errorsWithUser,
+          pagination: { page, limit, total: totalResult.value },
+        });
+      } catch (error: any) {
+        console.error("[Admin Errors] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch error logs" });
+      }
+    },
+  );
 
   // POST /api/v1/a/support - Submit a support request (any authenticated user)
   app.post("/api/v1/a/support", jwtAuthMiddleware, async (req, res) => {
@@ -4316,7 +5800,12 @@ export async function registerRoutes(
       const userId = getUserId(req);
       const { subject, message, email, platform } = req.body;
       if (!subject || !message || !email) {
-        return res.status(400).json({ success: false, error: "Subject, message, and email are required" });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Subject, message, and email are required",
+          });
       }
       await db.insert(supportRequests).values({
         userId: userId || undefined,
@@ -4328,7 +5817,9 @@ export async function registerRoutes(
       res.json({ success: true, message: "Support request submitted" });
     } catch (error: any) {
       console.error("[Support] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to submit support request" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to submit support request" });
     }
   });
 
@@ -4336,9 +5827,18 @@ export async function registerRoutes(
   app.post("/api/v1/a/error-log", jwtAuthMiddleware, async (req, res) => {
     try {
       const userId = getUserId(req);
-      const { errorMessage, errorStack, errorCode, platform, endpoint, metadata } = req.body;
+      const {
+        errorMessage,
+        errorStack,
+        errorCode,
+        platform,
+        endpoint,
+        metadata,
+      } = req.body;
       if (!errorMessage) {
-        return res.status(400).json({ success: false, error: "errorMessage is required" });
+        return res
+          .status(400)
+          .json({ success: false, error: "errorMessage is required" });
       }
       await db.insert(errorLogs).values({
         userId: userId || undefined,
@@ -4360,7 +5860,12 @@ export async function registerRoutes(
   // HELPER FUNCTIONS (push notifications, renewal emails, password reset, crash reporting, admin)
   // ============================================================
 
-  async function sendExpoPushNotifications(tokens: string[], title: string, body: string, data?: any) {
+  async function sendExpoPushNotifications(
+    tokens: string[],
+    title: string,
+    body: string,
+    data?: any,
+  ) {
     const messages = tokens.map((token) => ({
       to: token,
       sound: "default" as const,
@@ -4376,7 +5881,10 @@ export async function registerRoutes(
       try {
         const response = await fetch("https://exp.host/--/api/v2/push/send", {
           method: "POST",
-          headers: { "Accept": "application/json", "Content-Type": "application/json" },
+          headers: {
+            Accept: "application/json",
+            "Content-Type": "application/json",
+          },
           body: JSON.stringify(batch),
         });
         const result = await response.json();
@@ -4385,10 +5893,18 @@ export async function registerRoutes(
         if (result.data) {
           for (let j = 0; j < result.data.length; j++) {
             const ticket = result.data[j];
-            if (ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered") {
+            if (
+              ticket.status === "error" &&
+              ticket.details?.error === "DeviceNotRegistered"
+            ) {
               const badToken = batch[j].to;
-              console.log(`[Push] Deactivating invalid token: ${badToken.substring(0, 20)}...`);
-              await db.update(pushTokens).set({ isActive: false, updatedAt: new Date() }).where(eq(pushTokens.pushToken, badToken));
+              console.log(
+                `[Push] Deactivating invalid token: ${badToken.substring(0, 20)}...`,
+              );
+              await db
+                .update(pushTokens)
+                .set({ isActive: false, updatedAt: new Date() })
+                .where(eq(pushTokens.pushToken, badToken));
             }
           }
         }
@@ -4399,12 +5915,19 @@ export async function registerRoutes(
     return results;
   }
 
-  async function sendRenewalReminderEmail(email: string, planName: string, renewalDate: Date, amount: string) {
+  async function sendRenewalReminderEmail(
+    email: string,
+    planName: string,
+    renewalDate: Date,
+    amount: string,
+  ) {
     const smtpHost = process.env.SMTP_HOST;
     const smtpUser = process.env.SMTP_USER;
     const smtpPass = process.env.SMTP_PASS;
     if (!smtpHost || !smtpUser || !smtpPass) {
-      console.warn("[RENEWAL EMAIL] SMTP configuration missing - skipping reminder email");
+      console.warn(
+        "[RENEWAL EMAIL] SMTP configuration missing - skipping reminder email",
+      );
       return;
     }
 
@@ -4414,13 +5937,23 @@ export async function registerRoutes(
       const emailFrom = process.env.EMAIL_FROM || smtpUser;
 
       const transporter = nodemailer.createTransport({
-        host: smtpHost, port: smtpPort, secure: smtpSecure,
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
         auth: { user: smtpUser, pass: smtpPass },
-        ...(smtpPort === 587 && !smtpSecure && { requireTLS: true, tls: { ciphers: "SSLv3", rejectUnauthorized: false } }),
+        ...(smtpPort === 587 &&
+          !smtpSecure && {
+            requireTLS: true,
+            tls: { ciphers: "SSLv3", rejectUnauthorized: false },
+          }),
       });
       await transporter.verify();
 
-      const formattedDate = renewalDate.toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" });
+      const formattedDate = renewalDate.toLocaleDateString("en-US", {
+        year: "numeric",
+        month: "long",
+        day: "numeric",
+      });
       const htmlContent = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>Renewal Reminder</title></head>
         <body style="font-family:sans-serif;max-width:600px;margin:0 auto;padding:20px;">
           <div style="background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
@@ -4451,7 +5984,9 @@ export async function registerRoutes(
 
       console.log(`[RENEWAL EMAIL] Reminder email sent to ${email}`);
     } catch (emailError: any) {
-      console.error(`[RENEWAL EMAIL] Failed to send reminder email: ${emailError.message}`);
+      console.error(
+        `[RENEWAL EMAIL] Failed to send reminder email: ${emailError.message}`,
+      );
     }
   }
 
@@ -4462,7 +5997,9 @@ export async function registerRoutes(
   app.get("/api/cron/subscription-expiry-notifications", async (req, res) => {
     const cronSecret = process.env.CRON_SECRET;
     if (!cronSecret) {
-      console.error("[Cron] CRON_SECRET environment variable is not configured");
+      console.error(
+        "[Cron] CRON_SECRET environment variable is not configured",
+      );
       return res.status(500).json({ error: "Cron not configured" });
     }
     const authHeader = req.headers.authorization;
@@ -4473,17 +6010,24 @@ export async function registerRoutes(
     try {
       console.log("[Cron] Starting subscription expiry notification check...");
       const now = new Date();
-      const sevenDaysFromNow = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
+      const sevenDaysFromNow = new Date(
+        now.getTime() + 7 * 24 * 60 * 60 * 1000,
+      );
       const oneDayMs = 24 * 60 * 60 * 1000;
 
-      const activeSubscriptions = await db.select({
-        subId: userSubscriptions.id,
-        userId: userSubscriptions.userId,
-        planId: userSubscriptions.planId,
-        validDateUpto: userSubscriptions.validDateUpto,
-        planName: subscriptionPlans.name,
-      }).from(userSubscriptions)
-        .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+      const activeSubscriptions = await db
+        .select({
+          subId: userSubscriptions.id,
+          userId: userSubscriptions.userId,
+          planId: userSubscriptions.planId,
+          validDateUpto: userSubscriptions.validDateUpto,
+          planName: subscriptionPlans.name,
+        })
+        .from(userSubscriptions)
+        .leftJoin(
+          subscriptionPlans,
+          eq(userSubscriptions.planId, subscriptionPlans.id),
+        )
         .where(eq(userSubscriptions.status, "active"));
 
       let sentCount = 0;
@@ -4492,7 +6036,9 @@ export async function registerRoutes(
       for (const sub of activeSubscriptions) {
         if (!sub.validDateUpto) continue;
         const expiryDate = new Date(sub.validDateUpto);
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - now.getTime()) / oneDayMs);
+        const daysUntilExpiry = Math.ceil(
+          (expiryDate.getTime() - now.getTime()) / oneDayMs,
+        );
 
         let notificationType: string | null = null;
         let notificationTitle = "";
@@ -4510,39 +6056,81 @@ export async function registerRoutes(
 
         if (!notificationType) continue;
 
-        const alreadySent = await db.select().from(notificationLog)
-          .where(and(
-            eq(notificationLog.userId, sub.userId),
-            eq(notificationLog.notificationType, notificationType),
-            eq(notificationLog.subscriptionId, sub.subId),
-          )).limit(1);
+        const alreadySent = await db
+          .select()
+          .from(notificationLog)
+          .where(
+            and(
+              eq(notificationLog.userId, sub.userId),
+              eq(notificationLog.notificationType, notificationType),
+              eq(notificationLog.subscriptionId, sub.subId),
+            ),
+          )
+          .limit(1);
 
-        if (alreadySent.length > 0) { skippedCount++; continue; }
+        if (alreadySent.length > 0) {
+          skippedCount++;
+          continue;
+        }
 
-        const userTokens = await db.select().from(pushTokens)
-          .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+        const userTokens = await db
+          .select()
+          .from(pushTokens)
+          .where(
+            and(
+              eq(pushTokens.userId, sub.userId),
+              eq(pushTokens.isActive, true),
+            ),
+          );
 
-        if (userTokens.length === 0) { skippedCount++; continue; }
+        if (userTokens.length === 0) {
+          skippedCount++;
+          continue;
+        }
 
-        await sendExpoPushNotifications(userTokens.map((t) => t.pushToken), notificationTitle, notificationBody, {
-          type: "subscription_expiry", subscriptionId: sub.subId, daysRemaining: daysUntilExpiry,
-        });
+        await sendExpoPushNotifications(
+          userTokens.map((t) => t.pushToken),
+          notificationTitle,
+          notificationBody,
+          {
+            type: "subscription_expiry",
+            subscriptionId: sub.subId,
+            daysRemaining: daysUntilExpiry,
+          },
+        );
 
         await db.insert(notificationLog).values({
-          userId: sub.userId, notificationType, title: notificationTitle, subscriptionId: sub.subId, status: "sent", message: notificationBody,
+          userId: sub.userId,
+          notificationType,
+          title: notificationTitle,
+          subscriptionId: sub.subId,
+          status: "sent",
+          message: notificationBody,
         });
 
         sentCount++;
-        console.log(`[Cron] Sent ${notificationType} notification to user ${sub.userId} (expires in ${daysUntilExpiry} days)`);
+        console.log(
+          `[Cron] Sent ${notificationType} notification to user ${sub.userId} (expires in ${daysUntilExpiry} days)`,
+        );
       }
 
-      const usersWithTrials = await db.select().from(users)
-        .where(and(eq(users.trialUsed, false), gte(users.trialEndsAt, now), sql`${users.trialEndsAt} <= ${sevenDaysFromNow}`));
+      const usersWithTrials = await db
+        .select()
+        .from(users)
+        .where(
+          and(
+            eq(users.trialUsed, false),
+            gte(users.trialEndsAt, now),
+            sql`${users.trialEndsAt} <= ${sevenDaysFromNow}`,
+          ),
+        );
 
       for (const user of usersWithTrials) {
         if (!user.trialEndsAt) continue;
         const trialExpiry = new Date(user.trialEndsAt);
-        const daysUntilExpiry = Math.ceil((trialExpiry.getTime() - now.getTime()) / oneDayMs);
+        const daysUntilExpiry = Math.ceil(
+          (trialExpiry.getTime() - now.getTime()) / oneDayMs,
+        );
 
         let notificationType: string | null = null;
         let notificationTitle = "";
@@ -4560,68 +6148,124 @@ export async function registerRoutes(
 
         if (!notificationType) continue;
 
-        const alreadySent = await db.select().from(notificationLog)
-          .where(and(eq(notificationLog.userId, user.id), eq(notificationLog.notificationType, notificationType)))
+        const alreadySent = await db
+          .select()
+          .from(notificationLog)
+          .where(
+            and(
+              eq(notificationLog.userId, user.id),
+              eq(notificationLog.notificationType, notificationType),
+            ),
+          )
           .limit(1);
 
-        if (alreadySent.length > 0) { skippedCount++; continue; }
+        if (alreadySent.length > 0) {
+          skippedCount++;
+          continue;
+        }
 
-        const userTokens = await db.select().from(pushTokens)
-          .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+        const userTokens = await db
+          .select()
+          .from(pushTokens)
+          .where(
+            and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)),
+          );
 
-        if (userTokens.length === 0) { skippedCount++; continue; }
+        if (userTokens.length === 0) {
+          skippedCount++;
+          continue;
+        }
 
-        await sendExpoPushNotifications(userTokens.map((t) => t.pushToken), notificationTitle, notificationBody, {
-          type: "trial_expiry", daysRemaining: daysUntilExpiry,
-        });
+        await sendExpoPushNotifications(
+          userTokens.map((t) => t.pushToken),
+          notificationTitle,
+          notificationBody,
+          {
+            type: "trial_expiry",
+            daysRemaining: daysUntilExpiry,
+          },
+        );
 
-        await db.insert(notificationLog).values({ userId: user.id, notificationType, title: notificationTitle, status: "sent", message: notificationBody });
+        await db
+          .insert(notificationLog)
+          .values({
+            userId: user.id,
+            notificationType,
+            title: notificationTitle,
+            status: "sent",
+            message: notificationBody,
+          });
         sentCount++;
-        console.log(`[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`);
+        console.log(
+          `[Cron] Sent ${notificationType} notification to user ${user.id} (trial expires in ${daysUntilExpiry} days)`,
+        );
       }
 
       // === LOW MINUTES WARNING (≤10 minutes remaining) ===
       try {
-        const lowMinuteSubs = await db.select({
-          subId: userSubscriptions.id,
-          userId: userSubscriptions.userId,
-          minutesRemaining: userSubscriptions.minutesRemaining,
-          planName: subscriptionPlans.name,
-        }).from(userSubscriptions)
-          .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+        const lowMinuteSubs = await db
+          .select({
+            subId: userSubscriptions.id,
+            userId: userSubscriptions.userId,
+            minutesRemaining: userSubscriptions.minutesRemaining,
+            planName: subscriptionPlans.name,
+          })
+          .from(userSubscriptions)
+          .leftJoin(
+            subscriptionPlans,
+            eq(userSubscriptions.planId, subscriptionPlans.id),
+          )
           .where(eq(userSubscriptions.status, "active"));
 
-        const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const thirtyDaysAgo = new Date(
+          now.getTime() - 30 * 24 * 60 * 60 * 1000,
+        );
 
         for (const sub of lowMinuteSubs) {
           const remaining = parseFloat(String(sub.minutesRemaining || "0"));
           if (remaining > 10) continue;
 
           // Only dedup within the last 30 days — allows re-warning after a top-up that depletes again
-          const alreadySent = await db.select().from(notificationLog)
-            .where(and(
-              eq(notificationLog.userId, sub.userId),
-              eq(notificationLog.notificationType, "low_minutes"),
-              eq(notificationLog.subscriptionId, sub.subId),
-              gte(notificationLog.sentAt, thirtyDaysAgo),
-            )).limit(1);
+          const alreadySent = await db
+            .select()
+            .from(notificationLog)
+            .where(
+              and(
+                eq(notificationLog.userId, sub.userId),
+                eq(notificationLog.notificationType, "low_minutes"),
+                eq(notificationLog.subscriptionId, sub.subId),
+                gte(notificationLog.sentAt, thirtyDaysAgo),
+              ),
+            )
+            .limit(1);
           if (alreadySent.length > 0) {
-            console.log(`[Cron] Skipped low_minutes (sent within 30d) for user ${sub.userId} (sub ${sub.subId}, ${remaining} mins left)`);
+            console.log(
+              `[Cron] Skipped low_minutes (sent within 30d) for user ${sub.userId} (sub ${sub.subId}, ${remaining} mins left)`,
+            );
             skippedCount++;
             continue;
           }
 
-          const userTokens = await db.select().from(pushTokens)
-            .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+          const userTokens = await db
+            .select()
+            .from(pushTokens)
+            .where(
+              and(
+                eq(pushTokens.userId, sub.userId),
+                eq(pushTokens.isActive, true),
+              ),
+            );
 
           const minsLeft = Math.max(0, Math.floor(remaining));
-          const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } = await getNotificationPref(sub.userId, "low_minutes");
-          if (userTokens.length > 0 && lmPrefPush) await sendExpoPushNotifications(
-            userTokens.map(t => t.pushToken),
-            "Low on Minutes",
-            `You have ${minsLeft} minute${minsLeft === 1 ? "" : "s"} remaining. Top up now to keep recording!`,
-            { type: "low_minutes", screen: "home" }
-          );
+          const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } =
+            await getNotificationPref(sub.userId, "low_minutes");
+          if (userTokens.length > 0 && lmPrefPush)
+            await sendExpoPushNotifications(
+              userTokens.map((t) => t.pushToken),
+              "Low on Minutes",
+              `You have ${minsLeft} minute${minsLeft === 1 ? "" : "s"} remaining. Top up now to keep recording!`,
+              { type: "low_minutes", screen: "home" },
+            );
           await db.insert(notificationLog).values({
             userId: sub.userId,
             notificationType: "low_minutes",
@@ -4630,14 +6274,20 @@ export async function registerRoutes(
             status: "sent",
             message: `${minsLeft} minutes remaining warning`,
           });
-          const lowMinUser = await db.select({ email: users.email }).from(users)
-            .where(eq(users.id, sub.userId)).limit(1);
+          const lowMinUser = await db
+            .select({ email: users.email })
+            .from(users)
+            .where(eq(users.id, sub.userId))
+            .limit(1);
           if (lowMinUser[0]?.email && lmPrefEmail) {
-            sendLowMinutesEmail(lowMinUser[0].email, minsLeft)
-              .catch((e: any) => console.error("[Email] low_minutes:", e.message));
+            sendLowMinutesEmail(lowMinUser[0].email, minsLeft).catch((e: any) =>
+              console.error("[Email] low_minutes:", e.message),
+            );
           }
           sentCount++;
-          console.log(`[Cron] Sent low_minutes notification to user ${sub.userId} (${minsLeft} mins left)`);
+          console.log(
+            `[Cron] Sent low_minutes notification to user ${sub.userId} (${minsLeft} mins left)`,
+          );
         }
       } catch (lowMinErr: any) {
         console.error("[Cron] Low minutes check failed:", lowMinErr.message);
@@ -4645,46 +6295,70 @@ export async function registerRoutes(
 
       // === LOW MINUTES WARNING — TRIAL USERS (≤10 trial minutes remaining) ===
       try {
-        const trialLowMinUsers = await db.select({
-          id: users.id,
-          email: users.email,
-          trialMinutesTotal: users.trialMinutesTotal,
-          trialMinutesUsed: users.trialMinutesUsed,
-        }).from(users)
-          .where(and(
-            sql`${users.trialMinutesTotal} IS NOT NULL`,
-            sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
-            sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) >= 0`,
-          ));
+        const trialLowMinUsers = await db
+          .select({
+            id: users.id,
+            email: users.email,
+            trialMinutesTotal: users.trialMinutesTotal,
+            trialMinutesUsed: users.trialMinutesUsed,
+          })
+          .from(users)
+          .where(
+            and(
+              sql`${users.trialMinutesTotal} IS NOT NULL`,
+              sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
+              sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) >= 0`,
+            ),
+          );
 
         for (const trialUser of trialLowMinUsers) {
-          const minsLeft = Math.max(0, Math.floor(
-            (Number(trialUser.trialMinutesTotal) || 0) - (Number(trialUser.trialMinutesUsed) || 0)
-          ));
+          const minsLeft = Math.max(
+            0,
+            Math.floor(
+              (Number(trialUser.trialMinutesTotal) || 0) -
+                (Number(trialUser.trialMinutesUsed) || 0),
+            ),
+          );
 
           // Only dedup within the last 30 days
-          const alreadySent = await db.select().from(notificationLog)
-            .where(and(
-              eq(notificationLog.userId, trialUser.id),
-              eq(notificationLog.notificationType, "low_minutes_trial"),
-              gte(notificationLog.sentAt, thirtyDaysAgo),
-            )).limit(1);
+          const alreadySent = await db
+            .select()
+            .from(notificationLog)
+            .where(
+              and(
+                eq(notificationLog.userId, trialUser.id),
+                eq(notificationLog.notificationType, "low_minutes_trial"),
+                gte(notificationLog.sentAt, thirtyDaysAgo),
+              ),
+            )
+            .limit(1);
           if (alreadySent.length > 0) {
-            console.log(`[Cron] Skipped low_minutes_trial (sent within 30d) for user ${trialUser.id} (${minsLeft} trial mins left)`);
+            console.log(
+              `[Cron] Skipped low_minutes_trial (sent within 30d) for user ${trialUser.id} (${minsLeft} trial mins left)`,
+            );
             skippedCount++;
             continue;
           }
 
-          const userTokens = await db.select().from(pushTokens)
-            .where(and(eq(pushTokens.userId, trialUser.id), eq(pushTokens.isActive, true)));
+          const userTokens = await db
+            .select()
+            .from(pushTokens)
+            .where(
+              and(
+                eq(pushTokens.userId, trialUser.id),
+                eq(pushTokens.isActive, true),
+              ),
+            );
 
-          const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } = await getNotificationPref(trialUser.id, "low_minutes");
-          if (userTokens.length > 0 && lmPrefPush) await sendExpoPushNotifications(
-            userTokens.map(t => t.pushToken),
-            "Low on Minutes",
-            `You have ${minsLeft} trial minute${minsLeft === 1 ? "" : "s"} remaining. Subscribe now to keep recording!`,
-            { type: "low_minutes", screen: "home" }
-          );
+          const { pushEnabled: lmPrefPush, emailEnabled: lmPrefEmail } =
+            await getNotificationPref(trialUser.id, "low_minutes");
+          if (userTokens.length > 0 && lmPrefPush)
+            await sendExpoPushNotifications(
+              userTokens.map((t) => t.pushToken),
+              "Low on Minutes",
+              `You have ${minsLeft} trial minute${minsLeft === 1 ? "" : "s"} remaining. Subscribe now to keep recording!`,
+              { type: "low_minutes", screen: "home" },
+            );
           await db.insert(notificationLog).values({
             userId: trialUser.id,
             notificationType: "low_minutes_trial",
@@ -4693,65 +6367,99 @@ export async function registerRoutes(
             message: `Trial: ${minsLeft} minutes remaining warning`,
           });
           if (trialUser.email && lmPrefEmail) {
-            sendLowMinutesEmail(trialUser.email, minsLeft)
-              .catch((e: any) => console.error("[Email] low_minutes_trial:", e.message));
+            sendLowMinutesEmail(trialUser.email, minsLeft).catch((e: any) =>
+              console.error("[Email] low_minutes_trial:", e.message),
+            );
           }
           sentCount++;
-          console.log(`[Cron] Sent low_minutes_trial notification to user ${trialUser.id} (${minsLeft} trial mins left)`);
+          console.log(
+            `[Cron] Sent low_minutes_trial notification to user ${trialUser.id} (${minsLeft} trial mins left)`,
+          );
         }
       } catch (trialLowMinErr: any) {
-        console.error("[Cron] Trial low minutes check failed:", trialLowMinErr.message);
+        console.error(
+          "[Cron] Trial low minutes check failed:",
+          trialLowMinErr.message,
+        );
       }
 
       // === SUBSCRIPTION EXPIRING SOON — 3-DAY WARNING FOR MANUAL PAYERS ===
       try {
         const threeDaysFromNow = new Date(now.getTime() + 3 * oneDayMs);
-        const manualPayerSubs = await db.select({
-          subId: userSubscriptions.id,
-          userId: userSubscriptions.userId,
-          validDateUpto: userSubscriptions.validDateUpto,
-          planName: subscriptionPlans.name,
-          stripeSubscriptionId: users.stripeSubscriptionId,
-        }).from(userSubscriptions)
-          .leftJoin(subscriptionPlans, eq(userSubscriptions.planId, subscriptionPlans.id))
+        const manualPayerSubs = await db
+          .select({
+            subId: userSubscriptions.id,
+            userId: userSubscriptions.userId,
+            validDateUpto: userSubscriptions.validDateUpto,
+            planName: subscriptionPlans.name,
+            stripeSubscriptionId: users.stripeSubscriptionId,
+          })
+          .from(userSubscriptions)
+          .leftJoin(
+            subscriptionPlans,
+            eq(userSubscriptions.planId, subscriptionPlans.id),
+          )
           .innerJoin(users, eq(userSubscriptions.userId, users.id))
-          .where(and(
-            eq(userSubscriptions.status, "active"),
-            gte(userSubscriptions.validDateUpto, now),
-            sql`${userSubscriptions.validDateUpto} <= ${threeDaysFromNow}`,
-          ));
+          .where(
+            and(
+              eq(userSubscriptions.status, "active"),
+              gte(userSubscriptions.validDateUpto, now),
+              sql`${userSubscriptions.validDateUpto} <= ${threeDaysFromNow}`,
+            ),
+          );
 
         for (const sub of manualPayerSubs) {
           if (!sub.stripeSubscriptionId) continue;
 
-          const alreadySent = await db.select().from(notificationLog)
-            .where(and(
-              eq(notificationLog.userId, sub.userId),
-              eq(notificationLog.notificationType, "expiry_3days_manual"),
-              eq(notificationLog.subscriptionId, sub.subId),
-            )).limit(1);
-          if (alreadySent.length > 0) { skippedCount++; continue; }
+          const alreadySent = await db
+            .select()
+            .from(notificationLog)
+            .where(
+              and(
+                eq(notificationLog.userId, sub.userId),
+                eq(notificationLog.notificationType, "expiry_3days_manual"),
+                eq(notificationLog.subscriptionId, sub.subId),
+              ),
+            )
+            .limit(1);
+          if (alreadySent.length > 0) {
+            skippedCount++;
+            continue;
+          }
 
           // Verify this is a manual payer (cancel_at_period_end=true) via Stripe
           try {
             const stripeClient = await getUncachableStripeClient();
-            const stripeSub = await stripeClient.subscriptions.retrieve(sub.stripeSubscriptionId);
+            const stripeSub = await stripeClient.subscriptions.retrieve(
+              sub.stripeSubscriptionId,
+            );
             if (!stripeSub.cancel_at_period_end) continue;
           } catch {
             continue;
           }
 
-          const userTokens = await db.select().from(pushTokens)
-            .where(and(eq(pushTokens.userId, sub.userId), eq(pushTokens.isActive, true)));
+          const userTokens = await db
+            .select()
+            .from(pushTokens)
+            .where(
+              and(
+                eq(pushTokens.userId, sub.userId),
+                eq(pushTokens.isActive, true),
+              ),
+            );
 
-          const daysLeft = Math.ceil((new Date(sub.validDateUpto!).getTime() - now.getTime()) / oneDayMs);
-          const { pushEnabled: exPrefPush, emailEnabled: exPrefEmail } = await getNotificationPref(sub.userId, "expiry_3days_manual");
-          if (userTokens.length > 0 && exPrefPush) await sendExpoPushNotifications(
-            userTokens.map(t => t.pushToken),
-            "Subscription Expiring in 3 Days",
-            `Your ${sub.planName || "subscription"} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} and will not auto-renew. Subscribe again to continue.`,
-            { type: "expiry_3days_manual", screen: "subscription" }
+          const daysLeft = Math.ceil(
+            (new Date(sub.validDateUpto!).getTime() - now.getTime()) / oneDayMs,
           );
+          const { pushEnabled: exPrefPush, emailEnabled: exPrefEmail } =
+            await getNotificationPref(sub.userId, "expiry_3days_manual");
+          if (userTokens.length > 0 && exPrefPush)
+            await sendExpoPushNotifications(
+              userTokens.map((t) => t.pushToken),
+              "Subscription Expiring in 3 Days",
+              `Your ${sub.planName || "subscription"} expires in ${daysLeft} day${daysLeft === 1 ? "" : "s"} and will not auto-renew. Subscribe again to continue.`,
+              { type: "expiry_3days_manual", screen: "subscription" },
+            );
           await db.insert(notificationLog).values({
             userId: sub.userId,
             notificationType: "expiry_3days_manual",
@@ -4760,76 +6468,141 @@ export async function registerRoutes(
             status: "sent",
             message: `Manual subscription expiring in ${daysLeft} days`,
           });
-          const expiryUser = await db.select({ email: users.email }).from(users)
-            .where(eq(users.id, sub.userId)).limit(1);
+          const expiryUser = await db
+            .select({ email: users.email })
+            .from(users)
+            .where(eq(users.id, sub.userId))
+            .limit(1);
           if (expiryUser[0]?.email && exPrefEmail) {
-            sendSubscriptionExpiringSoonEmail(expiryUser[0].email, sub.planName || "subscription", daysLeft)
-              .catch((e: any) => console.error("[Email] expiry_3days_manual:", e.message));
+            sendSubscriptionExpiringSoonEmail(
+              expiryUser[0].email,
+              sub.planName || "subscription",
+              daysLeft,
+            ).catch((e: any) =>
+              console.error("[Email] expiry_3days_manual:", e.message),
+            );
           }
           sentCount++;
-          console.log(`[Cron] Sent expiry_3days_manual notification to user ${sub.userId}`);
+          console.log(
+            `[Cron] Sent expiry_3days_manual notification to user ${sub.userId}`,
+          );
         }
       } catch (manualErr: any) {
-        console.error("[Cron] Manual expiry 3-day check failed:", manualErr.message);
+        console.error(
+          "[Cron] Manual expiry 3-day check failed:",
+          manualErr.message,
+        );
       }
 
-      console.log(`[Cron] Notifications done. Sent: ${sentCount}, Skipped: ${skippedCount}`);
+      console.log(
+        `[Cron] Notifications done. Sent: ${sentCount}, Skipped: ${skippedCount}`,
+      );
 
       let renewalRemindersSent = 0;
       try {
         const stripeClient = await getUncachableStripeClient();
-        const usersWithSubs = await db.select({
-          userId: users.id,
-          email: users.email,
-          stripeSubscriptionId: users.stripeSubscriptionId,
-        }).from(users).where(and(sql`${users.stripeSubscriptionId} IS NOT NULL`, sql`${users.stripeSubscriptionId} != ''`));
+        const usersWithSubs = await db
+          .select({
+            userId: users.id,
+            email: users.email,
+            stripeSubscriptionId: users.stripeSubscriptionId,
+          })
+          .from(users)
+          .where(
+            and(
+              sql`${users.stripeSubscriptionId} IS NOT NULL`,
+              sql`${users.stripeSubscriptionId} != ''`,
+            ),
+          );
 
         for (const u of usersWithSubs) {
           if (!u.stripeSubscriptionId || !u.email) continue;
           try {
-            const stripeSub = await stripeClient.subscriptions.retrieve(u.stripeSubscriptionId);
-            if ((stripeSub.status !== "active" && stripeSub.status !== "trialing") || stripeSub.cancel_at_period_end) continue;
+            const stripeSub = await stripeClient.subscriptions.retrieve(
+              u.stripeSubscriptionId,
+            );
+            if (
+              (stripeSub.status !== "active" &&
+                stripeSub.status !== "trialing") ||
+              stripeSub.cancel_at_period_end
+            )
+              continue;
 
-            const periodEnd = new Date((stripeSub as any).current_period_end * 1000);
-            const daysUntilRenewal = Math.ceil((periodEnd.getTime() - now.getTime()) / oneDayMs);
+            const periodEnd = new Date(
+              (stripeSub as any).current_period_end * 1000,
+            );
+            const daysUntilRenewal = Math.ceil(
+              (periodEnd.getTime() - now.getTime()) / oneDayMs,
+            );
 
             if (daysUntilRenewal === 3) {
               const renewalKey = `renewal_${u.stripeSubscriptionId}_${periodEnd.toISOString().split("T")[0]}`;
-              const existingLog = await db.select().from(notificationLog)
-                .where(and(
-                  eq(notificationLog.userId, u.userId),
-                  eq(notificationLog.notificationType, "renewal_reminder_3days"),
-                  eq(notificationLog.message, renewalKey),
-                )).limit(1);
+              const existingLog = await db
+                .select()
+                .from(notificationLog)
+                .where(
+                  and(
+                    eq(notificationLog.userId, u.userId),
+                    eq(
+                      notificationLog.notificationType,
+                      "renewal_reminder_3days",
+                    ),
+                    eq(notificationLog.message, renewalKey),
+                  ),
+                )
+                .limit(1);
 
               if (existingLog.length === 0) {
                 const priceItem = stripeSub.items?.data?.[0];
-                const amount = priceItem?.price?.unit_amount ? `$${(priceItem.price.unit_amount / 100).toFixed(2)}` : "your subscription fee";
+                const amount = priceItem?.price?.unit_amount
+                  ? `$${(priceItem.price.unit_amount / 100).toFixed(2)}`
+                  : "your subscription fee";
                 const planName = priceItem?.price?.nickname || "Starter";
 
-                await sendRenewalReminderEmail(u.email, planName, periodEnd, amount);
+                await sendRenewalReminderEmail(
+                  u.email,
+                  planName,
+                  periodEnd,
+                  amount,
+                );
                 await db.insert(notificationLog).values({
-                  userId: u.userId, notificationType: "renewal_reminder_3days", title: "Renewal Reminder", status: "sent", message: renewalKey,
+                  userId: u.userId,
+                  notificationType: "renewal_reminder_3days",
+                  title: "Renewal Reminder",
+                  status: "sent",
+                  message: renewalKey,
                 });
                 renewalRemindersSent++;
-                console.log(`[Cron] Sent renewal reminder to user ${u.userId} (renews in ${daysUntilRenewal} days)`);
+                console.log(
+                  `[Cron] Sent renewal reminder to user ${u.userId} (renews in ${daysUntilRenewal} days)`,
+                );
               }
             }
           } catch (subErr: any) {
-            console.warn(`[Cron] Could not check Stripe sub for user ${u.userId}: ${subErr.message}`);
+            console.warn(
+              `[Cron] Could not check Stripe sub for user ${u.userId}: ${subErr.message}`,
+            );
           }
         }
         console.log(`[Cron] Renewal reminders sent: ${renewalRemindersSent}`);
       } catch (renewalErr: any) {
-        console.error(`[Cron] Renewal reminder check error: ${renewalErr.message}`);
+        console.error(
+          `[Cron] Renewal reminder check error: ${renewalErr.message}`,
+        );
       }
 
       const thirtyDaysAgo = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
-      const expiredTokensResult = await db.delete(passwordResetTokens).where(lt(passwordResetTokens.expiresAt, now));
+      const expiredTokensResult = await db
+        .delete(passwordResetTokens)
+        .where(lt(passwordResetTokens.expiresAt, now));
       const expiredTokensCount = (expiredTokensResult as any).count ?? 0;
-      const oldAudioResult = await db.delete(audioLogs).where(lt(audioLogs.createdAt, thirtyDaysAgo));
+      const oldAudioResult = await db
+        .delete(audioLogs)
+        .where(lt(audioLogs.createdAt, thirtyDaysAgo));
       const oldAudioCount = (oldAudioResult as any).count ?? 0;
-      const oldTextsResult = await db.delete(savedTexts).where(lt(savedTexts.createdAt, thirtyDaysAgo));
+      const oldTextsResult = await db
+        .delete(savedTexts)
+        .where(lt(savedTexts.createdAt, thirtyDaysAgo));
       const oldTextsCount = (oldTextsResult as any).count ?? 0;
 
       console.log(`[Cron] All tasks complete.`);
@@ -4837,14 +6610,19 @@ export async function registerRoutes(
         success: true,
         notifications: { sent: sentCount, skipped: skippedCount },
         renewalReminders: renewalRemindersSent,
-        cleanup: { expiredTokens: expiredTokensCount, oldAudioLogs: oldAudioCount, oldSavedTexts: oldTextsCount },
+        cleanup: {
+          expiredTokens: expiredTokensCount,
+          oldAudioLogs: oldAudioCount,
+          oldSavedTexts: oldTextsCount,
+        },
       });
     } catch (error: any) {
       console.error("[Cron] Notification check error:", error.message);
-      res.status(500).json({ success: false, error: "Notification check failed" });
+      res
+        .status(500)
+        .json({ success: false, error: "Notification check failed" });
     }
   });
-
 
   function generateErrorPage(title: string, message: string): string {
     return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title} - MyVoicePost</title>
@@ -4857,9 +6635,16 @@ export async function registerRoutes(
 
   async function getAdminEmails(): Promise<string[]> {
     try {
-      const result = await db.select().from(appSettings).where(eq(appSettings.settingKey, "admin_mail")).limit(1);
+      const result = await db
+        .select()
+        .from(appSettings)
+        .where(eq(appSettings.settingKey, "admin_mail"))
+        .limit(1);
       if (result.length > 0 && result[0].settingValue) {
-        return result[0].settingValue.split(",").map((e) => e.trim()).filter(Boolean);
+        return result[0].settingValue
+          .split(",")
+          .map((e) => e.trim())
+          .filter(Boolean);
       }
     } catch (err: any) {
       console.warn("[CRASH REPORT] Could not fetch admin emails:", err.message);
@@ -4878,7 +6663,10 @@ export async function registerRoutes(
   }) {
     const throttleKey = `${opts.source}:${opts.errorMessage.substring(0, 100)}`;
     const now = Date.now();
-    if (crashEmailThrottle[throttleKey] && (now - crashEmailThrottle[throttleKey]) < CRASH_EMAIL_COOLDOWN_MS) {
+    if (
+      crashEmailThrottle[throttleKey] &&
+      now - crashEmailThrottle[throttleKey] < CRASH_EMAIL_COOLDOWN_MS
+    ) {
       console.log("[CRASH REPORT] Throttled - same error reported recently");
       return;
     }
@@ -4911,7 +6699,9 @@ export async function registerRoutes(
       const smtpPort = parseInt(process.env.SMTP_PORT || "587", 10);
       const smtpSecure = process.env.SMTP_SECURE === "true";
       const transporter = nodemailer.createTransport({
-        host: smtpHost, port: smtpPort, secure: smtpSecure,
+        host: smtpHost,
+        port: smtpPort,
+        secure: smtpSecure,
         auth: { user: smtpUser, pass: smtpPass },
       });
 
@@ -4922,13 +6712,21 @@ export async function registerRoutes(
         text: `Source: ${opts.source}\nError: ${opts.errorMessage}\nStack: ${opts.stackTrace || "N/A"}\nUser: ${opts.userId || "N/A"}\nDevice: ${opts.deviceInfo || "N/A"}\nVersion: ${opts.appVersion || "N/A"}\nEndpoint: ${opts.endpoint || "N/A"}`,
       });
 
-      await db.update(crashReports).set({ emailSent: true }).where(eq(crashReports.errorMessage, opts.errorMessage));
+      await db
+        .update(crashReports)
+        .set({ emailSent: true })
+        .where(eq(crashReports.errorMessage, opts.errorMessage));
     } catch (emailErr: any) {
       console.error("[CRASH REPORT] Email send failed:", emailErr.message);
     }
   }
 
-  async function logUsageAndGetTrialInfo(userId: string, durationSeconds: number, language: string, tag: string) {
+  async function logUsageAndGetTrialInfo(
+    userId: string,
+    durationSeconds: number,
+    language: string,
+    tag: string,
+  ) {
     if (userId && durationSeconds > 0) {
       try {
         const totalSec = Math.round(durationSeconds);
@@ -4937,14 +6735,27 @@ export async function registerRoutes(
         const seconds = totalSec % 60;
         const usageTime = `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
 
-        await db.insert(audioLogs).values({ userId, usageTime, usageSeconds: totalSec, sourceLanguage: language || "auto" });
+        await db
+          .insert(audioLogs)
+          .values({
+            userId,
+            usageTime,
+            usageSeconds: totalSec,
+            sourceLanguage: language || "auto",
+          });
 
         const usageMinutes = totalSec / 60;
-        await db.update(users)
-          .set({ trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`, updatedAt: new Date() })
+        await db
+          .update(users)
+          .set({
+            trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
+            updatedAt: new Date(),
+          })
           .where(eq(users.id, userId));
 
-        console.log(`[${tag}] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`);
+        console.log(
+          `[${tag}] USAGE LOGGED: ${usageTime} (${usageMinutes.toFixed(2)} mins) for user ${userId}`,
+        );
       } catch (logError: any) {
         console.error(`[${tag}] USAGE LOG FAILED:`, logError.message);
       }
@@ -4953,15 +6764,30 @@ export async function registerRoutes(
     if (!userId) return null;
 
     try {
-      const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const updatedUser = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       if (updatedUser.length > 0) {
         const u = updatedUser[0];
         const minutesTotal = u.trialMinutesTotal || 90;
         const minutesUsed = parseFloat(String(u.trialMinutesUsed || "0")) || 0;
-        const hasActiveSub = await db.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+        const hasActiveSub = await db
+          .select()
+          .from(userSubscriptions)
+          .where(
+            and(
+              eq(userSubscriptions.userId, userId),
+              eq(userSubscriptions.status, "active"),
+            ),
+          )
           .limit(1);
-        return { trial_minutes_total: minutesTotal, trial_minutes_used: minutesUsed, is_subscribed: hasActiveSub.length > 0 };
+        return {
+          trial_minutes_total: minutesTotal,
+          trial_minutes_used: minutesUsed,
+          is_subscribed: hasActiveSub.length > 0,
+        };
       }
     } catch (err: any) {
       console.error(`[${tag}] TRIAL INFO FAILED:`, err.message);
@@ -4973,12 +6799,21 @@ export async function registerRoutes(
     try {
       const adminEmails = await getAdminEmails();
       const userEmail = req.jwtUser?.email || req.user?.email;
-      if (!userEmail || !adminEmails.map((e: string) => e.toLowerCase()).includes(userEmail.toLowerCase())) {
-        return res.status(403).json({ success: false, error: "Admin access required" });
+      if (
+        !userEmail ||
+        !adminEmails
+          .map((e: string) => e.toLowerCase())
+          .includes(userEmail.toLowerCase())
+      ) {
+        return res
+          .status(403)
+          .json({ success: false, error: "Admin access required" });
       }
       next();
     } catch (error: any) {
-      res.status(500).json({ success: false, error: "Authorization check failed" });
+      res
+        .status(500)
+        .json({ success: false, error: "Authorization check failed" });
     }
   }
 
@@ -4998,7 +6833,10 @@ export async function registerRoutes(
     try {
       const userId = req.jwtUser?.userId;
       if (userId) {
-        await db.update(users).set({ activeSessionId: null }).where(eq(users.id, userId));
+        await db
+          .update(users)
+          .set({ activeSessionId: null })
+          .where(eq(users.id, userId));
       }
     } catch (err) {
       console.error("[Logout] Error clearing session:", err);
@@ -5009,21 +6847,31 @@ export async function registerRoutes(
   app.get("/api/v1/a/me", mobileAuthMiddleware, async (req: any, res) => {
     try {
       const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+      if (!userId)
+        return res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
 
-      const userResult = await db.select({
-        id: users.id,
-        email: users.email,
-        username: users.username,
-        role: users.role,
-        trialMinutesTotal: users.trialMinutesTotal,
-        trialMinutesUsed: users.trialMinutesUsed,
-        trialStartsAt: users.trialStartsAt,
-        trialEndsAt: users.trialEndsAt,
-        trialUsed: users.trialUsed,
-      }).from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select({
+          id: users.id,
+          email: users.email,
+          username: users.username,
+          role: users.role,
+          trialMinutesTotal: users.trialMinutesTotal,
+          trialMinutesUsed: users.trialMinutesUsed,
+          trialStartsAt: users.trialStartsAt,
+          trialEndsAt: users.trialEndsAt,
+          trialUsed: users.trialUsed,
+        })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
 
-      if (userResult.length === 0) return res.status(404).json({ success: false, error: "User not found" });
+      if (userResult.length === 0)
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
 
       const u = userResult[0];
       const minutesTotal = u.trialMinutesTotal || 90;
@@ -5043,7 +6891,9 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[GET /api/v1/a/me] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch user data" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch user data" });
     }
   });
 
@@ -5053,16 +6903,33 @@ export async function registerRoutes(
 
   app.post("/api/v1/p/forgot-password", async (req, res) => {
     try {
-      const schema = z.object({ email: z.string().email("Valid email is required") });
+      const schema = z.object({
+        email: z.string().email("Valid email is required"),
+      });
       const parseResult = schema.safeParse(req.body);
-      if (!parseResult.success) return res.status(400).json({ success: false, error: "Invalid email", details: parseResult.error.errors });
+      if (!parseResult.success)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid email",
+            details: parseResult.error.errors,
+          });
 
       const { email } = parseResult.data;
-      const result = await db.select().from(users).where(eq(users.email, email)).limit(1);
+      const result = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
       const user = result[0];
 
       if (!user) {
-        return res.json({ success: true, message: "If an account with that email exists, a password reset code has been sent." });
+        return res.json({
+          success: true,
+          message:
+            "If an account with that email exists, a password reset code has been sent.",
+        });
       }
 
       const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
@@ -5073,61 +6940,129 @@ export async function registerRoutes(
       const hashedCode = crypto.createHash("sha256").update(code).digest("hex");
       const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
-      await db.insert(passwordResetTokens).values({ userId: user.id, token: hashedCode, expiresAt });
+      await db
+        .insert(passwordResetTokens)
+        .values({ userId: user.id, token: hashedCode, expiresAt });
 
       await sendPasswordResetEmail(
         user.email!,
         `Your password reset code is: ${code}\n\nThis code will expire in 15 minutes.`,
-        true
+        true,
       );
 
       res.json(buildResetResponse(code));
     } catch (error: any) {
       console.error("[Forgot Password] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to process password reset request" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: "Failed to process password reset request",
+        });
     }
   });
 
   app.post("/api/v1/p/reset-password", async (req, res) => {
     try {
-      const schema = z.object({
-        email: z.string().email("Must be a valid email format"),
-        code: z.string().length(6, "Code must be exactly 6 characters"),
-        newPassword: z.string().min(6, "Password must be at least 6 characters"),
-        confirmPassword: z.string(),
-      }).refine((data) => data.newPassword === data.confirmPassword, { message: "Passwords don't match", path: ["confirmPassword"] });
+      const schema = z
+        .object({
+          email: z.string().email("Must be a valid email format"),
+          code: z.string().length(6, "Code must be exactly 6 characters"),
+          newPassword: z
+            .string()
+            .min(6, "Password must be at least 6 characters"),
+          confirmPassword: z.string(),
+        })
+        .refine((data) => data.newPassword === data.confirmPassword, {
+          message: "Passwords don't match",
+          path: ["confirmPassword"],
+        });
 
       const parseResult = schema.safeParse(req.body);
-      if (!parseResult.success) return res.status(400).json({ success: false, error: "Validation failed", details: parseResult.error.errors });
+      if (!parseResult.success)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Validation failed",
+            details: parseResult.error.errors,
+          });
 
       const { email, code, newPassword } = parseResult.data;
 
-      const userResult = await db.select().from(users).where(eq(users.email, email)).limit(1);
-      if (userResult.length === 0) return res.status(400).json({ success: false, error: "Invalid email or code" });
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.email, email))
+        .limit(1);
+      if (userResult.length === 0)
+        return res
+          .status(400)
+          .json({ success: false, error: "Invalid email or code" });
 
       const user = userResult[0];
-      const hashedCode = crypto.createHash("sha256").update(code.toUpperCase()).digest("hex");
+      const hashedCode = crypto
+        .createHash("sha256")
+        .update(code.toUpperCase())
+        .digest("hex");
 
-      const tokenResult = await db.select().from(passwordResetTokens)
-        .where(and(eq(passwordResetTokens.userId, user.id), eq(passwordResetTokens.token, hashedCode)))
+      const tokenResult = await db
+        .select()
+        .from(passwordResetTokens)
+        .where(
+          and(
+            eq(passwordResetTokens.userId, user.id),
+            eq(passwordResetTokens.token, hashedCode),
+          ),
+        )
         .limit(1);
 
-      if (tokenResult.length === 0) return res.status(400).json({ success: false, error: "Invalid or expired reset code. Please request a new one." });
+      if (tokenResult.length === 0)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid or expired reset code. Please request a new one.",
+          });
 
       const tokenRecord = tokenResult[0];
-      if (new Date() > tokenRecord.expiresAt) return res.status(400).json({ success: false, error: "This reset code has expired. Please request a new one." });
-      if (tokenRecord.used) return res.status(400).json({ success: false, error: "This reset code has already been used." });
+      if (new Date() > tokenRecord.expiresAt)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "This reset code has expired. Please request a new one.",
+          });
+      if (tokenRecord.used)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "This reset code has already been used.",
+          });
 
       const bcryptjs = await import("bcryptjs");
       const hashedPassword = await bcryptjs.default.hash(newPassword, 10);
 
-      await db.update(users).set({ passwordHash: hashedPassword, updatedAt: new Date() }).where(eq(users.id, user.id));
-      await db.update(passwordResetTokens).set({ used: true }).where(eq(passwordResetTokens.id, tokenRecord.id));
+      await db
+        .update(users)
+        .set({ passwordHash: hashedPassword, updatedAt: new Date() })
+        .where(eq(users.id, user.id));
+      await db
+        .update(passwordResetTokens)
+        .set({ used: true })
+        .where(eq(passwordResetTokens.id, tokenRecord.id));
 
-      res.json({ success: true, message: "Password has been reset successfully. You can now log in with your new password." });
+      res.json({
+        success: true,
+        message:
+          "Password has been reset successfully. You can now log in with your new password.",
+      });
     } catch (error: any) {
       console.error("[Reset Password] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to reset password" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to reset password" });
     }
   });
 
@@ -5137,18 +7072,47 @@ export async function registerRoutes(
     const { token } = req.query;
 
     if (!token || typeof token !== "string") {
-      return res.status(400).send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid Link - MyVoicePost</title>
+      return res.status(400)
+        .send(`<!DOCTYPE html><html><head><meta charset="utf-8"><title>Invalid Link - MyVoicePost</title>
         <style>body{font-family:sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%)}
         .container{background:white;padding:40px;border-radius:12px;text-align:center;max-width:400px}h1{color:#e74c3c}p{color:#666}</style></head>
         <body><div class="container"><h1>Invalid Link</h1><p>This password reset link is invalid or missing the token.</p></div></body></html>`);
     }
 
     try {
-      const tokenResult = await db.select().from(passwordResetTokens).where(eq(passwordResetTokens.token, token)).limit(1);
+      const tokenResult = await db
+        .select()
+        .from(passwordResetTokens)
+        .where(eq(passwordResetTokens.token, token))
+        .limit(1);
       const resetTokenRecord = tokenResult[0];
-      if (!resetTokenRecord) return res.status(400).send(generateErrorPage("Invalid Link", "This password reset link is invalid."));
-      if (new Date() > resetTokenRecord.expiresAt) return res.status(400).send(generateErrorPage("Link Expired", "This password reset link has expired."));
-      if (resetTokenRecord.used) return res.status(400).send(generateErrorPage("Link Already Used", "This password reset link has already been used."));
+      if (!resetTokenRecord)
+        return res
+          .status(400)
+          .send(
+            generateErrorPage(
+              "Invalid Link",
+              "This password reset link is invalid.",
+            ),
+          );
+      if (new Date() > resetTokenRecord.expiresAt)
+        return res
+          .status(400)
+          .send(
+            generateErrorPage(
+              "Link Expired",
+              "This password reset link has expired.",
+            ),
+          );
+      if (resetTokenRecord.used)
+        return res
+          .status(400)
+          .send(
+            generateErrorPage(
+              "Link Already Used",
+              "This password reset link has already been used.",
+            ),
+          );
     } catch (error) {
       console.error("[Deep Link] Error validating token:", error);
     }
@@ -5196,14 +7160,18 @@ export async function registerRoutes(
       state,
     });
 
-    res.redirect(`https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`);
+    res.redirect(
+      `https://accounts.google.com/o/oauth2/v2/auth?${params.toString()}`,
+    );
   });
 
   app.get("/api/v1/p/auth/google/callback", async (req, res) => {
     try {
       const { code, error: oauthError } = req.query;
       if (oauthError || !code) {
-        return res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=${encodeURIComponent(String(oauthError || "no_code"))}`);
+        return res.redirect(
+          `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=${encodeURIComponent(String(oauthError || "no_code"))}`,
+        );
       }
 
       const { clientId, clientSecret, redirectUri } = GOOGLE_SSO_CONFIG;
@@ -5211,90 +7179,168 @@ export async function registerRoutes(
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({
-          code: String(code), client_id: clientId, client_secret: clientSecret,
-          redirect_uri: redirectUri, grant_type: "authorization_code",
+          code: String(code),
+          client_id: clientId,
+          client_secret: clientSecret,
+          redirect_uri: redirectUri,
+          grant_type: "authorization_code",
         }),
       });
 
       if (!tokenResponse.ok) {
-        return res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=token_exchange_failed`);
+        return res.redirect(
+          `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=token_exchange_failed`,
+        );
       }
 
       const tokenData: any = await tokenResponse.json();
       const idToken = tokenData.id_token;
-      if (!idToken) return res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=no_id_token`);
+      if (!idToken)
+        return res.redirect(
+          `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=no_id_token`,
+        );
 
-      const googleResponse = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`);
-      if (!googleResponse.ok) return res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=token_verify_failed`);
+      const googleResponse = await fetch(
+        `https://oauth2.googleapis.com/tokeninfo?id_token=${idToken}`,
+      );
+      if (!googleResponse.ok)
+        return res.redirect(
+          `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=token_verify_failed`,
+        );
 
       const googleUser: any = await googleResponse.json();
       if (!googleUser.email || googleUser.email_verified !== "true") {
-        return res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=email_not_verified`);
+        return res.redirect(
+          `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=email_not_verified`,
+        );
       }
 
       const normalizedEmail = googleUser.email.toLowerCase().trim();
       const googleId = googleUser.sub;
 
-      const existingSso = await db.select().from(userSsoAccounts)
-        .where(and(eq(userSsoAccounts.provider, "google"), eq(userSsoAccounts.providerUserId, googleId)))
+      const existingSso = await db
+        .select()
+        .from(userSsoAccounts)
+        .where(
+          and(
+            eq(userSsoAccounts.provider, "google"),
+            eq(userSsoAccounts.providerUserId, googleId),
+          ),
+        )
         .limit(1);
 
       let jwtToken: string;
 
       if (existingSso.length > 0) {
-        const userRows = await db.select().from(users).where(eq(users.id, existingSso[0].userId)).limit(1);
-        if (userRows.length === 0) return res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=user_not_found`);
+        const userRows = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, existingSso[0].userId))
+          .limit(1);
+        if (userRows.length === 0)
+          return res.redirect(
+            `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=user_not_found`,
+          );
         const user = userRows[0];
         const ssoSessionId = generateSessionId();
         await storeSessionId(user.id, ssoSessionId);
-        jwtToken = jwt.sign({ userId: user.id, email: user.email, username: user.username, sessionId: ssoSessionId }, JWT_SECRET, { expiresIn: "60d" });
-        await db.update(userSsoAccounts).set({ updatedAt: new Date() }).where(eq(userSsoAccounts.id, existingSso[0].id));
+        jwtToken = jwt.sign(
+          {
+            userId: user.id,
+            email: user.email,
+            username: user.username,
+            sessionId: ssoSessionId,
+          },
+          JWT_SECRET,
+          { expiresIn: "60d" },
+        );
+        await db
+          .update(userSsoAccounts)
+          .set({ updatedAt: new Date() })
+          .where(eq(userSsoAccounts.id, existingSso[0].id));
       } else {
-        const existingByEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
+        const existingByEmail = await db
+          .select()
+          .from(users)
+          .where(eq(users.email, normalizedEmail))
+          .limit(1);
         let user: typeof users.$inferSelect;
 
         if (existingByEmail.length > 0) {
           user = existingByEmail[0];
           await db.insert(userSsoAccounts).values({
-            userId: user.id, provider: "google", providerUserId: googleId,
-            providerEmail: normalizedEmail, providerName: googleUser.name, providerAvatar: googleUser.picture,
+            userId: user.id,
+            provider: "google",
+            providerUserId: googleId,
+            providerEmail: normalizedEmail,
+            providerName: googleUser.name,
+            providerAvatar: googleUser.picture,
           });
         } else {
-          const usernameBase = (googleUser.name || normalizedEmail.split("@")[0]).replace(/[^a-zA-Z0-9_]/g, "_").substring(0, 20);
+          const usernameBase = (
+            googleUser.name || normalizedEmail.split("@")[0]
+          )
+            .replace(/[^a-zA-Z0-9_]/g, "_")
+            .substring(0, 20);
           let finalUsername = usernameBase;
           let attempt = 0;
           while (true) {
-            const existing = await db.select().from(users).where(eq(users.username, finalUsername)).limit(1);
+            const existing = await db
+              .select()
+              .from(users)
+              .where(eq(users.username, finalUsername))
+              .limit(1);
             if (existing.length === 0) break;
             attempt++;
             finalUsername = `${usernameBase}_${attempt}`;
           }
 
-          const [newUser] = await db.insert(users).values({
-            username: finalUsername, email: normalizedEmail,
-            passwordHash: crypto.randomUUID(),
-            role: "USER" as const,
-            trialStartsAt: new Date(),
-            trialEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-            trialMinutesTotal: 90,
-          }).returning();
+          const [newUser] = await db
+            .insert(users)
+            .values({
+              username: finalUsername,
+              email: normalizedEmail,
+              passwordHash: crypto.randomUUID(),
+              role: "USER" as const,
+              trialStartsAt: new Date(),
+              trialEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+              trialMinutesTotal: 90,
+            })
+            .returning();
           user = newUser;
 
           await db.insert(userSsoAccounts).values({
-            userId: user.id, provider: "google", providerUserId: googleId,
-            providerEmail: normalizedEmail, providerName: googleUser.name, providerAvatar: googleUser.picture,
+            userId: user.id,
+            provider: "google",
+            providerUserId: googleId,
+            providerEmail: normalizedEmail,
+            providerName: googleUser.name,
+            providerAvatar: googleUser.picture,
           });
         }
 
         const ssoSessionId = generateSessionId();
         await storeSessionId(user.id, ssoSessionId);
-        jwtToken = jwt.sign({ userId: user.id, email: user.email, username: user.username, sessionId: ssoSessionId }, JWT_SECRET, { expiresIn: "60d" });
+        jwtToken = jwt.sign(
+          {
+            userId: user.id,
+            email: user.email,
+            username: user.username,
+            sessionId: ssoSessionId,
+          },
+          JWT_SECRET,
+          { expiresIn: "60d" },
+        );
       }
 
-      res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?token=${jwtToken}`);
+      res.redirect(
+        `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?token=${jwtToken}`,
+      );
     } catch (error: any) {
       console.error("[Google SSO Callback] Error:", error);
-      res.redirect(`${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=internal_error`);
+      res.redirect(
+        `${GOOGLE_SSO_CONFIG.appScheme}://auth/google?error=internal_error`,
+      );
     }
   });
 
@@ -5302,159 +7348,278 @@ export async function registerRoutes(
   // USAGE STATS & AUDIO LOGS
   // ============================================================
 
-  app.get("/api/v1/a/usage-stats", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      if (!userId) return res.status(401).json({ success: false, error: "User not found" });
+  app.get(
+    "/api/v1/a/usage-stats",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        if (!userId)
+          return res
+            .status(401)
+            .json({ success: false, error: "User not found" });
 
-      const userResult = await db.select({
-        trialMinutesTotal: users.trialMinutesTotal,
-        trialMinutesUsed: users.trialMinutesUsed,
-        trialStartsAt: users.trialStartsAt,
-        trialEndsAt: users.trialEndsAt,
-        trialUsed: users.trialUsed,
-      }).from(users).where(eq(users.id, userId)).limit(1);
+        const userResult = await db
+          .select({
+            trialMinutesTotal: users.trialMinutesTotal,
+            trialMinutesUsed: users.trialMinutesUsed,
+            trialStartsAt: users.trialStartsAt,
+            trialEndsAt: users.trialEndsAt,
+            trialUsed: users.trialUsed,
+          })
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
 
-      if (userResult.length === 0) return res.status(404).json({ success: false, error: "User not found" });
+        if (userResult.length === 0)
+          return res
+            .status(404)
+            .json({ success: false, error: "User not found" });
 
-      const u = userResult[0];
-      const totalLogs = await db.select({
-        count: sql<number>`count(*)::int`,
-        totalSeconds: sql<number>`COALESCE(sum(${audioLogs.usageSeconds}), 0)::int`,
-      }).from(audioLogs).where(eq(audioLogs.userId, userId));
+        const u = userResult[0];
+        const totalLogs = await db
+          .select({
+            count: sql<number>`count(*)::int`,
+            totalSeconds: sql<number>`COALESCE(sum(${audioLogs.usageSeconds}), 0)::int`,
+          })
+          .from(audioLogs)
+          .where(eq(audioLogs.userId, userId));
 
-      res.json({
-        success: true,
-        stats: {
-          trialMinutesTotal: u.trialMinutesTotal || 90,
-          trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
-          trialStartsAt: u.trialStartsAt,
-          trialEndsAt: u.trialEndsAt,
-          trialUsed: u.trialUsed,
-          totalTranscriptions: totalLogs[0]?.count || 0,
-          totalUsageSeconds: totalLogs[0]?.totalSeconds || 0,
-        },
-      });
-    } catch (error: any) {
-      console.error("[Usage Stats] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch usage stats" });
-    }
-  });
+        res.json({
+          success: true,
+          stats: {
+            trialMinutesTotal: u.trialMinutesTotal || 90,
+            trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
+            trialStartsAt: u.trialStartsAt,
+            trialEndsAt: u.trialEndsAt,
+            trialUsed: u.trialUsed,
+            totalTranscriptions: totalLogs[0]?.count || 0,
+            totalUsageSeconds: totalLogs[0]?.totalSeconds || 0,
+          },
+        });
+      } catch (error: any) {
+        console.error("[Usage Stats] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch usage stats" });
+      }
+    },
+  );
 
-  app.get("/api/v1/a/audio-logs", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      if (!userId) return res.status(401).json({ success: false, error: "User not found" });
+  app.get(
+    "/api/v1/a/audio-logs",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        if (!userId)
+          return res
+            .status(401)
+            .json({ success: false, error: "User not found" });
 
-      const page = parseInt(req.query.page as string) || 1;
-      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
-      const offset = (page - 1) * limit;
+        const page = parseInt(req.query.page as string) || 1;
+        const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+        const offset = (page - 1) * limit;
 
-      const logs = await db.select().from(audioLogs)
-        .where(eq(audioLogs.userId, userId))
-        .orderBy(desc(audioLogs.createdAt))
-        .limit(limit)
-        .offset(offset);
+        const logs = await db
+          .select()
+          .from(audioLogs)
+          .where(eq(audioLogs.userId, userId))
+          .orderBy(desc(audioLogs.createdAt))
+          .limit(limit)
+          .offset(offset);
 
-      const countResult = await db.select({ count: sql<number>`count(*)::int` }).from(audioLogs).where(eq(audioLogs.userId, userId));
+        const countResult = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(audioLogs)
+          .where(eq(audioLogs.userId, userId));
 
-      res.json({ success: true, logs, total: countResult[0]?.count || 0, page, limit });
-    } catch (error: any) {
-      console.error("[Audio Logs] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch audio logs" });
-    }
-  });
+        res.json({
+          success: true,
+          logs,
+          total: countResult[0]?.count || 0,
+          page,
+          limit,
+        });
+      } catch (error: any) {
+        console.error("[Audio Logs] Error:", error);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch audio logs" });
+      }
+    },
+  );
 
   // ============================================================
   // SUBSCRIPTION: PRE-SUBSCRIBE CHECK, TOPUP, CONFIRM, REACTIVATE, UPDATE PAYMENT
   // ============================================================
 
-  app.post("/api/v1/a/pre-subscribe-check", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      const trial = await getTrialInfo(userId);
-      const now = new Date();
-      const activeSubResult = await db.select().from(userSubscriptions)
-        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, now)))
-        .limit(1);
+  app.post(
+    "/api/v1/a/pre-subscribe-check",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        const trial = await getTrialInfo(userId);
+        const now = new Date();
+        const activeSubResult = await db
+          .select()
+          .from(userSubscriptions)
+          .where(
+            and(
+              eq(userSubscriptions.userId, userId),
+              eq(userSubscriptions.status, "active"),
+              gte(userSubscriptions.validDateUpto, now),
+            ),
+          )
+          .limit(1);
 
-      let currentPlanName: string | null = null;
-      let currentValidUntil: string | null = null;
-      let currentMinutesRemaining = 0;
-      let currentDaysRemaining = 0;
+        let currentPlanName: string | null = null;
+        let currentValidUntil: string | null = null;
+        let currentMinutesRemaining = 0;
+        let currentDaysRemaining = 0;
 
-      if (activeSubResult.length > 0) {
-        const sub = activeSubResult[0];
-        const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, sub.planId)).limit(1);
-        if (planResult.length > 0) currentPlanName = planResult[0].name;
-        currentValidUntil = sub.validDateUpto.toISOString();
-        currentMinutesRemaining = parseFloat(String(sub.minutesRemaining || "0"));
-        const remainMs = Math.max(0, sub.validDateUpto.getTime() - Date.now());
-        currentDaysRemaining = Math.ceil(remainMs / (1000 * 60 * 60 * 24));
+        if (activeSubResult.length > 0) {
+          const sub = activeSubResult[0];
+          const planResult = await db
+            .select()
+            .from(subscriptionPlans)
+            .where(eq(subscriptionPlans.id, sub.planId))
+            .limit(1);
+          if (planResult.length > 0) currentPlanName = planResult[0].name;
+          currentValidUntil = sub.validDateUpto.toISOString();
+          currentMinutesRemaining = parseFloat(
+            String(sub.minutesRemaining || "0"),
+          );
+          const remainMs = Math.max(
+            0,
+            sub.validDateUpto.getTime() - Date.now(),
+          );
+          currentDaysRemaining = Math.ceil(remainMs / (1000 * 60 * 60 * 24));
+        }
+
+        const hasActiveAccess =
+          (trial !== null && trial.is_active && trial.minutes_remaining > 0) ||
+          activeSubResult.length > 0;
+
+        res.json({
+          success: true,
+          has_active_access: hasActiveAccess,
+          is_subscribed: activeSubResult.length > 0,
+          current_plan_name: currentPlanName,
+          current_valid_until: currentValidUntil,
+          current_minutes_remaining:
+            trial?.minutes_remaining ?? currentMinutesRemaining,
+          current_days_remaining: trial?.days_remaining ?? currentDaysRemaining,
+          trial_status: trial?.status || null,
+        });
+      } catch (error: any) {
+        console.error("[Pre-Subscribe Check] Error:", error);
+        res
+          .status(500)
+          .json({
+            success: false,
+            error: "Failed to check subscription status",
+          });
       }
+    },
+  );
 
-      const hasActiveAccess = (trial !== null && trial.is_active && trial.minutes_remaining > 0) || activeSubResult.length > 0;
-
-      res.json({
-        success: true,
-        has_active_access: hasActiveAccess,
-        is_subscribed: activeSubResult.length > 0,
-        current_plan_name: currentPlanName,
-        current_valid_until: currentValidUntil,
-        current_minutes_remaining: trial?.minutes_remaining ?? currentMinutesRemaining,
-        current_days_remaining: trial?.days_remaining ?? currentDaysRemaining,
-        trial_status: trial?.status || null,
-      });
-    } catch (error: any) {
-      console.error("[Pre-Subscribe Check] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to check subscription status" });
-    }
-  });
-
-  async function handleCreateTopupCheckout(req: Request, res: Response, userId: string) {
+  async function handleCreateTopupCheckout(
+    req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
       const priceId = process.env.STRIPE_TOPUP_PRICE_ID;
-      if (!priceId) return res.status(500).json({ success: false, error: "Top-up is not configured. Please contact support." });
+      if (!priceId)
+        return res
+          .status(500)
+          .json({
+            success: false,
+            error: "Top-up is not configured. Please contact support.",
+          });
 
       const stripe = await getUncachableStripeClient();
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const user = userResult[0];
-      if (!user) return res.status(404).json({ success: false, error: "User not found" });
+      if (!user)
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
 
       const now = new Date();
       const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
       const hasTimeRemaining = trialEndsAt && trialEndsAt > now;
       if (!hasTimeRemaining) {
-        const activeSub = await db.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active"), gte(userSubscriptions.validDateUpto, now)))
+        const activeSub = await db
+          .select()
+          .from(userSubscriptions)
+          .where(
+            and(
+              eq(userSubscriptions.userId, userId),
+              eq(userSubscriptions.status, "active"),
+              gte(userSubscriptions.validDateUpto, now),
+            ),
+          )
           .limit(1);
         if (activeSub.length === 0) {
-          return res.status(400).json({ success: false, error: "Top-up requires an active trial or subscription period. Please subscribe first." });
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error:
+                "Top-up requires an active trial or subscription period. Please subscribe first.",
+            });
         }
       }
 
       let customerId = user.stripeCustomerId;
       if (customerId) {
-        try { await stripe.customers.retrieve(customerId); } catch { customerId = null; }
+        try {
+          await stripe.customers.retrieve(customerId);
+        } catch {
+          customerId = null;
+        }
       }
       if (!customerId) {
-        const customer = await stripe.customers.create({ email: user.email || undefined, metadata: { userId } });
+        const customer = await stripe.customers.create({
+          email: user.email || undefined,
+          metadata: { userId },
+        });
         customerId = customer.id;
-        await db.update(users).set({ stripeCustomerId: customerId, updatedAt: new Date() }).where(eq(users.id, userId));
+        await db
+          .update(users)
+          .set({ stripeCustomerId: customerId, updatedAt: new Date() })
+          .where(eq(users.id, userId));
       }
 
       const price = await stripe.prices.retrieve(priceId);
-      if (!price.unit_amount) return res.status(500).json({ success: false, error: "Invalid price configuration" });
+      if (!price.unit_amount)
+        return res
+          .status(500)
+          .json({ success: false, error: "Invalid price configuration" });
 
       await cleanupStalePayments(customerId);
 
-      const ephemeralKey = await stripe.ephemeralKeys.create({ customer: customerId }, { apiVersion: "2024-06-20" as any });
+      const ephemeralKey = await stripe.ephemeralKeys.create(
+        { customer: customerId },
+        { apiVersion: "2024-06-20" as any },
+      );
       const paymentIntent = await stripe.paymentIntents.create({
         amount: price.unit_amount,
         currency: price.currency,
         customer: customerId,
         automatic_payment_methods: { enabled: true },
-        metadata: { userId, type: "topup", topup_minutes: String(TOPUP_MINUTES) },
+        metadata: {
+          userId,
+          type: "topup",
+          topup_minutes: String(TOPUP_MINUTES),
+        },
       });
 
       res.json({
@@ -5466,91 +7631,196 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Create Topup Checkout] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to create top-up checkout" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to create top-up checkout",
+        });
     }
   }
 
-  app.post("/api/v1/a/create-topup-checkout", mobileAuthMiddleware, async (req: any, res) => {
-    const userId = req.jwtUser?.userId || req.jwtUser?.id;
-    await handleCreateTopupCheckout(req, res, userId);
-  });
+  app.post(
+    "/api/v1/a/create-topup-checkout",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      const userId = req.jwtUser?.userId || req.jwtUser?.id;
+      await handleCreateTopupCheckout(req, res, userId);
+    },
+  );
 
-  async function handleConfirmTopup(req: Request, res: Response, userId: string) {
+  async function handleConfirmTopup(
+    req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
       const { paymentIntentId } = req.body;
-      if (!paymentIntentId) return res.status(400).json({ success: false, error: "paymentIntentId is required" });
+      if (!paymentIntentId)
+        return res
+          .status(400)
+          .json({ success: false, error: "paymentIntentId is required" });
 
       const stripe = await getUncachableStripeClient();
-      const paymentIntent = await stripe.paymentIntents.retrieve(paymentIntentId);
+      const paymentIntent =
+        await stripe.paymentIntents.retrieve(paymentIntentId);
       if (paymentIntent.status !== "succeeded") {
-        return res.status(400).json({ success: false, error: `Payment not completed. Status: ${paymentIntent.status}` });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: `Payment not completed. Status: ${paymentIntent.status}`,
+          });
       }
 
       const piMetadata = paymentIntent.metadata || {};
       if (piMetadata.type !== "topup" || piMetadata.userId !== userId) {
-        return res.status(400).json({ success: false, error: "Invalid payment intent for this user" });
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Invalid payment intent for this user",
+          });
       }
 
       const topupMinutes = parseInt(piMetadata.topup_minutes || "60", 10);
 
-      const existingTopup = await db.select().from(userSubscriptions)
-        .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, paymentIntentId)))
+      const existingTopup = await db
+        .select()
+        .from(userSubscriptions)
+        .where(
+          and(
+            eq(userSubscriptions.userId, userId),
+            eq(userSubscriptions.paymentToken, paymentIntentId),
+          ),
+        )
         .limit(1);
       if (existingTopup.length > 0) {
-        const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-        return res.json({ success: true, message: "Top-up already applied", trialMinutesTotal: user[0]?.trialMinutesTotal || 90 });
+        const user = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        return res.json({
+          success: true,
+          message: "Top-up already applied",
+          trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+        });
       }
 
       const result = await db.transaction(async (tx) => {
-        const lockKey = paymentIntentId.split("").reduce((a: number, c: string) => ((a << 5) - a + c.charCodeAt(0)) | 0, 0);
+        const lockKey = paymentIntentId
+          .split("")
+          .reduce(
+            (a: number, c: string) => ((a << 5) - a + c.charCodeAt(0)) | 0,
+            0,
+          );
         await tx.execute(sql`SELECT pg_advisory_xact_lock(${lockKey})`);
 
-        const doubleCheck = await tx.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, paymentIntentId)))
+        const doubleCheck = await tx
+          .select()
+          .from(userSubscriptions)
+          .where(
+            and(
+              eq(userSubscriptions.userId, userId),
+              eq(userSubscriptions.paymentToken, paymentIntentId),
+            ),
+          )
           .limit(1);
         if (doubleCheck.length > 0) return { alreadyApplied: true };
 
-        const userResult = await tx.select().from(users).where(eq(users.id, userId)).limit(1);
+        const userResult = await tx
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
         if (userResult.length === 0) throw new Error("User not found");
         const user = userResult[0];
         const newMinutesTotal = (user.trialMinutesTotal || 90) + topupMinutes;
 
-        await tx.update(users).set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() }).where(eq(users.id, userId));
+        await tx
+          .update(users)
+          .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+          .where(eq(users.id, userId));
 
-        const activeSub = await tx.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
+        const activeSub = await tx
+          .select()
+          .from(userSubscriptions)
+          .where(
+            and(
+              eq(userSubscriptions.userId, userId),
+              eq(userSubscriptions.status, "active"),
+            ),
+          )
           .limit(1);
         if (activeSub.length > 0) {
-          const existingRemaining = parseFloat(String(activeSub[0].minutesRemaining || "0"));
-          await tx.update(userSubscriptions)
+          const existingRemaining = parseFloat(
+            String(activeSub[0].minutesRemaining || "0"),
+          );
+          await tx
+            .update(userSubscriptions)
             .set({ minutesRemaining: String(existingRemaining + topupMinutes) })
             .where(eq(userSubscriptions.id, activeSub[0].id));
         }
 
         let topupPlanId: string;
-        const topupPlanResult = await tx.select().from(subscriptionPlans).where(eq(subscriptionPlans.name, "Top-Up")).limit(1);
+        const topupPlanResult = await tx
+          .select()
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.name, "Top-Up"))
+          .limit(1);
         if (topupPlanResult.length > 0) {
           topupPlanId = topupPlanResult[0].id;
         } else {
-          const [newPlan] = await tx.insert(subscriptionPlans).values({
-            name: "Top-Up", validTotalMinutes: 60, validDays: 0, recordingsAvailableDays: 0,
-            chunksCount: 0, offlineRecording: false, priceMonthly: 500, isVisible: false,
-          }).returning();
+          const [newPlan] = await tx
+            .insert(subscriptionPlans)
+            .values({
+              name: "Top-Up",
+              validTotalMinutes: 60,
+              validDays: 0,
+              recordingsAvailableDays: 0,
+              chunksCount: 0,
+              offlineRecording: false,
+              priceMonthly: 500,
+              isVisible: false,
+            })
+            .returning();
           topupPlanId = newPlan.id;
         }
 
-        const [newTopupSub] = await tx.insert(userSubscriptions).values({
-          userId, planId: topupPlanId, status: "completed",
-          minutesRemaining: String(topupMinutes), paymentToken: paymentIntentId, validDateUpto: new Date(),
-        }).returning({ id: userSubscriptions.id });
+        const [newTopupSub] = await tx
+          .insert(userSubscriptions)
+          .values({
+            userId,
+            planId: topupPlanId,
+            status: "completed",
+            minutesRemaining: String(topupMinutes),
+            paymentToken: paymentIntentId,
+            validDateUpto: new Date(),
+          })
+          .returning({ id: userSubscriptions.id });
 
-        const newRemaining = newMinutesTotal - parseFloat(String(user.trialMinutesUsed || "0"));
-        return { alreadyApplied: false, newMinutesTotal, newRemaining, newTopupSubId: newTopupSub?.id };
+        const newRemaining =
+          newMinutesTotal - parseFloat(String(user.trialMinutesUsed || "0"));
+        return {
+          alreadyApplied: false,
+          newMinutesTotal,
+          newRemaining,
+          newTopupSubId: newTopupSub?.id,
+        };
       });
 
       if (result.alreadyApplied) {
-        const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-        return res.json({ success: true, message: "Top-up already applied", trialMinutesTotal: user[0]?.trialMinutesTotal || 90 });
+        const user = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
+          .limit(1);
+        return res.json({
+          success: true,
+          message: "Top-up already applied",
+          trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+        });
       }
 
       res.json({
@@ -5561,17 +7831,22 @@ export async function registerRoutes(
       });
 
       // Fire-and-forget push — after response is sent, no risk of blocking
-      ;(async () => {
+      (async () => {
         try {
-          const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPref(userId, "topup_credited");
-          const tokens = await db.select().from(pushTokens)
-            .where(and(eq(pushTokens.userId, userId), eq(pushTokens.isActive, true)));
+          const { pushEnabled: prefPush, emailEnabled: prefEmail } =
+            await getNotificationPref(userId, "topup_credited");
+          const tokens = await db
+            .select()
+            .from(pushTokens)
+            .where(
+              and(eq(pushTokens.userId, userId), eq(pushTokens.isActive, true)),
+            );
           if (tokens.length > 0 && prefPush) {
             await sendExpoPushNotifications(
-              tokens.map(t => t.pushToken),
+              tokens.map((t) => t.pushToken),
               "Top-Up Credited",
               `${topupMinutes} minutes have been added to your account!`,
-              { type: "topup_credited", screen: "home" }
+              { type: "topup_credited", screen: "home" },
             );
           }
           await db.insert(notificationLog).values({
@@ -5582,30 +7857,52 @@ export async function registerRoutes(
             message: `${topupMinutes} minutes top-up credited`,
             subscriptionId: result.newTopupSubId,
           });
-          const topupUser = await db.select({ email: users.email }).from(users)
-            .where(eq(users.id, userId)).limit(1);
+          const topupUser = await db
+            .select({ email: users.email })
+            .from(users)
+            .where(eq(users.id, userId))
+            .limit(1);
           if (topupUser[0]?.email && prefEmail) {
-            sendTopUpCreditedEmail(topupUser[0].email, topupMinutes)
-              .catch((e: any) => console.error("[Email] topup_credited:", e.message));
+            sendTopUpCreditedEmail(topupUser[0].email, topupMinutes).catch(
+              (e: any) => console.error("[Email] topup_credited:", e.message),
+            );
           }
         } catch (pushErr: any) {
-          console.error("[Push] topup_credited notification failed:", pushErr.message);
+          console.error(
+            "[Push] topup_credited notification failed:",
+            pushErr.message,
+          );
         }
       })();
     } catch (error: any) {
       console.error("[Confirm Topup] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to confirm top-up" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to confirm top-up",
+        });
     }
   }
 
-  app.post("/api/v1/a/confirm-topup", mobileAuthMiddleware, async (req: any, res) => {
-    const userId = req.jwtUser?.userId || req.jwtUser?.id;
-    await handleConfirmTopup(req, res, userId);
-  });
+  app.post(
+    "/api/v1/a/confirm-topup",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      const userId = req.jwtUser?.userId || req.jwtUser?.id;
+      await handleConfirmTopup(req, res, userId);
+    },
+  );
 
-  async function handlePaymentHistory(_req: Request, res: Response, userId: string) {
+  async function handlePaymentHistory(
+    _req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
-      const subRecords = await db.select().from(userSubscriptions)
+      const subRecords = await db
+        .select()
+        .from(userSubscriptions)
         .where(eq(userSubscriptions.userId, userId))
         .orderBy(desc(userSubscriptions.createdAt))
         .limit(50);
@@ -5613,18 +7910,29 @@ export async function registerRoutes(
       const planIds = Array.from(new Set(subRecords.map((s) => s.planId)));
       const plans: Record<string, any> = {};
       for (const planId of planIds) {
-        const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.id, planId)).limit(1);
+        const planResult = await db
+          .select()
+          .from(subscriptionPlans)
+          .where(eq(subscriptionPlans.id, planId))
+          .limit(1);
         if (planResult.length > 0) plans[planId] = planResult[0];
       }
 
-      const userResult = await db.select({ stripeCustomerId: users.stripeCustomerId }).from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select({ stripeCustomerId: users.stripeCustomerId })
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const stripeCustomerId = userResult[0]?.stripeCustomerId;
 
       let stripePayments: any[] = [];
       if (stripeCustomerId) {
         try {
           const stripe = await getUncachableStripeClient();
-          const charges = await stripe.charges.list({ customer: stripeCustomerId, limit: 50 });
+          const charges = await stripe.charges.list({
+            customer: stripeCustomerId,
+            limit: 50,
+          });
           stripePayments = charges.data.map((ch) => ({
             id: ch.payment_intent,
             chargeId: ch.id,
@@ -5649,7 +7957,10 @@ export async function registerRoutes(
         const plan = plans[sub.planId];
         let stripeCharge: any = null;
         if (sub.paymentToken) {
-          stripeCharge = stripePayments.find((sp) => sp.id === sub.paymentToken || sp.chargeId === sub.paymentToken);
+          stripeCharge = stripePayments.find(
+            (sp) =>
+              sp.id === sub.paymentToken || sp.chargeId === sub.paymentToken,
+          );
           if (stripeCharge) matchedChargeIds.add(stripeCharge.id);
         }
         return {
@@ -5678,7 +7989,9 @@ export async function registerRoutes(
           amount: sp.amount,
           currency: sp.currency,
           status: sp.status,
-          minutesAdded: sp.metadata?.topup_minutes ? parseInt(sp.metadata.topup_minutes) : null,
+          minutesAdded: sp.metadata?.topup_minutes
+            ? parseInt(sp.metadata.topup_minutes)
+            : null,
           date: sp.created,
           validUntil: null,
           cardBrand: sp.cardBrand,
@@ -5693,138 +8006,302 @@ export async function registerRoutes(
         return db_ - da;
       });
 
-      res.json({ success: true, payments: allPayments, total: allPayments.length });
+      res.json({
+        success: true,
+        payments: allPayments,
+        total: allPayments.length,
+      });
     } catch (error: any) {
       console.error("[Payment History] Error:", error);
-      res.status(500).json({ success: false, error: "Failed to fetch payment history" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to fetch payment history" });
     }
   }
 
-  app.get("/api/v1/a/payment-history", mobileAuthMiddleware, async (req: any, res) => {
-    const userId = req.jwtUser?.userId || req.jwtUser?.id;
-    if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
-    await handlePaymentHistory(req, res, userId);
-  });
+  app.get(
+    "/api/v1/a/payment-history",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      const userId = req.jwtUser?.userId || req.jwtUser?.id;
+      if (!userId)
+        return res
+          .status(401)
+          .json({ success: false, error: "Authentication required" });
+      await handlePaymentHistory(req, res, userId);
+    },
+  );
 
-  app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any, res) => {
-    const userId = req.jwtUser?.userId;
-    try {
-      const { subscriptionId } = req.body;
-      if (!subscriptionId) return res.status(400).json({ success: false, error: "subscriptionId is required" });
+  app.post(
+    "/api/v1/a/confirm-subscription",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      const userId = req.jwtUser?.userId;
+      try {
+        const { subscriptionId } = req.body;
+        if (!subscriptionId)
+          return res
+            .status(400)
+            .json({ success: false, error: "subscriptionId is required" });
 
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
-      const user = userResult[0];
-      if (!user) return res.status(404).json({ success: false, error: "User not found" });
-
-      const stripe = await getUncachableStripeClient();
-      const stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
-
-      const stripeCustomerId = typeof stripeSub.customer === "string" ? stripeSub.customer : (stripeSub.customer as any)?.id;
-      if (!user.stripeCustomerId || stripeCustomerId !== user.stripeCustomerId) {
-        return res.status(403).json({ success: false, error: "This subscription does not belong to your account" });
-      }
-
-      if (user.stripeSubscriptionId !== subscriptionId) {
-        await db.update(users).set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() }).where(eq(users.id, userId));
-      }
-
-      if (stripeSub.status === "active" || stripeSub.status === "trialing") {
-        const existingForThisSub = await db.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.paymentToken, subscriptionId), eq(userSubscriptions.status, "active")))
+        const userResult = await db
+          .select()
+          .from(users)
+          .where(eq(users.id, userId))
           .limit(1);
-        if (existingForThisSub.length > 0) {
-          return res.json({ success: true, message: "Subscription is active", status: stripeSub.status });
+        const user = userResult[0];
+        if (!user)
+          return res
+            .status(404)
+            .json({ success: false, error: "User not found" });
+
+        const stripe = await getUncachableStripeClient();
+        const stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
+
+        const stripeCustomerId =
+          typeof stripeSub.customer === "string"
+            ? stripeSub.customer
+            : (stripeSub.customer as any)?.id;
+        if (
+          !user.stripeCustomerId ||
+          stripeCustomerId !== user.stripeCustomerId
+        ) {
+          return res
+            .status(403)
+            .json({
+              success: false,
+              error: "This subscription does not belong to your account",
+            });
         }
 
-        const existingActive = await db.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
-          .limit(1);
-        if (existingActive.length > 0) {
-          const role = await refreshUserRole(userId);
-          const accessInfo = await checkUserAccess(userId);
-          return res.json({ success: true, message: "Subscription is active", status: stripeSub.status, role, ...accessInfo });
+        if (user.stripeSubscriptionId !== subscriptionId) {
+          await db
+            .update(users)
+            .set({
+              stripeSubscriptionId: subscriptionId,
+              updatedAt: new Date(),
+            })
+            .where(eq(users.id, userId));
         }
 
-        const priceId = stripeSub.items.data[0]?.price?.id;
-        let matchedPlan: any = null;
-        if (priceId) {
-          const planResult = await db.select().from(subscriptionPlans).where(eq(subscriptionPlans.stripePriceId, priceId)).limit(1);
-          matchedPlan = planResult[0] || null;
-        }
-        if (!matchedPlan) {
-          const fallbackResult = await db.select().from(subscriptionPlans).where(gte(subscriptionPlans.priceMonthly, 1)).limit(1);
-          matchedPlan = fallbackResult[0] || null;
-        }
+        if (stripeSub.status === "active" || stripeSub.status === "trialing") {
+          const existingForThisSub = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, userId),
+                eq(userSubscriptions.paymentToken, subscriptionId),
+                eq(userSubscriptions.status, "active"),
+              ),
+            )
+            .limit(1);
+          if (existingForThisSub.length > 0) {
+            return res.json({
+              success: true,
+              message: "Subscription is active",
+              status: stripeSub.status,
+            });
+          }
 
-        if (matchedPlan) {
-          const now = new Date();
-          const planMinutes = matchedPlan.validTotalMinutes || 0;
-          const planDays = matchedPlan.validDays || 30;
-          const newTrialEndsAt = new Date(now.getTime() + planDays * 24 * 60 * 60 * 1000);
+          const existingActive = await db
+            .select()
+            .from(userSubscriptions)
+            .where(
+              and(
+                eq(userSubscriptions.userId, userId),
+                eq(userSubscriptions.status, "active"),
+              ),
+            )
+            .limit(1);
+          if (existingActive.length > 0) {
+            const role = await refreshUserRole(userId);
+            const accessInfo = await checkUserAccess(userId);
+            return res.json({
+              success: true,
+              message: "Subscription is active",
+              status: stripeSub.status,
+              role,
+              ...accessInfo,
+            });
+          }
 
-          const [newSubRecord] = await db.insert(userSubscriptions).values({
-            userId, planId: matchedPlan.id, validDateUpto: newTrialEndsAt,
-            minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(planMinutes),
-            paymentToken: subscriptionId, status: "active",
-          }).returning();
+          const priceId = stripeSub.items.data[0]?.price?.id;
+          let matchedPlan: any = null;
+          if (priceId) {
+            const planResult = await db
+              .select()
+              .from(subscriptionPlans)
+              .where(eq(subscriptionPlans.stripePriceId, priceId))
+              .limit(1);
+            matchedPlan = planResult[0] || null;
+          }
+          if (!matchedPlan) {
+            const fallbackResult = await db
+              .select()
+              .from(subscriptionPlans)
+              .where(gte(subscriptionPlans.priceMonthly, 1))
+              .limit(1);
+            matchedPlan = fallbackResult[0] || null;
+          }
 
-          if (newSubRecord) {
-            await db.update(users).set({ stripeSubscriptionId: subscriptionId, updatedAt: new Date() }).where(eq(users.id, userId));
+          if (matchedPlan) {
+            const now = new Date();
+            const planMinutes = matchedPlan.validTotalMinutes || 0;
+            const planDays = matchedPlan.validDays || 30;
+            const newTrialEndsAt = new Date(
+              now.getTime() + planDays * 24 * 60 * 60 * 1000,
+            );
+
+            const [newSubRecord] = await db
+              .insert(userSubscriptions)
+              .values({
+                userId,
+                planId: matchedPlan.id,
+                validDateUpto: newTrialEndsAt,
+                minutesUsed: 0,
+                chunksUsed: 0,
+                minutesRemaining: String(planMinutes),
+                paymentToken: subscriptionId,
+                status: "active",
+              })
+              .returning();
+
+            if (newSubRecord) {
+              await db
+                .update(users)
+                .set({
+                  stripeSubscriptionId: subscriptionId,
+                  updatedAt: new Date(),
+                })
+                .where(eq(users.id, userId));
+            }
           }
         }
+
+        const role = await refreshUserRole(userId);
+        const accessInfo = await checkUserAccess(userId);
+        res.json({
+          success: true,
+          message: "Subscription confirmed",
+          status: stripeSub.status,
+          role,
+          ...accessInfo,
+        });
+      } catch (error: any) {
+        console.error("[Confirm Subscription] Error:", error);
+        res
+          .status(500)
+          .json({
+            success: false,
+            error: error.message || "Failed to confirm subscription",
+          });
       }
+    },
+  );
 
-      const role = await refreshUserRole(userId);
-      const accessInfo = await checkUserAccess(userId);
-      res.json({ success: true, message: "Subscription confirmed", status: stripeSub.status, role, ...accessInfo });
-    } catch (error: any) {
-      console.error("[Confirm Subscription] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to confirm subscription" });
-    }
-  });
-
-  async function handleReactivateSubscription(_req: Request, res: Response, userId: string) {
+  async function handleReactivateSubscription(
+    _req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
-      const schema = z.object({ subscriptionId: z.string().min(1, "Subscription ID is required") });
+      const schema = z.object({
+        subscriptionId: z.string().min(1, "Subscription ID is required"),
+      });
       const parseResult = schema.safeParse(_req.body);
-      if (!parseResult.success) return res.status(400).json({ success: false, error: "Validation failed", details: parseResult.error.errors });
+      if (!parseResult.success)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "Validation failed",
+            details: parseResult.error.errors,
+          });
 
       const { subscriptionId } = parseResult.data;
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const user = userResult[0];
-      if (!user) return res.status(404).json({ success: false, error: "User not found" });
-      if (user.stripeSubscriptionId !== subscriptionId) return res.status(403).json({ success: false, error: "You can only reactivate your own subscription" });
+      if (!user)
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
+      if (user.stripeSubscriptionId !== subscriptionId)
+        return res
+          .status(403)
+          .json({
+            success: false,
+            error: "You can only reactivate your own subscription",
+          });
 
       const stripe = await getUncachableStripeClient();
-      const subscription = await stripe.subscriptions.update(subscriptionId, { cancel_at_period_end: false });
+      const subscription = await stripe.subscriptions.update(subscriptionId, {
+        cancel_at_period_end: false,
+      });
       const periodEnd = (subscription as any).current_period_end;
 
       res.json({
         success: true,
         message: "Auto-renewal has been turned back on",
-        current_period_end: periodEnd ? new Date(periodEnd * 1000).toISOString() : null,
+        current_period_end: periodEnd
+          ? new Date(periodEnd * 1000).toISOString()
+          : null,
       });
     } catch (error: any) {
       console.error("[Reactivate Subscription] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to reactivate subscription" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to reactivate subscription",
+        });
     }
   }
 
-  app.post("/api/v1/a/reactivate-subscription", mobileAuthMiddleware, async (req: any, res) => {
-    const userId = req.jwtUser?.userId;
-    await handleReactivateSubscription(req, res, userId);
-  });
+  app.post(
+    "/api/v1/a/reactivate-subscription",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      const userId = req.jwtUser?.userId;
+      await handleReactivateSubscription(req, res, userId);
+    },
+  );
 
-  async function handleUpdatePaymentMethod(_req: Request, res: Response, userId: string) {
+  async function handleUpdatePaymentMethod(
+    _req: Request,
+    res: Response,
+    userId: string,
+  ) {
     try {
-      const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+      const userResult = await db
+        .select()
+        .from(users)
+        .where(eq(users.id, userId))
+        .limit(1);
       const user = userResult[0];
-      if (!user) return res.status(404).json({ success: false, error: "User not found" });
-      if (!user.stripeCustomerId) return res.status(400).json({ success: false, error: "No Stripe customer found. Please subscribe first." });
+      if (!user)
+        return res
+          .status(404)
+          .json({ success: false, error: "User not found" });
+      if (!user.stripeCustomerId)
+        return res
+          .status(400)
+          .json({
+            success: false,
+            error: "No Stripe customer found. Please subscribe first.",
+          });
 
       const stripe = await getUncachableStripeClient();
-      try { await stripe.customers.retrieve(user.stripeCustomerId); } catch {
-        return res.status(400).json({ success: false, error: "Stripe customer not found" });
+      try {
+        await stripe.customers.retrieve(user.stripeCustomerId);
+      } catch {
+        return res
+          .status(400)
+          .json({ success: false, error: "Stripe customer not found" });
       }
 
       const setupIntent = await stripe.setupIntents.create({
@@ -5834,7 +8311,10 @@ export async function registerRoutes(
         metadata: { userId, purpose: "update_payment_method" },
       });
 
-      const ephemeralKey = await stripe.ephemeralKeys.create({ customer: user.stripeCustomerId }, { apiVersion: "2024-06-20" as any });
+      const ephemeralKey = await stripe.ephemeralKeys.create(
+        { customer: user.stripeCustomerId },
+        { apiVersion: "2024-06-20" as any },
+      );
 
       res.json({
         success: true,
@@ -5845,108 +8325,192 @@ export async function registerRoutes(
       });
     } catch (error: any) {
       console.error("[Update Payment Method] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to create setup intent" });
+      res
+        .status(500)
+        .json({
+          success: false,
+          error: error.message || "Failed to create setup intent",
+        });
     }
   }
 
-  app.post("/api/v1/a/update-payment-method", mobileAuthMiddleware, async (req: any, res) => {
-    const userId = req.jwtUser?.userId;
-    await handleUpdatePaymentMethod(req, res, userId);
-  });
+  app.post(
+    "/api/v1/a/update-payment-method",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      const userId = req.jwtUser?.userId;
+      await handleUpdatePaymentMethod(req, res, userId);
+    },
+  );
 
   // ============================================================
   // PUSH TOKENS
   // ============================================================
 
-  app.post("/api/v1/a/push-token", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      if (!userId) return res.status(401).json({ success: false, error: "Authentication required" });
+  app.post(
+    "/api/v1/a/push-token",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        if (!userId)
+          return res
+            .status(401)
+            .json({ success: false, error: "Authentication required" });
 
-      const { pushToken, platform, deviceId } = req.body;
-      if (!pushToken) return res.status(400).json({ success: false, error: "Push token is required" });
+        const { pushToken, platform, deviceId } = req.body;
+        if (!pushToken)
+          return res
+            .status(400)
+            .json({ success: false, error: "Push token is required" });
 
-      const existing = await db.select().from(pushTokens)
-        .where(and(eq(pushTokens.userId, userId), eq(pushTokens.pushToken, pushToken)))
-        .limit(1);
+        const existing = await db
+          .select()
+          .from(pushTokens)
+          .where(
+            and(
+              eq(pushTokens.userId, userId),
+              eq(pushTokens.pushToken, pushToken),
+            ),
+          )
+          .limit(1);
 
-      if (existing.length > 0) {
-        await db.update(pushTokens)
-          .set({ isActive: true, platform: platform || "expo", deviceId: deviceId || null, updatedAt: new Date() })
-          .where(eq(pushTokens.id, existing[0].id));
-      } else {
-        await db.insert(pushTokens).values({ userId, pushToken, platform: platform || "expo", deviceId: deviceId || null });
+        if (existing.length > 0) {
+          await db
+            .update(pushTokens)
+            .set({
+              isActive: true,
+              platform: platform || "expo",
+              deviceId: deviceId || null,
+              updatedAt: new Date(),
+            })
+            .where(eq(pushTokens.id, existing[0].id));
+        } else {
+          await db
+            .insert(pushTokens)
+            .values({
+              userId,
+              pushToken,
+              platform: platform || "expo",
+              deviceId: deviceId || null,
+            });
+        }
+
+        res.json({ success: true, message: "Push token registered" });
+      } catch (error: any) {
+        console.error("[Push Token] Error:", error.message);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to register push token" });
       }
+    },
+  );
 
-      res.json({ success: true, message: "Push token registered" });
-    } catch (error: any) {
-      console.error("[Push Token] Error:", error.message);
-      res.status(500).json({ success: false, error: "Failed to register push token" });
-    }
-  });
+  app.delete(
+    "/api/v1/a/push-token",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        const { pushToken } = req.body;
+        if (!pushToken)
+          return res
+            .status(400)
+            .json({ success: false, error: "Push token is required" });
 
-  app.delete("/api/v1/a/push-token", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      const { pushToken } = req.body;
-      if (!pushToken) return res.status(400).json({ success: false, error: "Push token is required" });
+        await db
+          .update(pushTokens)
+          .set({ isActive: false, updatedAt: new Date() })
+          .where(
+            and(
+              eq(pushTokens.userId, userId),
+              eq(pushTokens.pushToken, pushToken),
+            ),
+          );
 
-      await db.update(pushTokens)
-        .set({ isActive: false, updatedAt: new Date() })
-        .where(and(eq(pushTokens.userId, userId), eq(pushTokens.pushToken, pushToken)));
-
-      res.json({ success: true, message: "Push token unregistered" });
-    } catch (error: any) {
-      console.error("[Push Token Unregister] Error:", error.message);
-      res.status(500).json({ success: false, error: "Failed to unregister push token" });
-    }
-  });
+        res.json({ success: true, message: "Push token unregistered" });
+      } catch (error: any) {
+        console.error("[Push Token Unregister] Error:", error.message);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to unregister push token" });
+      }
+    },
+  );
 
   // ============================================================
   // NOTIFICATION INBOX
   // ============================================================
 
-  app.get("/api/v1/a/notifications", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      const offset = parseInt(String(req.query.offset || "0"), 10);
-      const limit = Math.min(parseInt(String(req.query.limit || "50"), 10), 50);
+  app.get(
+    "/api/v1/a/notifications",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        const offset = parseInt(String(req.query.offset || "0"), 10);
+        const limit = Math.min(
+          parseInt(String(req.query.limit || "50"), 10),
+          50,
+        );
 
-      const notifications = await db
-        .select()
-        .from(notificationLog)
-        .where(eq(notificationLog.userId, userId))
-        .orderBy(desc(notificationLog.sentAt))
-        .limit(limit)
-        .offset(offset);
+        const notifications = await db
+          .select()
+          .from(notificationLog)
+          .where(eq(notificationLog.userId, userId))
+          .orderBy(desc(notificationLog.sentAt))
+          .limit(limit)
+          .offset(offset);
 
-      const unreadResult = await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(notificationLog)
-        .where(and(eq(notificationLog.userId, userId), sql`${notificationLog.readAt} IS NULL`));
+        const unreadResult = await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(notificationLog)
+          .where(
+            and(
+              eq(notificationLog.userId, userId),
+              sql`${notificationLog.readAt} IS NULL`,
+            ),
+          );
 
-      const unreadCount = unreadResult[0]?.count ?? 0;
+        const unreadCount = unreadResult[0]?.count ?? 0;
 
-      res.json({ success: true, notifications, unreadCount });
-    } catch (error: any) {
-      console.error("[Notifications] Error fetching:", error.message);
-      res.status(500).json({ success: false, error: "Failed to fetch notifications" });
-    }
-  });
+        res.json({ success: true, notifications, unreadCount });
+      } catch (error: any) {
+        console.error("[Notifications] Error fetching:", error.message);
+        res
+          .status(500)
+          .json({ success: false, error: "Failed to fetch notifications" });
+      }
+    },
+  );
 
-  app.post("/api/v1/a/notifications/read-all", mobileAuthMiddleware, async (req: any, res) => {
-    try {
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      await db
-        .update(notificationLog)
-        .set({ readAt: new Date() })
-        .where(and(eq(notificationLog.userId, userId), sql`${notificationLog.readAt} IS NULL`));
-      res.json({ success: true });
-    } catch (error: any) {
-      console.error("[Notifications] Error marking read:", error.message);
-      res.status(500).json({ success: false, error: "Failed to mark notifications as read" });
-    }
-  });
+  app.post(
+    "/api/v1/a/notifications/read-all",
+    mobileAuthMiddleware,
+    async (req: any, res) => {
+      try {
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        await db
+          .update(notificationLog)
+          .set({ readAt: new Date() })
+          .where(
+            and(
+              eq(notificationLog.userId, userId),
+              sql`${notificationLog.readAt} IS NULL`,
+            ),
+          );
+        res.json({ success: true });
+      } catch (error: any) {
+        console.error("[Notifications] Error marking read:", error.message);
+        res
+          .status(500)
+          .json({
+            success: false,
+            error: "Failed to mark notifications as read",
+          });
+      }
+    },
+  );
 
   // ============================================================
   // CRASH REPORTS
@@ -5954,25 +8518,50 @@ export async function registerRoutes(
 
   app.post("/api/v1/a/crash-report", async (req: any, res) => {
     try {
-      const clientIp = String(req.headers["x-forwarded-for"] || req.ip || "unknown");
+      const clientIp = String(
+        req.headers["x-forwarded-for"] || req.ip || "unknown",
+      );
       const now = Date.now();
-      if (!crashReportRateLimit[clientIp] || crashReportRateLimit[clientIp].resetAt < now) {
-        crashReportRateLimit[clientIp] = { count: 0, resetAt: now + CRASH_RATE_LIMIT_WINDOW_MS };
+      if (
+        !crashReportRateLimit[clientIp] ||
+        crashReportRateLimit[clientIp].resetAt < now
+      ) {
+        crashReportRateLimit[clientIp] = {
+          count: 0,
+          resetAt: now + CRASH_RATE_LIMIT_WINDOW_MS,
+        };
       }
       crashReportRateLimit[clientIp].count++;
       if (crashReportRateLimit[clientIp].count > CRASH_RATE_LIMIT_MAX) {
-        return res.status(429).json({ success: false, error: "Too many crash reports. Please try again later." });
+        return res
+          .status(429)
+          .json({
+            success: false,
+            error: "Too many crash reports. Please try again later.",
+          });
       }
 
-      const { errorMessage, stackTrace, deviceInfo, appVersion, userId } = req.body;
+      const { errorMessage, stackTrace, deviceInfo, appVersion, userId } =
+        req.body;
       if (!errorMessage || typeof errorMessage !== "string") {
-        return res.status(400).json({ success: false, error: "errorMessage is required" });
+        return res
+          .status(400)
+          .json({ success: false, error: "errorMessage is required" });
       }
 
       const safeErrorMessage = errorMessage.substring(0, 2000);
-      const safeStackTrace = typeof stackTrace === "string" ? stackTrace.substring(0, 10000) : undefined;
-      const safeDeviceInfo = typeof deviceInfo === "string" ? deviceInfo.substring(0, 500) : undefined;
-      const safeAppVersion = typeof appVersion === "string" ? appVersion.substring(0, 20) : undefined;
+      const safeStackTrace =
+        typeof stackTrace === "string"
+          ? stackTrace.substring(0, 10000)
+          : undefined;
+      const safeDeviceInfo =
+        typeof deviceInfo === "string"
+          ? deviceInfo.substring(0, 500)
+          : undefined;
+      const safeAppVersion =
+        typeof appVersion === "string"
+          ? appVersion.substring(0, 20)
+          : undefined;
 
       console.error(`[MOBILE CRASH] ${safeErrorMessage}`);
 
@@ -5983,115 +8572,203 @@ export async function registerRoutes(
         deviceInfo: safeDeviceInfo,
         appVersion: safeAppVersion,
         userId: typeof userId === "string" ? userId : undefined,
-      }).catch((err: any) => console.error("[MOBILE CRASH] Email error:", err.message));
+      }).catch((err: any) =>
+        console.error("[MOBILE CRASH] Email error:", err.message),
+      );
 
       res.json({ success: true, message: "Crash report received" });
     } catch (error: any) {
       console.error("[MOBILE CRASH] Error processing report:", error.message);
-      res.status(500).json({ success: false, error: "Failed to process crash report" });
+      res
+        .status(500)
+        .json({ success: false, error: "Failed to process crash report" });
     }
   });
 
-  app.get("/api/v1/a/crash-reports", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
-    try {
-      const reports = await db.select().from(crashReports).orderBy(desc(crashReports.createdAt)).limit(50);
-      res.json({ success: true, reports });
-    } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  });
+  app.get(
+    "/api/v1/a/crash-reports",
+    mobileAuthMiddleware,
+    adminCheckMiddleware,
+    async (req: any, res) => {
+      try {
+        const reports = await db
+          .select()
+          .from(crashReports)
+          .orderBy(desc(crashReports.createdAt))
+          .limit(50);
+        res.json({ success: true, reports });
+      } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
+      }
+    },
+  );
 
   // ============================================================
   // APP SETTINGS (admin only)
   // ============================================================
 
-  app.get("/api/v1/a/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
-    try {
-      const result = await db.select().from(appSettings).where(eq(appSettings.settingKey, "admin_mail")).limit(1);
-      const emails = result.length > 0 ? result[0].settingValue : "";
-      res.json({ success: true, adminMail: emails });
-    } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  });
-
-  app.put("/api/v1/a/app-settings/admin-mail", mobileAuthMiddleware, adminCheckMiddleware, async (req: any, res) => {
-    try {
-      const { adminMail } = req.body;
-      if (typeof adminMail !== "string") {
-        return res.status(400).json({ success: false, error: "adminMail must be a string of comma-separated emails" });
+  app.get(
+    "/api/v1/a/app-settings/admin-mail",
+    mobileAuthMiddleware,
+    adminCheckMiddleware,
+    async (req: any, res) => {
+      try {
+        const result = await db
+          .select()
+          .from(appSettings)
+          .where(eq(appSettings.settingKey, "admin_mail"))
+          .limit(1);
+        const emails = result.length > 0 ? result[0].settingValue : "";
+        res.json({ success: true, adminMail: emails });
+      } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
       }
+    },
+  );
 
-      const emails = adminMail.split(",").map((e: string) => e.trim()).filter(Boolean);
-      const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-      for (const email of emails) {
-        if (!emailRegex.test(email)) return res.status(400).json({ success: false, error: `Invalid email address: ${email}` });
+  app.put(
+    "/api/v1/a/app-settings/admin-mail",
+    mobileAuthMiddleware,
+    adminCheckMiddleware,
+    async (req: any, res) => {
+      try {
+        const { adminMail } = req.body;
+        if (typeof adminMail !== "string") {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: "adminMail must be a string of comma-separated emails",
+            });
+        }
+
+        const emails = adminMail
+          .split(",")
+          .map((e: string) => e.trim())
+          .filter(Boolean);
+        const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+        for (const email of emails) {
+          if (!emailRegex.test(email))
+            return res
+              .status(400)
+              .json({
+                success: false,
+                error: `Invalid email address: ${email}`,
+              });
+        }
+
+        const existing = await db
+          .select()
+          .from(appSettings)
+          .where(eq(appSettings.settingKey, "admin_mail"))
+          .limit(1);
+        if (existing.length > 0) {
+          await db
+            .update(appSettings)
+            .set({ settingValue: emails.join(","), updatedAt: new Date() })
+            .where(eq(appSettings.settingKey, "admin_mail"));
+        } else {
+          await db
+            .insert(appSettings)
+            .values({
+              settingKey: "admin_mail",
+              settingValue: emails.join(","),
+            });
+        }
+
+        res.json({ success: true, adminMail: emails.join(",") });
+      } catch (error: any) {
+        res.status(500).json({ success: false, error: error.message });
       }
-
-      const existing = await db.select().from(appSettings).where(eq(appSettings.settingKey, "admin_mail")).limit(1);
-      if (existing.length > 0) {
-        await db.update(appSettings).set({ settingValue: emails.join(","), updatedAt: new Date() }).where(eq(appSettings.settingKey, "admin_mail"));
-      } else {
-        await db.insert(appSettings).values({ settingKey: "admin_mail", settingValue: emails.join(",") });
-      }
-
-      res.json({ success: true, adminMail: emails.join(",") });
-    } catch (error: any) {
-      res.status(500).json({ success: false, error: error.message });
-    }
-  });
+    },
+  );
 
   // ============================================================
   // PROCESS AUDIO (transcribe + translate in one call)
   // ============================================================
 
-  app.post("/api/v1/a/process-audio", mobileAuthMiddleware, upload.single("audio"), async (req: any, res) => {
-    try {
-      const { mimeType, targetLanguage } = req.body || {};
-      if (!targetLanguage) return res.status(400).json({ success: false, error: "Target language is required" });
-      if (!req.file) return res.status(400).json({ success: false, error: "Audio data is required" });
+  app.post(
+    "/api/v1/a/process-audio",
+    mobileAuthMiddleware,
+    upload.single("audio"),
+    async (req: any, res) => {
+      try {
+        const { mimeType, targetLanguage } = req.body || {};
+        if (!targetLanguage)
+          return res
+            .status(400)
+            .json({ success: false, error: "Target language is required" });
+        if (!req.file)
+          return res
+            .status(400)
+            .json({ success: false, error: "Audio data is required" });
 
-      const audioMimeType = mimeType || req.file.mimetype || "audio/mp4";
-      if (!PROCESS_AUDIO_CFG.isAudioTypeSupported(audioMimeType)) {
-        return res.status(400).json({
-          success: false,
-          error: `Unsupported audio type: ${audioMimeType}. Supported: ${PROCESS_AUDIO_CFG.PROCESS_AUDIO_SUPPORTED_TYPES.join(", ")}`,
+        const audioMimeType = mimeType || req.file.mimetype || "audio/mp4";
+        if (!PROCESS_AUDIO_CFG.isAudioTypeSupported(audioMimeType)) {
+          return res.status(400).json({
+            success: false,
+            error: `Unsupported audio type: ${audioMimeType}. Supported: ${PROCESS_AUDIO_CFG.PROCESS_AUDIO_SUPPORTED_TYPES.join(", ")}`,
+          });
+        }
+
+        if (req.file.size > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.`,
+            });
+        }
+
+        const userId = req.jwtUser?.userId || req.jwtUser?.id;
+        const audioBuffer = req.file.buffer;
+        const { text: transcribedText, detectedLanguage } =
+          await transcribeAudioAuto(audioBuffer, audioMimeType);
+
+        if (!transcribedText || transcribedText.trim() === "") {
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error:
+                "Could not transcribe audio. Please speak clearly or check the file format.",
+            });
+        }
+
+        const sourceLanguage =
+          detectedLanguage || (await detectTextLanguage(transcribedText));
+
+        let translatedText = transcribedText;
+        if (sourceLanguage !== targetLanguage) {
+          const result = await translateAndPolish(
+            transcribedText,
+            sourceLanguage,
+            targetLanguage,
+            "professional",
+          );
+          translatedText =
+            result.polishedText || result.translatedText || transcribedText;
+        }
+
+        res.json({
+          success: true,
+          sourceText: transcribedText,
+          targetText: translatedText,
+          sourceLanguage,
+          targetLanguage,
+          sourceType: "audio",
         });
+      } catch (error: any) {
+        console.error("[Process Audio] Error:", error);
+        res
+          .status(500)
+          .json({
+            success: false,
+            error: error.message || "Failed to process audio",
+          });
       }
-
-      if (req.file.size > PROCESS_AUDIO_CFG.PROCESS_AUDIO_MAX_SIZE_BYTES) {
-        return res.status(400).json({ success: false, error: `Audio file too large. Maximum size is ${PROCESS_AUDIO_CFG.formatMaxSize()}.` });
-      }
-
-      const userId = req.jwtUser?.userId || req.jwtUser?.id;
-      const audioBuffer = req.file.buffer;
-      const { text: transcribedText, detectedLanguage } = await transcribeAudioAuto(audioBuffer, audioMimeType);
-
-      if (!transcribedText || transcribedText.trim() === "") {
-        return res.status(400).json({ success: false, error: "Could not transcribe audio. Please speak clearly or check the file format." });
-      }
-
-      const sourceLanguage = detectedLanguage || await detectTextLanguage(transcribedText);
-
-      let translatedText = transcribedText;
-      if (sourceLanguage !== targetLanguage) {
-        const result = await translateAndPolish(transcribedText, sourceLanguage, targetLanguage, "professional");
-        translatedText = result.polishedText || result.translatedText || transcribedText;
-      }
-
-      res.json({
-        success: true,
-        sourceText: transcribedText,
-        targetText: translatedText,
-        sourceLanguage,
-        targetLanguage,
-        sourceType: "audio",
-      });
-    } catch (error: any) {
-      console.error("[Process Audio] Error:", error);
-      res.status(500).json({ success: false, error: error.message || "Failed to process audio" });
-    }
-  });
+    },
+  );
 
   // ──────────────────────────────────────────────────────────────────────────
   // POST /api/v1/a/doc-ai — Document Intelligence & Q&A Engine
@@ -6100,7 +8777,11 @@ export async function registerRoutes(
   const docUpload = multer({
     storage: multer.memoryStorage(),
     limits: { fileSize: 25 * 1024 * 1024 }, // 25 MB hard cap
-    fileFilter: (_req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
+    fileFilter: (
+      _req: Request,
+      file: Express.Multer.File,
+      cb: FileFilterCallback,
+    ) => {
       const allowed = [
         "application/pdf",
         "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -6110,12 +8791,19 @@ export async function registerRoutes(
         "image/jpg",
       ];
       if (allowed.includes(file.mimetype)) cb(null, true);
-      else cb(new Error("Unsupported file type. Please upload PDF, DOCX, TXT, PNG, or JPG."));
+      else
+        cb(
+          new Error(
+            "Unsupported file type. Please upload PDF, DOCX, TXT, PNG, or JPG.",
+          ),
+        );
     },
   });
 
   /** Extract plain text from the uploaded buffer */
-  async function extractTextFromBuffer(file: Express.Multer.File): Promise<string> {
+  async function extractTextFromBuffer(
+    file: Express.Multer.File,
+  ): Promise<string> {
     const { mimetype, buffer } = file;
 
     if (mimetype === "application/pdf") {
@@ -6123,7 +8811,10 @@ export async function registerRoutes(
       return parsed.text?.trim() || "";
     }
 
-    if (mimetype === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") {
+    if (
+      mimetype ===
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    ) {
       const result = await mammoth.extractRawText({ buffer });
       return result.value?.trim() || "";
     }
@@ -6191,12 +8882,19 @@ export async function registerRoutes(
         const mode = (req.body.mode as string) || "extract";
 
         if (!file) {
-          return res.status(400).json({ success: false, error: "No file uploaded." });
+          return res
+            .status(400)
+            .json({ success: false, error: "No file uploaded." });
         }
 
         const validModes = ["extract", "summarize", "qa", "blog"];
         if (!validModes.includes(mode)) {
-          return res.status(400).json({ success: false, error: "Invalid mode. Use extract, summarize, qa, or blog." });
+          return res
+            .status(400)
+            .json({
+              success: false,
+              error: "Invalid mode. Use extract, summarize, qa, or blog.",
+            });
         }
 
         // Step 1: Extract text from the file
@@ -6205,15 +8903,28 @@ export async function registerRoutes(
           extractedText = await extractTextFromBuffer(file);
         } catch (extractErr: any) {
           console.error("[DocAI] Text extraction failed:", extractErr.message);
-          return res.status(422).json({ success: false, error: "Could not extract text from this file. Please check the file is not corrupted or password-protected." });
+          return res
+            .status(422)
+            .json({
+              success: false,
+              error:
+                "Could not extract text from this file. Please check the file is not corrupted or password-protected.",
+            });
         }
 
         if (!extractedText) {
-          return res.status(422).json({ success: false, error: "No readable text found in this file." });
+          return res
+            .status(422)
+            .json({
+              success: false,
+              error: "No readable text found in this file.",
+            });
         }
 
         // Step 2: Call AI — with mock fallback
-        const aiKey = process.env.AI_INTEGRATIONS_GEMINI_API_KEY || process.env.GEMINI_API_KEY;
+        const aiKey =
+          process.env.AI_INTEGRATIONS_GEMINI_API_KEY ||
+          process.env.GEMINI_API_KEY;
         let aiResult: string;
 
         if (aiKey) {
@@ -6221,7 +8932,10 @@ export async function registerRoutes(
             const { GoogleGenAI } = await import("@google/genai");
             const routesGenaiOpts: any = { apiKey: aiKey };
             if (process.env.AI_INTEGRATIONS_GEMINI_BASE_URL) {
-              routesGenaiOpts.httpOptions = { apiVersion: "", baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL };
+              routesGenaiOpts.httpOptions = {
+                apiVersion: "",
+                baseUrl: process.env.AI_INTEGRATIONS_GEMINI_BASE_URL,
+              };
             }
             const genai = new GoogleGenAI(routesGenaiOpts);
             const prompt = buildPrompt(mode, extractedText);
@@ -6235,16 +8949,28 @@ export async function registerRoutes(
             aiResult = mockResponse(mode, file.originalname);
           }
         } else {
-          console.log("[DocAI] No AI key configured — returning mock response.");
+          console.log(
+            "[DocAI] No AI key configured — returning mock response.",
+          );
           aiResult = mockResponse(mode, file.originalname);
         }
 
-        return res.json({ success: true, result: aiResult, mode, filename: file.originalname });
+        return res.json({
+          success: true,
+          result: aiResult,
+          mode,
+          filename: file.originalname,
+        });
       } catch (err: any) {
         console.error("[DocAI] Unhandled error:", err);
-        return res.status(500).json({ success: false, error: err.message || "Internal server error." });
+        return res
+          .status(500)
+          .json({
+            success: false,
+            error: err.message || "Internal server error.",
+          });
       }
-    }
+    },
   );
 
   return httpServer;

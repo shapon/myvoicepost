@@ -184,6 +184,7 @@ export const subscriptionPlans = pgTable("mvp_subscription_plans", {
   offlineRecording: boolean("offline_recording").notNull().default(false),
   priceMonthly: integer("price_monthly").notNull().default(0),
   stripePriceId: varchar("stripe_price_id", { length: 255 }),
+  rcProductIdentifier: varchar("rc_product_identifier", { length: 100 }),
   isDefault: boolean("is_default").default(false),
   isVisible: boolean("is_visible").default(true),
   createdAt: timestamp("created_at").defaultNow(),

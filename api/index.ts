@@ -9,7 +9,7 @@ import { randomUUID } from "crypto";
 import crypto from "crypto";
 import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
-import { eq, and, desc, gte, lt, lte, sql, count } from "drizzle-orm";
+import { eq, and, desc, gte, lt, lte, sql, count, inArray } from "drizzle-orm";
 import { pgTable, text, varchar, timestamp, uuid, integer, boolean, numeric } from "drizzle-orm/pg-core";
 import { GoogleGenAI, Type } from "@google/genai";
 import pRetry, { AbortError } from "p-retry";
@@ -102,6 +102,7 @@ const subscriptionPlans = pgTable("mvp_subscription_plans", {
   offlineRecording: boolean("offline_recording").notNull().default(false),
   priceMonthly: integer("price_monthly").notNull().default(0),
   stripePriceId: varchar("stripe_price_id", { length: 255 }),
+  rcProductIdentifier: varchar("rc_product_identifier", { length: 100 }),
   isDefault: boolean("is_default").default(false),
   isVisible: boolean("is_visible").default(true),
   createdAt: timestamp("created_at").defaultNow(),
@@ -7124,6 +7125,237 @@ async function handleStripeWebhook(req: Request, res: Response) {
   }
 }
 app.post("/api/v1/p/stripe-webhook", handleStripeWebhook);
+
+// POST /api/v1/a/revenuecat-webhook - RevenueCat webhook handler
+async function handleRCWebhook(req: Request, res: Response) {
+  try {
+    const webhookSecret = process.env.REVENUECAT_WEBHOOK_SECRET;
+    if (webhookSecret) {
+      const authHeader = req.headers.authorization;
+      if (!authHeader || authHeader !== webhookSecret) {
+        console.warn("[RC Webhook] Invalid or missing Authorization header");
+        return res.status(401).json({ error: "Unauthorized" });
+      }
+    } else {
+      console.warn("[RC Webhook] REVENUECAT_WEBHOOK_SECRET not set — skipping verification");
+    }
+
+    const event = req.body?.event;
+    if (!event) {
+      return res.status(400).json({ error: "Invalid webhook payload" });
+    }
+
+    const {
+      type: eventType,
+      app_user_id: appUserId,
+      original_app_user_id: originalAppUserId,
+      product_id: productId,
+      expiration_at_ms: expirationAtMs,
+      original_transaction_id: originalTransactionId,
+      transaction_id: transactionId,
+      environment,
+      id: eventId,
+    } = event;
+
+    console.log(`[RC Webhook] type=${eventType} user=${appUserId} product=${productId} env=${environment}`);
+
+    const userId = appUserId || originalAppUserId;
+    if (!userId) {
+      console.warn("[RC Webhook] No app_user_id in event");
+      return res.json({ received: true });
+    }
+
+    const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+    if (userResult.length === 0) {
+      console.warn(`[RC Webhook] User not found: ${userId}`);
+      return res.json({ received: true });
+    }
+    const user = userResult[0];
+
+    const normalizedProductId = (productId ?? "").split(":")[0];
+    const paymentToken = originalTransactionId || transactionId || eventId || "";
+
+    const findPlan = async () => {
+      if (normalizedProductId) {
+        const r = await db.select().from(subscriptionPlans)
+          .where(eq(subscriptionPlans.rcProductIdentifier, normalizedProductId)).limit(1);
+        if (r.length > 0) return r[0];
+      }
+      const fb = await db.select().from(subscriptionPlans)
+        .where(gte(subscriptionPlans.priceMonthly, 1)).limit(1);
+      return fb[0] ?? null;
+    };
+
+    const fireNotification = async (
+      notifType: string,
+      title: string,
+      body: string,
+      dedupKey: string,
+      emailFn?: () => void,
+    ) => {
+      try {
+        const existing = await db.select().from(notificationLog)
+          .where(and(eq(notificationLog.userId, user.id), eq(notificationLog.notificationType, notifType), eq(notificationLog.message, dedupKey)))
+          .limit(1);
+        if (existing.length > 0) return;
+        const { pushEnabled: prefPush, emailEnabled: prefEmail } = await getNotificationPrefApi(user.id, notifType);
+        const tokens = await db.select().from(pushTokens)
+          .where(and(eq(pushTokens.userId, user.id), eq(pushTokens.isActive, true)));
+        if (tokens.length > 0 && prefPush) {
+          await sendExpoPushNotifications(tokens.map((t) => t.pushToken), title, body, { type: notifType, screen: "subscription" });
+        }
+        await db.insert(notificationLog).values({ userId: user.id, notificationType: notifType, title, status: "sent", message: dedupKey });
+        if (user.email && prefEmail && emailFn) emailFn();
+      } catch (e: any) {
+        console.error(`[RC Webhook] Notification error (${notifType}):`, e.message);
+      }
+    };
+
+    switch (eventType) {
+      case "INITIAL_PURCHASE":
+      case "NON_RENEWING_PURCHASE": {
+        const plan = await findPlan();
+        if (!plan) { console.warn(`[RC Webhook] No plan for product: ${normalizedProductId}`); break; }
+
+        const existingActive = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+        if (existingActive.length > 0) {
+          await db.update(userSubscriptions).set({ status: "superseded" }).where(eq(userSubscriptions.id, existingActive[0].id));
+        }
+
+        const isLifetime = eventType === "NON_RENEWING_PURCHASE";
+        const validDateUpto = isLifetime
+          ? new Date("2099-12-31T23:59:59Z")
+          : expirationAtMs
+          ? new Date(expirationAtMs)
+          : (() => { const d = new Date(); d.setDate(d.getDate() + plan.validDays); return d; })();
+
+        const totalMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
+
+        await db.insert(userSubscriptions).values({
+          userId: user.id,
+          planId: plan.id,
+          validDateUpto,
+          minutesUsed: 0,
+          chunksUsed: 0,
+          minutesRemaining: String(totalMinutes),
+          paymentToken,
+          status: "active",
+        });
+        await refreshUserRole(user.id);
+        console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name}`);
+
+        const notifTitle = isLifetime ? "Lifetime Access Activated" : "Subscription Activated";
+        (async () => {
+          await fireNotification(
+            "subscription_renewed", notifTitle,
+            `Your ${plan.name} plan is now active. Enjoy MyVoicePost Pro!`,
+            `rc_purchase_${paymentToken}`,
+            () => sendSubscriptionRenewedEmail(user.email!, plan.name),
+          );
+        })();
+        break;
+      }
+
+      case "RENEWAL": {
+        const validDateUpto = expirationAtMs ? new Date(expirationAtMs) : null;
+        const existingResult = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, paymentToken))).limit(1);
+
+        if (existingResult.length > 0) {
+          const updates: Record<string, any> = { status: "active" };
+          if (validDateUpto) updates.validDateUpto = validDateUpto;
+          await db.update(userSubscriptions).set(updates).where(eq(userSubscriptions.id, existingResult[0].id));
+        } else {
+          const plan = await findPlan();
+          if (plan) {
+            const d = validDateUpto || (() => { const dt = new Date(); dt.setDate(dt.getDate() + plan.validDays); return dt; })();
+            await db.insert(userSubscriptions).values({
+              userId: user.id, planId: plan.id, validDateUpto: d,
+              minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(plan.validTotalMinutes || 0),
+              paymentToken, status: "active",
+            });
+          }
+        }
+        await refreshUserRole(user.id);
+        console.log(`[RC Webhook] RENEWAL: User ${user.id} renewed`);
+
+        (async () => {
+          const plan = await findPlan();
+          const planName = plan?.name ?? "Pro";
+          await fireNotification(
+            "subscription_renewed", "Subscription Renewed",
+            `Your ${planName} plan has been renewed. Enjoy your recording minutes!`,
+            `rc_renewal_${paymentToken}_${expirationAtMs || Date.now()}`,
+            () => sendSubscriptionRenewedEmail(user.email!, planName),
+          );
+        })();
+        break;
+      }
+
+      case "CANCELLATION": {
+        const r = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+        if (r.length > 0) await db.update(userSubscriptions).set({ status: "cancelled" }).where(eq(userSubscriptions.id, r[0].id));
+        await refreshUserRole(user.id);
+        console.log(`[RC Webhook] CANCELLATION: User ${user.id} cancelled`);
+        break;
+      }
+
+      case "EXPIRATION": {
+        const r = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), inArray(userSubscriptions.status, ["active", "cancelled"]))).limit(1);
+        if (r.length > 0) await db.update(userSubscriptions).set({ status: "expired" }).where(eq(userSubscriptions.id, r[0].id));
+        await refreshUserRole(user.id);
+        console.log(`[RC Webhook] EXPIRATION: User ${user.id} expired`);
+        (async () => {
+          await fireNotification(
+            "subscription_expired", "Subscription Expired",
+            "Your subscription has ended. Subscribe again to continue enjoying MyVoicePost.",
+            `rc_expired_${paymentToken}`,
+            () => sendSubscriptionExpiredEmail(user.email!),
+          );
+        })();
+        break;
+      }
+
+      case "BILLING_ISSUE": {
+        const r = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active"))).limit(1);
+        if (r.length > 0) await db.update(userSubscriptions).set({ status: "payment_failed" }).where(eq(userSubscriptions.id, r[0].id));
+        await refreshUserRole(user.id);
+        console.log(`[RC Webhook] BILLING_ISSUE: User ${user.id} billing issue`);
+        (async () => {
+          await fireNotification(
+            "payment_failed", "Payment Issue",
+            "We couldn't process your payment. Please update your payment method.",
+            `rc_billing_${paymentToken}`,
+            () => sendPaymentFailedEmail(user.email!),
+          );
+        })();
+        break;
+      }
+
+      case "UNCANCELLATION": {
+        const r = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "cancelled"))).limit(1);
+        if (r.length > 0) await db.update(userSubscriptions).set({ status: "active" }).where(eq(userSubscriptions.id, r[0].id));
+        await refreshUserRole(user.id);
+        console.log(`[RC Webhook] UNCANCELLATION: User ${user.id} re-enabled auto-renew`);
+        break;
+      }
+
+      default:
+        console.log(`[RC Webhook] Unhandled event type: ${eventType}`);
+    }
+
+    res.json({ received: true });
+  } catch (error: any) {
+    console.error("[RC Webhook] Error:", error.message);
+    res.status(400).json({ error: "Webhook processing failed" });
+  }
+}
+app.post("/api/v1/a/revenuecat-webhook", handleRCWebhook);
 
 // ============ PUSH NOTIFICATIONS ============
 
