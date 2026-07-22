@@ -58,8 +58,8 @@ const users = pgTable("mvp_users", {
   trialStartsAt: timestamp("trial_starts_at"),
   trialEndsAt: timestamp("trial_ends_at"),
   trialUsed: boolean("trial_used").default(false),
-  trialMinutesTotal: integer("trial_minutes_total").default(90),
-  trialMinutesUsed: numeric("trial_minutes_used", { precision: 10, scale: 2 }).default("0"),
+  audioMinutesAdded: integer("audio_minutes_added").default(90),
+  audioMinutesUsed: numeric("audio_minutes_used", { precision: 10, scale: 2 }).default("0"),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
   stripeSubscriptionId: varchar("stripe_subscription_id", { length: 255 }),
   subscriptionId: uuid("subscription_id"),
@@ -2510,9 +2510,9 @@ app.post("/api/v1/p/login", async (req, res) => {
     let trialExpired = false;
     if (user && user.trialEndsAt) {
       const now = new Date();
-      const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
-      const trialMinutesTotal = user.trialMinutesTotal || 90;
-      const trialMinutesRemaining = trialMinutesTotal - trialMinutesUsed;
+      const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
+      const audioMinutesAdded = user.audioMinutesAdded || 90;
+      const trialMinutesRemaining = audioMinutesAdded - audioMinutesUsed;
 
       if (now > user.trialEndsAt || trialMinutesRemaining <= 0) {
         trialExpired = true;
@@ -2632,8 +2632,8 @@ async function handleRegistration(req: Request, res: Response) {
       trialStartsAt,
       trialEndsAt,
       trialUsed: false,
-      trialMinutesTotal: 90,
-      trialMinutesUsed: "0",
+      audioMinutesAdded: 90,
+      audioMinutesUsed: "0",
     }).returning();
 
     const user = result[0];
@@ -2725,9 +2725,9 @@ app.post("/api/v1/p/auth/login", async (req, res) => {
     let trialExpired = false;
     if (user.trialEndsAt) {
       const now = new Date();
-      const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
-      const trialMinutesTotal = user.trialMinutesTotal || 90;
-      if (now > user.trialEndsAt || trialMinutesTotal - trialMinutesUsed <= 0) {
+      const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
+      const audioMinutesAdded = user.audioMinutesAdded || 90;
+      if (now > user.trialEndsAt || audioMinutesAdded - audioMinutesUsed <= 0) {
         trialExpired = true;
       }
     }
@@ -2780,8 +2780,8 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
       const userResult = await db.select({
         username: users.username,
         email: users.email,
-        trialMinutesTotal: users.trialMinutesTotal,
-        trialMinutesUsed: users.trialMinutesUsed,
+        audioMinutesAdded: users.audioMinutesAdded,
+        audioMinutesUsed: users.audioMinutesUsed,
         trialStartsAt: users.trialStartsAt,
         trialEndsAt: users.trialEndsAt,
         trialUsed: users.trialUsed,
@@ -2791,8 +2791,8 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
         freshEmail = u.email ?? freshEmail;
         freshUsername = u.username ?? freshUsername;
         trialData = {
-          trialMinutesTotal: u.trialMinutesTotal || 90,
-          trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
+          audioMinutesAdded: u.audioMinutesAdded || 90,
+          audioMinutesUsed: parseFloat(String(u.audioMinutesUsed || "0")),
           trialStartsAt: u.trialStartsAt,
           trialEndsAt: u.trialEndsAt,
           trialUsed: u.trialUsed,
@@ -3109,8 +3109,8 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
       trialStartsAt,
       trialEndsAt,
       trialUsed: false,
-      trialMinutesTotal: 90,
-      trialMinutesUsed: "0",
+      audioMinutesAdded: 90,
+      audioMinutesUsed: "0",
     }).returning();
 
     const newUser = result[0];
@@ -3287,8 +3287,8 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
       trialStartsAt,
       trialEndsAt,
       trialUsed: false,
-      trialMinutesTotal: 90,
-      trialMinutesUsed: "0",
+      audioMinutesAdded: 90,
+      audioMinutesUsed: "0",
     }).returning();
 
     const newUser = result[0];
@@ -3776,8 +3776,8 @@ app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
     let trialData: any = {};
     if (userId) {
       const userResult = await db.select({
-        trialMinutesTotal: users.trialMinutesTotal,
-        trialMinutesUsed: users.trialMinutesUsed,
+        audioMinutesAdded: users.audioMinutesAdded,
+        audioMinutesUsed: users.audioMinutesUsed,
         trialStartsAt: users.trialStartsAt,
         trialEndsAt: users.trialEndsAt,
         trialUsed: users.trialUsed,
@@ -3786,8 +3786,8 @@ app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
       if (userResult.length > 0) {
         const u = userResult[0];
         trialData = {
-          trialMinutesTotal: u.trialMinutesTotal || 90,
-          trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
+          audioMinutesAdded: u.audioMinutesAdded || 90,
+          audioMinutesUsed: parseFloat(String(u.audioMinutesUsed || "0")),
           trialStartsAt: u.trialStartsAt,
           trialEndsAt: u.trialEndsAt,
           trialUsed: u.trialUsed,
@@ -3795,7 +3795,7 @@ app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
       }
     }
 
-    console.log(`[DEBUG /m/me] OUTPUT: success=true, userId=${userId}, trialMinutesUsed=${trialData.trialMinutesUsed}, trialMinutesTotal=${trialData.trialMinutesTotal}`);
+    console.log(`[DEBUG /m/me] OUTPUT: success=true, userId=${userId}, audioMinutesUsed=${trialData.audioMinutesUsed}, audioMinutesAdded=${trialData.audioMinutesAdded}`);
     res.json({
       success: true,
       user: {
@@ -3825,7 +3825,7 @@ async function logUsageAndGetTrialInfo(
   durationSeconds: number,
   language: string,
   tag: string
-): Promise<{ trial_minutes_total: number; trial_minutes_used: number; is_subscribed: boolean } | null> {
+): Promise<{ audio_minutes_added: number; audio_minutes_used: number; is_subscribed: boolean } | null> {
   if (userId && durationSeconds > 0) {
     try {
       const totalSec = Math.round(durationSeconds);
@@ -3844,7 +3844,7 @@ async function logUsageAndGetTrialInfo(
       const usageMinutes = totalSec / 60;
       await db.update(users)
         .set({
-          trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
+          audioMinutesUsed: sql`COALESCE(${users.audioMinutesUsed}, '0')::numeric + ${usageMinutes}`,
           updatedAt: new Date(),
         })
         .where(eq(users.id, userId));
@@ -3863,14 +3863,14 @@ async function logUsageAndGetTrialInfo(
     const updatedUser = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     if (updatedUser.length > 0) {
       const u = updatedUser[0];
-      const minutesTotal = u.trialMinutesTotal || 90;
-      const minutesUsed = parseFloat(u.trialMinutesUsed || "0") || 0;
+      const minutesTotal = u.audioMinutesAdded || 90;
+      const minutesUsed = parseFloat(u.audioMinutesUsed || "0") || 0;
       const hasActiveSub = await db.select().from(userSubscriptions)
         .where(and(eq(userSubscriptions.userId, userId), eq(userSubscriptions.status, "active")))
         .limit(1);
       return {
-        trial_minutes_total: minutesTotal,
-        trial_minutes_used: Math.round(minutesUsed * 100) / 100,
+        audio_minutes_added: minutesTotal,
+        audio_minutes_used: Math.round(minutesUsed * 100) / 100,
         is_subscribed: hasActiveSub.length > 0,
       };
     }
@@ -4665,9 +4665,9 @@ async function getTrialInfo(userId: string) {
   if (!user || !user.trialStartsAt || !user.trialEndsAt) return null;
 
   const now = new Date();
-  const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
-  const trialMinutesTotal = user.trialMinutesTotal || 90;
-  const trialMinutesRemaining = Math.max(0, trialMinutesTotal - trialMinutesUsed);
+  const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
+  const audioMinutesAdded = user.audioMinutesAdded || 90;
+  const trialMinutesRemaining = Math.max(0, audioMinutesAdded - audioMinutesUsed);
   const timeExpired = now > user.trialEndsAt;
   const minutesExpired = trialMinutesRemaining <= 0;
   const isActive = !timeExpired && !minutesExpired;
@@ -4692,8 +4692,8 @@ async function getTrialInfo(userId: string) {
     is_subscribed: isSubscribed,
     starts_at: user.trialStartsAt.toISOString(),
     ends_at: user.trialEndsAt.toISOString(),
-    minutes_total: trialMinutesTotal,
-    minutes_used: trialMinutesUsed,
+    minutes_total: audioMinutesAdded,
+    minutes_used: audioMinutesUsed,
     minutes_remaining: trialMinutesRemaining,
     days_remaining: isActive ? daysRemaining : 0,
     hours_remaining: isActive ? hoursRemaining : 0,
@@ -5208,8 +5208,8 @@ app.get("/api/v1/a/usage-stats", mobileAuthMiddleware, async (req, res) => {
 
     console.log(`[DEBUG /m/usage-stats] INPUT: userId=${userId}`);
     const userResult = await db.select({
-      trialMinutesTotal: users.trialMinutesTotal,
-      trialMinutesUsed: users.trialMinutesUsed,
+      audioMinutesAdded: users.audioMinutesAdded,
+      audioMinutesUsed: users.audioMinutesUsed,
       trialStartsAt: users.trialStartsAt,
       trialEndsAt: users.trialEndsAt,
       trialUsed: users.trialUsed,
@@ -5225,12 +5225,12 @@ app.get("/api/v1/a/usage-stats", mobileAuthMiddleware, async (req, res) => {
       totalSeconds: sql<number>`COALESCE(sum(${audioLogs.usageSeconds}), 0)::int`,
     }).from(audioLogs).where(eq(audioLogs.userId, userId));
 
-    console.log(`[DEBUG /m/usage-stats] OUTPUT: userId=${userId}, trialMinutesTotal=${user.trialMinutesTotal || 90}, trialMinutesUsed=${parseFloat(String(user.trialMinutesUsed || "0"))}, totalTranscriptions=${totalLogs[0]?.count || 0}, totalUsageSeconds=${totalLogs[0]?.totalSeconds || 0}`);
+    console.log(`[DEBUG /m/usage-stats] OUTPUT: userId=${userId}, audioMinutesAdded=${user.audioMinutesAdded || 90}, audioMinutesUsed=${parseFloat(String(user.audioMinutesUsed || "0"))}, totalTranscriptions=${totalLogs[0]?.count || 0}, totalUsageSeconds=${totalLogs[0]?.totalSeconds || 0}`);
     res.json({
       success: true,
       stats: {
-        trialMinutesTotal: user.trialMinutesTotal || 90,
-        trialMinutesUsed: parseFloat(String(user.trialMinutesUsed || "0")),
+        audioMinutesAdded: user.audioMinutesAdded || 90,
+        audioMinutesUsed: parseFloat(String(user.audioMinutesUsed || "0")),
         trialStartsAt: user.trialStartsAt,
         trialEndsAt: user.trialEndsAt,
         trialUsed: user.trialUsed,
@@ -5354,11 +5354,11 @@ async function recoverPendingTopups(userId: string, stripeCustomerId: string | n
         if (userResult.length === 0) return;
 
         const user = userResult[0];
-        const currentMinutesTotal = user.trialMinutesTotal || 90;
+        const currentMinutesTotal = user.audioMinutesAdded || 90;
         const newMinutesTotal = currentMinutesTotal + topupMinutes;
 
         await tx.update(users)
-          .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+          .set({ audioMinutesAdded: newMinutesTotal, updatedAt: new Date() })
           .where(eq(users.id, userId));
 
         const activeSub = await tx.select().from(userSubscriptions)
@@ -5906,7 +5906,7 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
       return res.json({
         success: true,
         message: "Top-up already applied",
-        trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+        audioMinutesAdded: user[0]?.audioMinutesAdded || 90,
       });
     }
 
@@ -5930,11 +5930,11 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
       }
 
       const user = userResult[0];
-      const currentMinutesTotal = user.trialMinutesTotal || 90;
+      const currentMinutesTotal = user.audioMinutesAdded || 90;
       const newMinutesTotal = currentMinutesTotal + topupMinutes;
 
       await tx.update(users)
-        .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+        .set({ audioMinutesAdded: newMinutesTotal, updatedAt: new Date() })
         .where(eq(users.id, userId));
 
       // Also update active subscription record minutes_remaining if exists
@@ -5978,7 +5978,7 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
         validDateUpto: new Date(),
       }).returning({ id: userSubscriptions.id });
 
-      const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
+      const newRemaining = newMinutesTotal - parseFloat(user.audioMinutesUsed || "0");
       return { alreadyApplied: false, newMinutesTotal, newRemaining, newTopupSubId: newTopupSub?.id };
     });
 
@@ -5987,7 +5987,7 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
       return res.json({
         success: true,
         message: "Top-up already applied",
-        trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+        audioMinutesAdded: user[0]?.audioMinutesAdded || 90,
       });
     }
 
@@ -5996,7 +5996,7 @@ async function handleConfirmTopup(req: Request, res: Response, userId: string) {
     res.json({
       success: true,
       message: `Top-up of ${topupMinutes} minutes applied successfully`,
-      trialMinutesTotal: result.newMinutesTotal,
+      audioMinutesAdded: result.newMinutesTotal,
       minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
     });
 
@@ -6377,7 +6377,7 @@ app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any
         const planDays = matchedPlan.validDays || 30;
 
         const currentTrialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
-        const currentMinutesTotal = user.trialMinutesTotal || 90;
+        const currentMinutesTotal = user.audioMinutesAdded || 90;
         const isWithinTrial = currentTrialEndsAt && currentTrialEndsAt > now;
 
         let newTrialEndsAt: Date;
@@ -6396,7 +6396,7 @@ app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any
         await db.update(users)
           .set({
             trialEndsAt: newTrialEndsAt,
-            trialMinutesTotal: newMinutesTotal,
+            audioMinutesAdded: newMinutesTotal,
             trialUsed: false,
             updatedAt: now,
           })
@@ -6628,8 +6628,8 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 const planDays = matchedPlan.validDays || 30;
 
                 const currentTrialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
-                const currentMinutesTotal = user.trialMinutesTotal || 90;
-                const currentMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
+                const currentMinutesTotal = user.audioMinutesAdded || 90;
+                const currentMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
                 const currentMinutesRemaining = Math.max(0, currentMinutesTotal - currentMinutesUsed);
                 const isWithinTrial = currentTrialEndsAt && currentTrialEndsAt > now;
 
@@ -6651,7 +6651,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 await db.update(users)
                   .set({
                     trialEndsAt: newTrialEndsAt,
-                    trialMinutesTotal: newMinutesTotal,
+                    audioMinutesAdded: newMinutesTotal,
                     trialUsed: false,
                     updatedAt: now,
                   })
@@ -7026,11 +7026,11 @@ async function handleStripeWebhook(req: Request, res: Response) {
             }
 
             const user = userResult[0];
-            const currentMinutesTotal = user.trialMinutesTotal || 90;
+            const currentMinutesTotal = user.audioMinutesAdded || 90;
             const newMinutesTotal = currentMinutesTotal + topupMinutes;
 
             await tx.update(users)
-              .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+              .set({ audioMinutesAdded: newMinutesTotal, updatedAt: new Date() })
               .where(eq(users.id, topupUserId));
 
             const activeSub = await tx.select().from(userSubscriptions)
@@ -7071,7 +7071,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
               validDateUpto: new Date(),
             });
 
-            const newRemaining = newMinutesTotal - parseFloat(user.trialMinutesUsed || "0");
+            const newRemaining = newMinutesTotal - parseFloat(user.audioMinutesUsed || "0");
             console.log(`[Stripe Webhook] Top-up applied: userId=${topupUserId}, +${topupMinutes} mins, newTotal=${newMinutesTotal}, remaining=${newRemaining.toFixed(2)}`);
           });
         } else {
@@ -7235,8 +7235,8 @@ async function handleRCWebhook(req: Request, res: Response) {
         // FIX 1+2: Carry over unused trial minutes, then mark trial as converted
         let carryoverMinutes = 0;
         if (!user.trialUsed && user.trialEndsAt && new Date() < user.trialEndsAt) {
-          const trialUsed = parseFloat(String(user.trialMinutesUsed || "0"));
-          const trialTotal = user.trialMinutesTotal || 90;
+          const trialUsed = parseFloat(String(user.audioMinutesUsed || "0"));
+          const trialTotal = user.audioMinutesAdded || 90;
           const remaining = trialTotal - trialUsed;
           if (remaining > 0) carryoverMinutes = remaining;
         }
@@ -7262,8 +7262,15 @@ async function handleRCWebhook(req: Request, res: Response) {
           paymentToken,
           status: "active",
         });
+        // Add plan minutes to user's audio_minutes_added total in mvp_users
+        if (planMinutes > 0) {
+          await db.update(users).set({
+            audioMinutesAdded: sql`COALESCE(${users.audioMinutesAdded}, 0) + ${planMinutes}`,
+            updatedAt: new Date(),
+          }).where(eq(users.id, user.id));
+        }
         await refreshUserRole(user.id);
-        console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins)`);
+        console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins, planMinutes: ${planMinutes})`);
 
         const notifTitle = isLifetime ? "Lifetime Access Activated" : "Subscription Activated";
         (async () => {
@@ -7749,19 +7756,19 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       const trialLowMinUsers = await db.select({
         id: users.id,
         email: users.email,
-        trialMinutesTotal: users.trialMinutesTotal,
-        trialMinutesUsed: users.trialMinutesUsed,
+        audioMinutesAdded: users.audioMinutesAdded,
+        audioMinutesUsed: users.audioMinutesUsed,
       }).from(users)
         .where(and(
-          sql`${users.trialMinutesTotal} IS NOT NULL`,
-          sql`${users.trialMinutesUsed} IS NOT NULL`,
-          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
-          sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) > 0`,
+          sql`${users.audioMinutesAdded} IS NOT NULL`,
+          sql`${users.audioMinutesUsed} IS NOT NULL`,
+          sql`(${users.audioMinutesAdded} - COALESCE(${users.audioMinutesUsed}, 0)) <= 10`,
+          sql`(${users.audioMinutesAdded} - COALESCE(${users.audioMinutesUsed}, 0)) > 0`,
         ));
 
       for (const trialUser of trialLowMinUsers) {
         const minsLeft = Math.max(0, Math.floor(
-          (Number(trialUser.trialMinutesTotal) || 0) - (Number(trialUser.trialMinutesUsed) || 0)
+          (Number(trialUser.audioMinutesAdded) || 0) - (Number(trialUser.audioMinutesUsed) || 0)
         ));
 
         const alreadySent = await db.select().from(notificationLog)

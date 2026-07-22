@@ -9,6 +9,7 @@ export default function SubscribeSuccess() {
   useEffect(() => {
     queryClient.invalidateQueries({ queryKey: ["/api/v1/a/subscription-status"] });
     queryClient.invalidateQueries({ queryKey: ["/api/auth/me"] });
+    queryClient.invalidateQueries({ queryKey: ["/api/v1/a/usage-stats"] });
   }, []);
 
   return (

@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
-import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle, Bell } from "lucide-react";
+import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle, Bell, Clock } from "lucide-react";
 
 interface SubscriptionInfo {
   id: string;
@@ -43,6 +43,16 @@ interface SubscriptionInfo {
   cancel_at_period_end: boolean;
   current_period_end: string | null;
   stripe_status: string | null;
+}
+
+interface UsageStats {
+  audioMinutesAdded: number;
+  audioMinutesUsed: number;
+  totalTranscriptions: number;
+  totalUsageSeconds: number;
+  trialStartsAt: string | null;
+  trialEndsAt: string | null;
+  trialUsed: boolean;
 }
 
 function formatDate(iso: string | null | undefined): string {
@@ -95,6 +105,17 @@ export default function AccountSettings() {
   }>({
     queryKey: ["/api/v1/a/subscription-status"],
   });
+
+  // ── Usage stats query ────────────────────────────────────────────────────────
+  const { data: statsData, isLoading: statsLoading } = useQuery<{
+    success: boolean;
+    stats: UsageStats;
+  }>({
+    queryKey: ["/api/v1/a/usage-stats"],
+    refetchInterval: 30_000,
+  });
+
+  const stats = statsData?.stats;
 
   const sub = subData?.subscription ?? null;
   const hasSub = subData?.has_active_subscription ?? false;
@@ -468,6 +489,74 @@ export default function AccountSettings() {
                     </div>
                   )}
                 </>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Minute Balance */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-muted-foreground" />
+                <CardTitle className="text-base">Minute Balance</CardTitle>
+              </div>
+              <CardDescription>Your current audio minute usage</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              {statsLoading ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-5 w-48" />
+                  <Skeleton className="h-2 w-full" />
+                  <div className="grid grid-cols-2 gap-3">
+                    <Skeleton className="h-16 w-full" />
+                    <Skeleton className="h-16 w-full" />
+                  </div>
+                </div>
+              ) : stats ? (
+                <>
+                  <div className="flex items-center justify-between text-sm flex-wrap gap-2">
+                    <span className="text-muted-foreground">
+                      {stats.audioMinutesUsed.toFixed(1)} / {stats.audioMinutesAdded} min used
+                    </span>
+                    <Badge
+                      variant={stats.audioMinutesUsed >= stats.audioMinutesAdded ? "destructive" : "secondary"}
+                      data-testid="status-minutes-balance"
+                    >
+                      {stats.audioMinutesAdded - stats.audioMinutesUsed > 0
+                        ? `${(stats.audioMinutesAdded - stats.audioMinutesUsed).toFixed(1)} min remaining`
+                        : "No minutes left"}
+                    </Badge>
+                  </div>
+                  <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-primary rounded-full transition-all"
+                      style={{
+                        width: `${Math.min(100, (stats.audioMinutesUsed / Math.max(1, stats.audioMinutesAdded)) * 100)}%`,
+                      }}
+                      data-testid="progress-minutes"
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3 pt-1">
+                    <Card>
+                      <CardContent className="pt-3 pb-3">
+                        <p className="text-xs text-muted-foreground mb-1">Total added</p>
+                        <p className="text-lg font-bold" data-testid="stat-minutes-added">
+                          {stats.audioMinutesAdded} min
+                        </p>
+                      </CardContent>
+                    </Card>
+                    <Card>
+                      <CardContent className="pt-3 pb-3">
+                        <p className="text-xs text-muted-foreground mb-1">Used</p>
+                        <p className="text-lg font-bold" data-testid="stat-minutes-used">
+                          {stats.audioMinutesUsed.toFixed(1)} min
+                        </p>
+                      </CardContent>
+                    </Card>
+                  </div>
+                </>
+              ) : (
+                <p className="text-sm text-muted-foreground">No usage data available.</p>
               )}
             </CardContent>
           </Card>

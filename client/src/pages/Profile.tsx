@@ -22,8 +22,8 @@ import {
 } from "lucide-react";
 
 interface UsageStats {
-  trialMinutesTotal: number;
-  trialMinutesUsed: number;
+  audioMinutesAdded: number;
+  audioMinutesUsed: number;
   totalTranscriptions: number;
   totalUsageSeconds: number;
   trialStartsAt: string | null;
@@ -83,6 +83,7 @@ export default function Profile() {
     stats: UsageStats;
   }>({
     queryKey: ["/api/v1/a/usage-stats"],
+    refetchInterval: 30_000,
   });
 
   const { data: subData } = useQuery<{
@@ -214,7 +215,7 @@ export default function Profile() {
               {
                 label: "Trial minutes",
                 icon: Clock,
-                value: statsLoading ? null : `${stats?.trialMinutesUsed?.toFixed(1) ?? 0} / ${stats?.trialMinutesTotal ?? 90}`,
+                value: statsLoading ? null : `${stats?.audioMinutesUsed?.toFixed(1) ?? 0} / ${stats?.audioMinutesAdded ?? 90}`,
                 testId: "stat-trial-usage",
               },
               {
@@ -253,7 +254,7 @@ export default function Profile() {
               <CardContent>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm">
-                    {stats.trialMinutesUsed.toFixed(1)} / {stats.trialMinutesTotal} min used
+                    {stats.audioMinutesUsed.toFixed(1)} / {stats.audioMinutesAdded} min used
                   </span>
                   <Badge
                     variant={stats.trialUsed ? "destructive" : "secondary"}
@@ -268,7 +269,7 @@ export default function Profile() {
                     style={{
                       width: `${Math.min(
                         100,
-                        (stats.trialMinutesUsed / stats.trialMinutesTotal) * 100
+                        (stats.audioMinutesUsed / stats.audioMinutesAdded) * 100
                       )}%`,
                     }}
                   />

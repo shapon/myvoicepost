@@ -208,9 +208,9 @@ async function refreshUserRole(userId: string): Promise<UserRole> {
     const now = new Date();
     const trialActive =
       user.trialEndsAt && !user.trialUsed && now < user.trialEndsAt;
-    const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
-    const trialMinutesTotal = user.trialMinutesTotal || 90;
-    const trialHasMinutes = trialMinutesTotal - trialMinutesUsed > 0;
+    const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
+    const audioMinutesAdded = user.audioMinutesAdded || 90;
+    const trialHasMinutes = audioMinutesAdded - audioMinutesUsed > 0;
 
     if (trialActive && trialHasMinutes) {
       newRole = "TRIAL";
@@ -988,9 +988,9 @@ export async function registerRoutes(
       let trialExpired = false;
       if (fullUser && fullUser.trialEndsAt && !fullUser.trialUsed) {
         const now = new Date();
-        const trialMinutesUsed = parseFloat(fullUser.trialMinutesUsed || "0");
-        const trialMinutesTotal = fullUser.trialMinutesTotal || 90;
-        const trialMinutesRemaining = trialMinutesTotal - trialMinutesUsed;
+        const audioMinutesUsed = parseFloat(fullUser.audioMinutesUsed || "0");
+        const audioMinutesAdded = fullUser.audioMinutesAdded || 90;
+        const trialMinutesRemaining = audioMinutesAdded - audioMinutesUsed;
 
         if (now > fullUser.trialEndsAt || trialMinutesRemaining <= 0) {
           trialExpired = true;
@@ -1178,8 +1178,8 @@ export async function registerRoutes(
           trialStartsAt,
           trialEndsAt,
           trialUsed: false,
-          trialMinutesTotal: 90,
-          trialMinutesUsed: "0",
+          audioMinutesAdded: 90,
+          audioMinutesUsed: "0",
         })
         .where(eq(users.id, user.id));
 
@@ -1431,8 +1431,8 @@ export async function registerRoutes(
           trialStartsAt,
           trialEndsAt,
           trialUsed: false,
-          trialMinutesTotal: 90,
-          trialMinutesUsed: "0",
+          audioMinutesAdded: 90,
+          audioMinutesUsed: "0",
           role: "GUEST",
         })
         .where(eq(users.id, user.id));
@@ -3615,11 +3615,11 @@ export async function registerRoutes(
     }
 
     const now = new Date();
-    const trialMinutesUsed = parseFloat(user.trialMinutesUsed || "0");
-    const trialMinutesTotal = user.trialMinutesTotal || 90;
+    const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
+    const audioMinutesAdded = user.audioMinutesAdded || 90;
     const trialMinutesRemaining = Math.max(
       0,
-      trialMinutesTotal - trialMinutesUsed,
+      audioMinutesAdded - audioMinutesUsed,
     );
     const timeExpired = now > user.trialEndsAt;
     const minutesExpired = trialMinutesRemaining <= 0;
@@ -3646,8 +3646,8 @@ export async function registerRoutes(
       is_active: isActive,
       starts_at: user.trialStartsAt.toISOString(),
       ends_at: user.trialEndsAt.toISOString(),
-      minutes_total: trialMinutesTotal,
-      minutes_used: trialMinutesUsed,
+      minutes_total: audioMinutesAdded,
+      minutes_used: audioMinutesUsed,
       minutes_remaining: trialMinutesRemaining,
       days_remaining: isActive ? daysRemaining : 0,
       hours_remaining: isActive ? hoursRemaining : 0,
@@ -5248,8 +5248,8 @@ export async function registerRoutes(
           // FIX 1+2: Carry over unused trial minutes, then mark trial as converted
           let carryoverMinutes = 0;
           if (!user.trialUsed && user.trialEndsAt && new Date() < user.trialEndsAt) {
-            const trialUsed = parseFloat(String(user.trialMinutesUsed || "0"));
-            const trialTotal = user.trialMinutesTotal || 90;
+            const trialUsed = parseFloat(String(user.audioMinutesUsed || "0"));
+            const trialTotal = user.audioMinutesAdded || 90;
             const remaining = trialTotal - trialUsed;
             if (remaining > 0) carryoverMinutes = remaining;
           }
@@ -5282,9 +5282,19 @@ export async function registerRoutes(
             paymentToken,
             status: "active",
           });
+          // Add plan minutes to user's audio_minutes_added total in mvp_users
+          if (planMinutes > 0) {
+            await db
+              .update(users)
+              .set({
+                audioMinutesAdded: sql`COALESCE(${users.audioMinutesAdded}, 0) + ${planMinutes}`,
+                updatedAt: new Date(),
+              })
+              .where(eq(users.id, user.id));
+          }
           await refreshUserRole(user.id);
           console.log(
-            `[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins)`,
+            `[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins, planMinutes: ${planMinutes})`,
           );
 
           const notifTitle = isLifetime
@@ -6448,15 +6458,15 @@ export async function registerRoutes(
           .select({
             id: users.id,
             email: users.email,
-            trialMinutesTotal: users.trialMinutesTotal,
-            trialMinutesUsed: users.trialMinutesUsed,
+            audioMinutesAdded: users.audioMinutesAdded,
+            audioMinutesUsed: users.audioMinutesUsed,
           })
           .from(users)
           .where(
             and(
-              sql`${users.trialMinutesTotal} IS NOT NULL`,
-              sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) <= 10`,
-              sql`(${users.trialMinutesTotal} - COALESCE(${users.trialMinutesUsed}, 0)) >= 0`,
+              sql`${users.audioMinutesAdded} IS NOT NULL`,
+              sql`(${users.audioMinutesAdded} - COALESCE(${users.audioMinutesUsed}, 0)) <= 10`,
+              sql`(${users.audioMinutesAdded} - COALESCE(${users.audioMinutesUsed}, 0)) >= 0`,
             ),
           );
 
@@ -6464,8 +6474,8 @@ export async function registerRoutes(
           const minsLeft = Math.max(
             0,
             Math.floor(
-              (Number(trialUser.trialMinutesTotal) || 0) -
-                (Number(trialUser.trialMinutesUsed) || 0),
+              (Number(trialUser.audioMinutesAdded) || 0) -
+                (Number(trialUser.audioMinutesUsed) || 0),
             ),
           );
 
@@ -6895,7 +6905,7 @@ export async function registerRoutes(
         await db
           .update(users)
           .set({
-            trialMinutesUsed: sql`COALESCE(${users.trialMinutesUsed}, '0')::numeric + ${usageMinutes}`,
+            audioMinutesUsed: sql`COALESCE(${users.audioMinutesUsed}, '0')::numeric + ${usageMinutes}`,
             updatedAt: new Date(),
           })
           .where(eq(users.id, userId));
@@ -6918,8 +6928,8 @@ export async function registerRoutes(
         .limit(1);
       if (updatedUser.length > 0) {
         const u = updatedUser[0];
-        const minutesTotal = u.trialMinutesTotal || 90;
-        const minutesUsed = parseFloat(String(u.trialMinutesUsed || "0")) || 0;
+        const minutesTotal = u.audioMinutesAdded || 90;
+        const minutesUsed = parseFloat(String(u.audioMinutesUsed || "0")) || 0;
         const hasActiveSub = await db
           .select()
           .from(userSubscriptions)
@@ -6931,8 +6941,8 @@ export async function registerRoutes(
           )
           .limit(1);
         return {
-          trial_minutes_total: minutesTotal,
-          trial_minutes_used: minutesUsed,
+          audio_minutes_added: minutesTotal,
+          audio_minutes_used: minutesUsed,
           is_subscribed: hasActiveSub.length > 0,
         };
       }
@@ -7005,8 +7015,8 @@ export async function registerRoutes(
           email: users.email,
           username: users.username,
           role: users.role,
-          trialMinutesTotal: users.trialMinutesTotal,
-          trialMinutesUsed: users.trialMinutesUsed,
+          audioMinutesAdded: users.audioMinutesAdded,
+          audioMinutesUsed: users.audioMinutesUsed,
           trialStartsAt: users.trialStartsAt,
           trialEndsAt: users.trialEndsAt,
           trialUsed: users.trialUsed,
@@ -7021,8 +7031,8 @@ export async function registerRoutes(
           .json({ success: false, error: "User not found" });
 
       const u = userResult[0];
-      const minutesTotal = u.trialMinutesTotal || 90;
-      const minutesUsed = parseFloat(String(u.trialMinutesUsed || "0"));
+      const minutesTotal = u.audioMinutesAdded || 90;
+      const minutesUsed = parseFloat(String(u.audioMinutesUsed || "0"));
 
       res.json({
         success: true,
@@ -7439,7 +7449,7 @@ export async function registerRoutes(
               role: "USER" as const,
               trialStartsAt: new Date(),
               trialEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-              trialMinutesTotal: 90,
+              audioMinutesAdded: 90,
             })
             .returning();
           user = newUser;
@@ -7496,8 +7506,8 @@ export async function registerRoutes(
 
         const userResult = await db
           .select({
-            trialMinutesTotal: users.trialMinutesTotal,
-            trialMinutesUsed: users.trialMinutesUsed,
+            audioMinutesAdded: users.audioMinutesAdded,
+            audioMinutesUsed: users.audioMinutesUsed,
             trialStartsAt: users.trialStartsAt,
             trialEndsAt: users.trialEndsAt,
             trialUsed: users.trialUsed,
@@ -7523,8 +7533,8 @@ export async function registerRoutes(
         res.json({
           success: true,
           stats: {
-            trialMinutesTotal: u.trialMinutesTotal || 90,
-            trialMinutesUsed: parseFloat(String(u.trialMinutesUsed || "0")),
+            audioMinutesAdded: u.audioMinutesAdded || 90,
+            audioMinutesUsed: parseFloat(String(u.audioMinutesUsed || "0")),
             trialStartsAt: u.trialStartsAt,
             trialEndsAt: u.trialEndsAt,
             trialUsed: u.trialUsed,
@@ -7827,7 +7837,7 @@ export async function registerRoutes(
         return res.json({
           success: true,
           message: "Top-up already applied",
-          trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+          audioMinutesAdded: user[0]?.audioMinutesAdded || 90,
         });
       }
 
@@ -7859,11 +7869,11 @@ export async function registerRoutes(
           .limit(1);
         if (userResult.length === 0) throw new Error("User not found");
         const user = userResult[0];
-        const newMinutesTotal = (user.trialMinutesTotal || 90) + topupMinutes;
+        const newMinutesTotal = (user.audioMinutesAdded || 90) + topupMinutes;
 
         await tx
           .update(users)
-          .set({ trialMinutesTotal: newMinutesTotal, updatedAt: new Date() })
+          .set({ audioMinutesAdded: newMinutesTotal, updatedAt: new Date() })
           .where(eq(users.id, userId));
 
         const activeSub = await tx
@@ -7924,7 +7934,7 @@ export async function registerRoutes(
           .returning({ id: userSubscriptions.id });
 
         const newRemaining =
-          newMinutesTotal - parseFloat(String(user.trialMinutesUsed || "0"));
+          newMinutesTotal - parseFloat(String(user.audioMinutesUsed || "0"));
         return {
           alreadyApplied: false,
           newMinutesTotal,
@@ -7942,14 +7952,14 @@ export async function registerRoutes(
         return res.json({
           success: true,
           message: "Top-up already applied",
-          trialMinutesTotal: user[0]?.trialMinutesTotal || 90,
+          audioMinutesAdded: user[0]?.audioMinutesAdded || 90,
         });
       }
 
       res.json({
         success: true,
         message: `Top-up of ${topupMinutes} minutes applied successfully`,
-        trialMinutesTotal: result.newMinutesTotal,
+        audioMinutesAdded: result.newMinutesTotal,
         minutesRemaining: parseFloat(result.newRemaining!.toFixed(2)),
       });
 
