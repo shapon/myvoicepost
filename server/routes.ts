@@ -5132,13 +5132,22 @@ export async function registerRoutes(
       const paymentToken =
         originalTransactionId || transactionId || eventId || "";
 
+      // Map RC Test Store short IDs to our DB rcProductIdentifier values
+      const TEST_STORE_PRODUCT_MAP: Record<string, string> = {
+        monthly: "mvp_monthly",
+        yearly: "mvp_yearly",
+        lifetime: "mvp_lifetime",
+      };
+      const resolvedProductId =
+        TEST_STORE_PRODUCT_MAP[normalizedProductId] ?? normalizedProductId;
+
       const findPlan = async () => {
-        if (normalizedProductId) {
+        if (resolvedProductId) {
           const r = await db
             .select()
             .from(subscriptionPlans)
             .where(
-              eq(subscriptionPlans.rcProductIdentifier, normalizedProductId),
+              eq(subscriptionPlans.rcProductIdentifier, resolvedProductId),
             )
             .limit(1);
           if (r.length > 0) return r[0];
