@@ -55,9 +55,10 @@ const users = pgTable("mvp_users", {
   email: varchar("email", { length: 255 }),
   passwordHash: varchar("password_hash", { length: 255 }).notNull(),
   role: varchar("role", { length: 20 }).notNull().default("GUEST"),
-  trialStartsAt: timestamp("trial_starts_at"),
-  trialEndsAt: timestamp("trial_ends_at"),
+  appStartsAt: timestamp("app_starts_at"),
+  validEndsAt: timestamp("valid_ends_at"),
   trialUsed: boolean("trial_used").default(false),
+  currentPackage: varchar("current_package", { length: 50 }),
   audioMinutesAdded: integer("audio_minutes_added").default(90),
   audioMinutesUsed: numeric("audio_minutes_used", { precision: 10, scale: 2 }).default("0"),
   stripeCustomerId: varchar("stripe_customer_id", { length: 255 }),
@@ -2508,13 +2509,13 @@ app.post("/api/v1/p/login", async (req, res) => {
     );
 
     let trialExpired = false;
-    if (user && user.trialEndsAt) {
+    if (user && user.validEndsAt) {
       const now = new Date();
       const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
       const audioMinutesAdded = user.audioMinutesAdded || 90;
       const trialMinutesRemaining = audioMinutesAdded - audioMinutesUsed;
 
-      if (now > user.trialEndsAt || trialMinutesRemaining <= 0) {
+      if (now > user.validEndsAt || trialMinutesRemaining <= 0) {
         trialExpired = true;
       }
     }
@@ -2621,17 +2622,19 @@ async function handleRegistration(req: Request, res: Response) {
     await db.delete(emailOtps).where(eq(emailOtps.email, normalizedEmail));
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const trialStartsAt = new Date();
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+    const appStartsAt = new Date();
+    const validEndsAt = new Date(appStartsAt);
+    validEndsAt.setDate(validEndsAt.getDate() + 7);
+    validEndsAt.setUTCHours(23, 59, 59, 999);
 
     const result = await db.insert(users).values({
       username,
       email: normalizedEmail,
       passwordHash: hashedPassword,
-      trialStartsAt,
-      trialEndsAt,
+      appStartsAt,
+      validEndsAt,
       trialUsed: false,
+      currentPackage: "TRIAL",
       audioMinutesAdded: 90,
       audioMinutesUsed: "0",
     }).returning();
@@ -2646,7 +2649,7 @@ async function handleRegistration(req: Request, res: Response) {
       { expiresIn: "60d" }
     );
 
-    console.log(`[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${trialEndsAt.toISOString()}`);
+    console.log(`[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${validEndsAt.toISOString()}`);
 
     return res.status(201).json({
       success: true,
@@ -2655,8 +2658,8 @@ async function handleRegistration(req: Request, res: Response) {
       expiresIn: 60 * 24 * 60 * 60,
       user: { id: user.id, email: user.email, username: user.username },
       trial: {
-        starts_at: trialStartsAt.toISOString(),
-        ends_at: trialEndsAt.toISOString(),
+        starts_at: appStartsAt.toISOString(),
+        ends_at: validEndsAt.toISOString(),
         minutes_total: 90,
         minutes_used: 0,
         minutes_remaining: 90,
@@ -2723,11 +2726,11 @@ app.post("/api/v1/p/auth/login", async (req, res) => {
     );
 
     let trialExpired = false;
-    if (user.trialEndsAt) {
+    if (user.validEndsAt) {
       const now = new Date();
       const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
       const audioMinutesAdded = user.audioMinutesAdded || 90;
-      if (now > user.trialEndsAt || audioMinutesAdded - audioMinutesUsed <= 0) {
+      if (now > user.validEndsAt || audioMinutesAdded - audioMinutesUsed <= 0) {
         trialExpired = true;
       }
     }
@@ -2782,8 +2785,8 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
         email: users.email,
         audioMinutesAdded: users.audioMinutesAdded,
         audioMinutesUsed: users.audioMinutesUsed,
-        trialStartsAt: users.trialStartsAt,
-        trialEndsAt: users.trialEndsAt,
+        appStartsAt: users.appStartsAt,
+        validEndsAt: users.validEndsAt,
         trialUsed: users.trialUsed,
       }).from(users).where(eq(users.id, userId)).limit(1);
       if (userResult.length > 0) {
@@ -2793,8 +2796,8 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
         trialData = {
           audioMinutesAdded: u.audioMinutesAdded || 90,
           audioMinutesUsed: parseFloat(String(u.audioMinutesUsed || "0")),
-          trialStartsAt: u.trialStartsAt,
-          trialEndsAt: u.trialEndsAt,
+          appStartsAt: u.appStartsAt,
+          validEndsAt: u.validEndsAt,
           trialUsed: u.trialUsed,
         };
       }
@@ -3098,17 +3101,19 @@ app.get("/api/v1/p/auth/google/callback", async (req, res) => {
     const randomPassword = randomUUID();
     const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
-    const trialStartsAt = new Date();
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+    const appStartsAt = new Date();
+    const validEndsAt = new Date(appStartsAt);
+    validEndsAt.setDate(validEndsAt.getDate() + 7);
+    validEndsAt.setUTCHours(23, 59, 59, 999);
 
     const result = await db.insert(users).values({
       username: finalUsername,
       email: normalizedEmail,
       passwordHash: hashedPassword,
-      trialStartsAt,
-      trialEndsAt,
+      appStartsAt,
+      validEndsAt,
       trialUsed: false,
+      currentPackage: "TRIAL",
       audioMinutesAdded: 90,
       audioMinutesUsed: "0",
     }).returning();
@@ -3276,17 +3281,19 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
     const randomPassword = randomUUID();
     const hashedPassword = await bcrypt.hash(randomPassword, 10);
 
-    const trialStartsAt = new Date();
-    const trialEndsAt = new Date();
-    trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+    const appStartsAt = new Date();
+    const validEndsAt = new Date(appStartsAt);
+    validEndsAt.setDate(validEndsAt.getDate() + 7);
+    validEndsAt.setUTCHours(23, 59, 59, 999);
 
     const result = await db.insert(users).values({
       username: finalUsername,
       email: normalizedEmail,
       passwordHash: hashedPassword,
-      trialStartsAt,
-      trialEndsAt,
+      appStartsAt,
+      validEndsAt,
       trialUsed: false,
+      currentPackage: "TRIAL",
       audioMinutesAdded: 90,
       audioMinutesUsed: "0",
     }).returning();
@@ -3778,8 +3785,8 @@ app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
       const userResult = await db.select({
         audioMinutesAdded: users.audioMinutesAdded,
         audioMinutesUsed: users.audioMinutesUsed,
-        trialStartsAt: users.trialStartsAt,
-        trialEndsAt: users.trialEndsAt,
+        appStartsAt: users.appStartsAt,
+        validEndsAt: users.validEndsAt,
         trialUsed: users.trialUsed,
       }).from(users).where(eq(users.id, userId)).limit(1);
 
@@ -3788,8 +3795,8 @@ app.get("/api/v1/a/me", mobileAuthMiddleware, async (req, res) => {
         trialData = {
           audioMinutesAdded: u.audioMinutesAdded || 90,
           audioMinutesUsed: parseFloat(String(u.audioMinutesUsed || "0")),
-          trialStartsAt: u.trialStartsAt,
-          trialEndsAt: u.trialEndsAt,
+          appStartsAt: u.appStartsAt,
+          validEndsAt: u.validEndsAt,
           trialUsed: u.trialUsed,
         };
       }
@@ -4662,13 +4669,13 @@ app.delete("/api/v1/a/saved-texts/:id", mobileAuthMiddleware, async (req, res) =
 async function getTrialInfo(userId: string) {
   const userResult = await db.select().from(users).where(eq(users.id, userId)).limit(1);
   const user = userResult[0];
-  if (!user || !user.trialStartsAt || !user.trialEndsAt) return null;
+  if (!user || !user.appStartsAt || !user.validEndsAt) return null;
 
   const now = new Date();
   const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
   const audioMinutesAdded = user.audioMinutesAdded || 90;
   const trialMinutesRemaining = Math.max(0, audioMinutesAdded - audioMinutesUsed);
-  const timeExpired = now > user.trialEndsAt;
+  const timeExpired = now > user.validEndsAt;
   const minutesExpired = trialMinutesRemaining <= 0;
   const isActive = !timeExpired && !minutesExpired;
 
@@ -4682,7 +4689,7 @@ async function getTrialInfo(userId: string) {
   else if (isSubscribed) status = "subscribed";
   else status = "active";
 
-  const timeRemainingMs = Math.max(0, user.trialEndsAt.getTime() - now.getTime());
+  const timeRemainingMs = Math.max(0, user.validEndsAt.getTime() - now.getTime());
   const daysRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60 * 24));
   const hoursRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60));
 
@@ -4690,8 +4697,8 @@ async function getTrialInfo(userId: string) {
     status,
     is_active: isActive,
     is_subscribed: isSubscribed,
-    starts_at: user.trialStartsAt.toISOString(),
-    ends_at: user.trialEndsAt.toISOString(),
+    starts_at: user.appStartsAt.toISOString(),
+    ends_at: user.validEndsAt.toISOString(),
     minutes_total: audioMinutesAdded,
     minutes_used: audioMinutesUsed,
     minutes_remaining: trialMinutesRemaining,
@@ -4709,6 +4716,8 @@ async function checkUserAccess(userId: string) {
     return {
       access_granted: true,
       access_source: "admin",
+      current_package: userRecord?.currentPackage || "TRIAL",
+      valid_ends_at: userRecord?.validEndsAt || null,
       trial,
       subscription: null,
     };
@@ -4754,6 +4763,8 @@ async function checkUserAccess(userId: string) {
   return {
     access_granted: accessGranted,
     access_source: accessSource,
+    current_package: userRecord?.currentPackage || "TRIAL",
+    valid_ends_at: userRecord?.validEndsAt || null,
     trial,
     subscription,
   };
@@ -4849,8 +4860,13 @@ app.post("/api/v1/a/subscribe", mobileAuthMiddleware, async (req, res) => {
       });
     }
 
-    const validDateUpto = new Date();
+    // Stacking: extend from current validEndsAt if in the future
+    const _subNow = new Date();
+    const _subUserRow = await db.select({ validEndsAt: users.validEndsAt }).from(users).where(eq(users.id, userId)).limit(1);
+    const _subBase = (_subUserRow[0]?.validEndsAt && _subUserRow[0].validEndsAt > _subNow) ? new Date(_subUserRow[0].validEndsAt) : _subNow;
+    const validDateUpto = new Date(_subBase);
     validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
+    validDateUpto.setUTCHours(23, 59, 59, 999);
 
     let carryoverMinutes = 0;
     const trialInfo = await getTrialInfo(userId);
@@ -4902,7 +4918,7 @@ app.post("/api/v1/a/subscribe", mobileAuthMiddleware, async (req, res) => {
     }).returning();
 
     await db.update(users)
-      .set({ subscriptionId: subscription.id, updatedAt: new Date() })
+      .set({ subscriptionId: subscription.id, validEndsAt: validDateUpto, currentPackage: plan.name, updatedAt: new Date() })
       .where(eq(users.id, userId));
 
     const updatedRole = await refreshUserRole(userId);
@@ -4953,6 +4969,8 @@ app.post("/api/v1/a/check-access", mobileAuthMiddleware, async (req, res) => {
       success: true,
       access_granted: accessInfo.access_granted,
       access_source: accessInfo.access_source,
+      current_package: accessInfo.current_package,
+      valid_ends_at: accessInfo.valid_ends_at,
       trial: accessInfo.trial,
       subscription: accessInfo.subscription,
     });
@@ -5210,8 +5228,8 @@ app.get("/api/v1/a/usage-stats", mobileAuthMiddleware, async (req, res) => {
     const userResult = await db.select({
       audioMinutesAdded: users.audioMinutesAdded,
       audioMinutesUsed: users.audioMinutesUsed,
-      trialStartsAt: users.trialStartsAt,
-      trialEndsAt: users.trialEndsAt,
+      appStartsAt: users.appStartsAt,
+      validEndsAt: users.validEndsAt,
       trialUsed: users.trialUsed,
     }).from(users).where(eq(users.id, userId)).limit(1);
 
@@ -5231,8 +5249,8 @@ app.get("/api/v1/a/usage-stats", mobileAuthMiddleware, async (req, res) => {
       stats: {
         audioMinutesAdded: user.audioMinutesAdded || 90,
         audioMinutesUsed: parseFloat(String(user.audioMinutesUsed || "0")),
-        trialStartsAt: user.trialStartsAt,
-        trialEndsAt: user.trialEndsAt,
+        appStartsAt: user.appStartsAt,
+        validEndsAt: user.validEndsAt,
         trialUsed: user.trialUsed,
         totalTranscriptions: totalLogs[0]?.count || 0,
         totalUsageSeconds: totalLogs[0]?.totalSeconds || 0,
@@ -5509,12 +5527,14 @@ async function handleSubscriptionStatus(_req: Request, res: Response, userId: st
 
     res.json({
       success: true,
+      current_package: updatedUser.currentPackage || "TRIAL",
+      valid_ends_at: updatedUser.validEndsAt,
       trial: trial ? {
         is_active: trial.is_active,
         days_remaining: trial.days_remaining,
         minutes_remaining: trial.minutes_remaining,
         minutes_used: trial.minutes_used,
-        trial_ends_at: trial.ends_at,
+        valid_ends_at: trial.ends_at,
       } : null,
       subscription: subscriptionData,
       has_active_subscription: !!subscriptionData,
@@ -5786,8 +5806,8 @@ async function handleCreateTopupCheckout(req: Request, res: Response, userId: st
 
     // Check that user has active trial or subscription period
     const now = new Date();
-    const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
-    const hasTimeRemaining = trialEndsAt && trialEndsAt > now;
+    const validEndsAt = user.validEndsAt ? new Date(user.validEndsAt) : null;
+    const hasTimeRemaining = validEndsAt && validEndsAt > now;
 
     if (!hasTimeRemaining) {
       const activeSub = await db.select().from(userSubscriptions)
@@ -6376,7 +6396,7 @@ app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any
         const planMinutes = matchedPlan.validTotalMinutes || 0;
         const planDays = matchedPlan.validDays || 30;
 
-        const currentTrialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+        const currentTrialEndsAt = user.validEndsAt ? new Date(user.validEndsAt) : null;
         const currentMinutesTotal = user.audioMinutesAdded || 90;
         const isWithinTrial = currentTrialEndsAt && currentTrialEndsAt > now;
 
@@ -6395,8 +6415,9 @@ app.post("/api/v1/a/confirm-subscription", mobileAuthMiddleware, async (req: any
 
         await db.update(users)
           .set({
-            trialEndsAt: newTrialEndsAt,
+            validEndsAt: newTrialEndsAt,
             audioMinutesAdded: newMinutesTotal,
+            currentPackage: matchedPlan.name,
             trialUsed: false,
             updatedAt: now,
           })
@@ -6627,7 +6648,7 @@ async function handleStripeWebhook(req: Request, res: Response) {
                 const planMinutes = matchedPlan.validTotalMinutes || 0;
                 const planDays = matchedPlan.validDays || 30;
 
-                const currentTrialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
+                const currentTrialEndsAt = user.validEndsAt ? new Date(user.validEndsAt) : null;
                 const currentMinutesTotal = user.audioMinutesAdded || 90;
                 const currentMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
                 const currentMinutesRemaining = Math.max(0, currentMinutesTotal - currentMinutesUsed);
@@ -6640,18 +6661,19 @@ async function handleStripeWebhook(req: Request, res: Response) {
                   newTrialEndsAt = new Date(currentTrialEndsAt!);
                   newTrialEndsAt.setDate(newTrialEndsAt.getDate() + planDays);
                   newMinutesTotal = currentMinutesTotal + planMinutes;
-                  console.log(`[Stripe Webhook] Within trial: extending trialEndsAt by ${planDays} days, adding ${planMinutes} mins (current remaining: ${currentMinutesRemaining})`);
+                  console.log(`[Stripe Webhook] Within trial: extending validEndsAt by ${planDays} days, adding ${planMinutes} mins (current remaining: ${currentMinutesRemaining})`);
                 } else {
                   newTrialEndsAt = new Date(now);
                   newTrialEndsAt.setDate(newTrialEndsAt.getDate() + planDays);
                   newMinutesTotal = currentMinutesTotal + planMinutes;
-                  console.log(`[Stripe Webhook] After trial/expired: setting trialEndsAt to now+${planDays} days, adding ${planMinutes} mins to total ${currentMinutesTotal}`);
+                  console.log(`[Stripe Webhook] After trial/expired: setting validEndsAt to now+${planDays} days, adding ${planMinutes} mins to total ${currentMinutesTotal}`);
                 }
 
                 await db.update(users)
                   .set({
-                    trialEndsAt: newTrialEndsAt,
+                    validEndsAt: newTrialEndsAt,
                     audioMinutesAdded: newMinutesTotal,
+                    currentPackage: matchedPlan.name,
                     trialUsed: false,
                     updatedAt: now,
                   })
@@ -7234,7 +7256,7 @@ async function handleRCWebhook(req: Request, res: Response) {
 
         // FIX 1+2: Carry over unused trial minutes, then mark trial as converted
         let carryoverMinutes = 0;
-        if (!user.trialUsed && user.trialEndsAt && new Date() < user.trialEndsAt) {
+        if (!user.trialUsed && user.validEndsAt && new Date() < user.validEndsAt) {
           const trialUsed = parseFloat(String(user.audioMinutesUsed || "0"));
           const trialTotal = user.audioMinutesAdded || 90;
           const remaining = trialTotal - trialUsed;
@@ -7243,11 +7265,16 @@ async function handleRCWebhook(req: Request, res: Response) {
         await db.update(users).set({ trialUsed: true, updatedAt: new Date() }).where(eq(users.id, user.id));
 
         const isLifetime = eventType === "NON_RENEWING_PURCHASE";
-        const validDateUpto = isLifetime
-          ? new Date("2099-12-31T23:59:59Z")
-          : expirationAtMs
-          ? new Date(expirationAtMs)
-          : (() => { const d = new Date(); d.setDate(d.getDate() + plan.validDays); return d; })();
+        let validDateUpto: Date;
+        if (isLifetime) {
+          validDateUpto = new Date("2099-12-31T23:59:59Z");
+        } else {
+          const _rcNow = new Date();
+          const _rcBase = (user.validEndsAt && user.validEndsAt > _rcNow) ? new Date(user.validEndsAt) : _rcNow;
+          validDateUpto = new Date(_rcBase);
+          validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
+          validDateUpto.setUTCHours(23, 59, 59, 999);
+        }
 
         const planMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
         const totalMinutes = planMinutes + carryoverMinutes;
@@ -7269,6 +7296,10 @@ async function handleRCWebhook(req: Request, res: Response) {
             updatedAt: new Date(),
           }).where(eq(users.id, user.id));
         }
+        // Update mvp_users validity tracking
+        await db.update(users)
+          .set({ validEndsAt: validDateUpto, currentPackage: plan.name, updatedAt: new Date() })
+          .where(eq(users.id, user.id));
         await refreshUserRole(user.id);
         console.log(`[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins, planMinutes: ${planMinutes})`);
 
@@ -7285,35 +7316,41 @@ async function handleRCWebhook(req: Request, res: Response) {
       }
 
       case "RENEWAL": {
-        const validDateUpto = expirationAtMs ? new Date(expirationAtMs) : null;
         // FIX 3+4: resolve plan upfront for both branches
         const renewalPlan = await findPlan();
+        // Stacking: extend from current validEndsAt if in the future
+        const _rnNow = new Date();
+        const _rnBase = (user.validEndsAt && user.validEndsAt > _rnNow) ? new Date(user.validEndsAt) : _rnNow;
+        const renewalValidDateUpto = new Date(_rnBase);
+        renewalValidDateUpto.setDate(renewalValidDateUpto.getDate() + (renewalPlan?.validDays || 30));
+        renewalValidDateUpto.setUTCHours(23, 59, 59, 999);
         const existingResult = await db.select().from(userSubscriptions)
           .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, paymentToken))).limit(1);
 
         if (existingResult.length > 0) {
           // FIX 3: reset minutes to fresh plan allocation for new billing period
           const freshMinutes = renewalPlan?.validTotalMinutes || 0;
-          const updates: Record<string, any> = {
-            status: "active",
-            minutesUsed: 0,
-            minutesRemaining: String(freshMinutes),
-          };
-          if (validDateUpto) updates.validDateUpto = validDateUpto;
-          await db.update(userSubscriptions).set(updates).where(eq(userSubscriptions.id, existingResult[0].id));
+          await db.update(userSubscriptions)
+            .set({ status: "active", minutesUsed: 0, minutesRemaining: String(freshMinutes), validDateUpto: renewalValidDateUpto })
+            .where(eq(userSubscriptions.id, existingResult[0].id));
         } else {
           if (renewalPlan) {
             // FIX 4: supersede any existing active sub before inserting the new renewal row
             await db.update(userSubscriptions)
               .set({ status: "superseded" })
               .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active")));
-            const d = validDateUpto || (() => { const dt = new Date(); dt.setDate(dt.getDate() + renewalPlan.validDays); return dt; })();
             await db.insert(userSubscriptions).values({
-              userId: user.id, planId: renewalPlan.id, validDateUpto: d,
+              userId: user.id, planId: renewalPlan.id, validDateUpto: renewalValidDateUpto,
               minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(renewalPlan.validTotalMinutes || 0),
               paymentToken, status: "active",
             });
           }
+        }
+        // Update mvp_users validity tracking
+        if (renewalPlan) {
+          await db.update(users)
+            .set({ validEndsAt: renewalValidDateUpto, currentPackage: renewalPlan.name, updatedAt: new Date() })
+            .where(eq(users.id, user.id));
         }
         await refreshUserRole(user.id);
         console.log(`[RC Webhook] RENEWAL: User ${user.id} renewed`);
@@ -7623,19 +7660,19 @@ app.get("/api/cron/subscription-expiry-notifications", async (req: Request, res:
       console.log(`[Cron] Sent ${notificationType} notification to user ${sub.userId} (expires in ${daysUntilExpiry} days)`);
     }
 
-    // Also check trial expiry (trialEndsAt on user record)
+    // Also check trial expiry (validEndsAt on user record)
     // Only fetch users with trials expiring within the next 7 days
     const usersWithTrials = await db.select().from(users)
       .where(and(
         eq(users.trialUsed, false),
-        gte(users.trialEndsAt, now),
-        sql`${users.trialEndsAt} <= ${sevenDaysFromNow}`,
+        gte(users.validEndsAt, now),
+        sql`${users.validEndsAt} <= ${sevenDaysFromNow}`,
       ));
 
     for (const user of usersWithTrials) {
-      if (!user.trialEndsAt) continue;
+      if (!user.validEndsAt) continue;
 
-      const trialExpiry = new Date(user.trialEndsAt);
+      const trialExpiry = new Date(user.validEndsAt);
       const daysUntilExpiry = Math.ceil((trialExpiry.getTime() - now.getTime()) / oneDayMs);
 
       let notificationType: string | null = null;
@@ -8083,8 +8120,8 @@ app.get("/api/v1/a/admin/users", mobileAuthMiddleware, adminCheckMiddleware, asy
       username: users.username,
       email: users.email,
       role: users.role,
-      trialStartsAt: users.trialStartsAt,
-      trialEndsAt: users.trialEndsAt,
+      appStartsAt: users.appStartsAt,
+      validEndsAt: users.validEndsAt,
       trialUsed: users.trialUsed,
       stripeCustomerId: users.stripeCustomerId,
       stripeSubscriptionId: users.stripeSubscriptionId,

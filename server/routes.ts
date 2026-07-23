@@ -207,7 +207,7 @@ async function refreshUserRole(userId: string): Promise<UserRole> {
   } else {
     const now = new Date();
     const trialActive =
-      user.trialEndsAt && !user.trialUsed && now < user.trialEndsAt;
+      user.validEndsAt && !user.trialUsed && now < user.validEndsAt;
     const audioMinutesUsed = parseFloat(user.audioMinutesUsed || "0");
     const audioMinutesAdded = user.audioMinutesAdded || 90;
     const trialHasMinutes = audioMinutesAdded - audioMinutesUsed > 0;
@@ -986,13 +986,13 @@ export async function registerRoutes(
       const fullUser = userRecord[0];
 
       let trialExpired = false;
-      if (fullUser && fullUser.trialEndsAt && !fullUser.trialUsed) {
+      if (fullUser && fullUser.validEndsAt && !fullUser.trialUsed) {
         const now = new Date();
         const audioMinutesUsed = parseFloat(fullUser.audioMinutesUsed || "0");
         const audioMinutesAdded = fullUser.audioMinutesAdded || 90;
         const trialMinutesRemaining = audioMinutesAdded - audioMinutesUsed;
 
-        if (now > fullUser.trialEndsAt || trialMinutesRemaining <= 0) {
+        if (now > fullUser.validEndsAt || trialMinutesRemaining <= 0) {
           trialExpired = true;
 
           // Check if user already has any subscription
@@ -1168,16 +1168,18 @@ export async function registerRoutes(
         password,
       });
 
-      const trialStartsAt = new Date();
-      const trialEndsAt = new Date();
-      trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+      const appStartsAt = new Date();
+      const validEndsAt = new Date(appStartsAt);
+      validEndsAt.setDate(validEndsAt.getDate() + 7);
+      validEndsAt.setUTCHours(23, 59, 59, 999);
 
       await db
         .update(users)
         .set({
-          trialStartsAt,
-          trialEndsAt,
+          appStartsAt,
+          validEndsAt,
           trialUsed: false,
+          currentPackage: "TRIAL",
           audioMinutesAdded: 90,
           audioMinutesUsed: "0",
         })
@@ -1198,7 +1200,7 @@ export async function registerRoutes(
       );
 
       console.log(
-        `[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${trialEndsAt.toISOString()}`,
+        `[${routeName}] SUCCESS: userId=${user.id} username=${user.username} trialEnds=${validEndsAt.toISOString()}`,
       );
 
       return res.status(201).json({
@@ -1208,8 +1210,8 @@ export async function registerRoutes(
         expiresIn: 60 * 24 * 60 * 60,
         user: { id: user.id, email: user.email, username: user.username },
         trial: {
-          starts_at: trialStartsAt.toISOString(),
-          ends_at: trialEndsAt.toISOString(),
+          starts_at: appStartsAt.toISOString(),
+          ends_at: validEndsAt.toISOString(),
           minutes_total: 90,
           minutes_used: 0,
           minutes_remaining: 90,
@@ -1421,16 +1423,18 @@ export async function registerRoutes(
         password: crypto.randomUUID(),
       });
 
-      const trialStartsAt = new Date();
-      const trialEndsAt = new Date();
-      trialEndsAt.setDate(trialEndsAt.getDate() + 7);
+      const appStartsAt = new Date();
+      const validEndsAt = new Date(appStartsAt);
+      validEndsAt.setDate(validEndsAt.getDate() + 7);
+      validEndsAt.setUTCHours(23, 59, 59, 999);
 
       await db
         .update(users)
         .set({
-          trialStartsAt,
-          trialEndsAt,
+          appStartsAt,
+          validEndsAt,
           trialUsed: false,
+          currentPackage: "TRIAL",
           audioMinutesAdded: 90,
           audioMinutesUsed: "0",
           role: "GUEST",
@@ -1471,8 +1475,8 @@ export async function registerRoutes(
         },
         isNewUser: true,
         trial: {
-          starts_at: trialStartsAt.toISOString(),
-          ends_at: trialEndsAt.toISOString(),
+          starts_at: appStartsAt.toISOString(),
+          ends_at: validEndsAt.toISOString(),
           minutes_total: 90,
           minutes_used: 0,
           minutes_remaining: 90,
@@ -3506,8 +3510,13 @@ export async function registerRoutes(
         });
       }
 
-      const validDateUpto = new Date();
+      // Stacking: extend from current validEndsAt if in the future
+      const _subNow = new Date();
+      const _subUserRow = await db.select({ validEndsAt: users.validEndsAt }).from(users).where(eq(users.id, userId)).limit(1);
+      const _subBase = (_subUserRow[0]?.validEndsAt && _subUserRow[0].validEndsAt > _subNow) ? new Date(_subUserRow[0].validEndsAt) : _subNow;
+      const validDateUpto = new Date(_subBase);
       validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
+      validDateUpto.setUTCHours(23, 59, 59, 999);
 
       // Check for trial minutes to carry forward
       let carryoverMinutes = 0;
@@ -3570,6 +3579,11 @@ export async function registerRoutes(
         })
         .returning();
 
+      // Update mvp_users validity tracking
+      await db.update(users)
+        .set({ validEndsAt: validDateUpto, currentPackage: plan.name, updatedAt: new Date() })
+        .where(eq(users.id, userId));
+
       const updatedRole = await refreshUserRole(userId);
 
       console.log(
@@ -3610,7 +3624,7 @@ export async function registerRoutes(
       .where(eq(users.id, userId))
       .limit(1);
     const user = userResult[0];
-    if (!user || !user.trialStartsAt || !user.trialEndsAt) {
+    if (!user || !user.appStartsAt || !user.validEndsAt) {
       return null;
     }
 
@@ -3621,7 +3635,7 @@ export async function registerRoutes(
       0,
       audioMinutesAdded - audioMinutesUsed,
     );
-    const timeExpired = now > user.trialEndsAt;
+    const timeExpired = now > user.validEndsAt;
     const minutesExpired = trialMinutesRemaining <= 0;
     const isActive = !user.trialUsed && !timeExpired && !minutesExpired;
 
@@ -3636,7 +3650,7 @@ export async function registerRoutes(
 
     const timeRemainingMs = Math.max(
       0,
-      user.trialEndsAt.getTime() - now.getTime(),
+      user.validEndsAt.getTime() - now.getTime(),
     );
     const daysRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60 * 24));
     const hoursRemaining = Math.ceil(timeRemainingMs / (1000 * 60 * 60));
@@ -3644,8 +3658,8 @@ export async function registerRoutes(
     return {
       status,
       is_active: isActive,
-      starts_at: user.trialStartsAt.toISOString(),
-      ends_at: user.trialEndsAt.toISOString(),
+      starts_at: user.appStartsAt.toISOString(),
+      ends_at: user.validEndsAt.toISOString(),
       minutes_total: audioMinutesAdded,
       minutes_used: audioMinutesUsed,
       minutes_remaining: trialMinutesRemaining,
@@ -3668,6 +3682,8 @@ export async function registerRoutes(
       return {
         access_granted: true,
         access_source: "admin",
+        current_package: userRecord?.currentPackage || "TRIAL",
+        valid_ends_at: userRecord?.validEndsAt || null,
         trial,
         subscription: null,
       };
@@ -3731,6 +3747,8 @@ export async function registerRoutes(
     return {
       access_granted: accessGranted,
       access_source: accessSource,
+      current_package: userRecord?.currentPackage || "TRIAL",
+      valid_ends_at: userRecord?.validEndsAt || null,
       trial,
       subscription,
     };
@@ -4108,19 +4126,21 @@ export async function registerRoutes(
 
       res.json({
         success: true,
+        current_package: user.currentPackage || "TRIAL",
+        valid_ends_at: user.validEndsAt,
         trial: trial
           ? {
               is_active: trial.is_active,
               days_remaining: trial.days_remaining,
               minutes_remaining: trial.minutes_remaining,
               minutes_used: trial.minutes_used,
-              trial_ends_at: trial.ends_at,
+              valid_ends_at: trial.ends_at,
             }
           : null,
         subscription: activeSub
           ? {
               id: activeSub.id,
-              plan_name: plan?.name || "Unknown",
+              plan_name: plan?.name || user.currentPackage || "Unknown",
               plan_id: activeSub.planId,
               status: activeSub.status,
               valid_date_upto: activeSub.validDateUpto,
@@ -5247,7 +5267,7 @@ export async function registerRoutes(
 
           // FIX 1+2: Carry over unused trial minutes, then mark trial as converted
           let carryoverMinutes = 0;
-          if (!user.trialUsed && user.trialEndsAt && new Date() < user.trialEndsAt) {
+          if (!user.trialUsed && user.validEndsAt && new Date() < user.validEndsAt) {
             const trialUsed = parseFloat(String(user.audioMinutesUsed || "0"));
             const trialTotal = user.audioMinutesAdded || 90;
             const remaining = trialTotal - trialUsed;
@@ -5259,15 +5279,16 @@ export async function registerRoutes(
             .where(eq(users.id, user.id));
 
           const isLifetime = eventType === "NON_RENEWING_PURCHASE";
-          const validDateUpto = isLifetime
-            ? new Date("2099-12-31T23:59:59Z")
-            : expirationAtMs
-              ? new Date(expirationAtMs)
-              : (() => {
-                  const d = new Date();
-                  d.setDate(d.getDate() + plan.validDays);
-                  return d;
-                })();
+          let validDateUpto: Date;
+          if (isLifetime) {
+            validDateUpto = new Date("2099-12-31T23:59:59Z");
+          } else {
+            const _rcNow = new Date();
+            const _rcBase = (user.validEndsAt && user.validEndsAt > _rcNow) ? new Date(user.validEndsAt) : _rcNow;
+            validDateUpto = new Date(_rcBase);
+            validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
+            validDateUpto.setUTCHours(23, 59, 59, 999);
+          }
 
           const planMinutes = plan.validTotalMinutes || (isLifetime ? 99999 : 0);
           const totalMinutes = planMinutes + carryoverMinutes;
@@ -5292,6 +5313,10 @@ export async function registerRoutes(
               })
               .where(eq(users.id, user.id));
           }
+          // Update mvp_users validity tracking
+          await db.update(users)
+            .set({ validEndsAt: validDateUpto, currentPackage: plan.name, updatedAt: new Date() })
+            .where(eq(users.id, user.id));
           await refreshUserRole(user.id);
           console.log(
             `[RC Webhook] ${eventType}: User ${user.id} activated plan ${plan.name} (carryover: ${carryoverMinutes} mins, planMinutes: ${planMinutes})`,
@@ -5317,11 +5342,14 @@ export async function registerRoutes(
         }
 
         case "RENEWAL": {
-          const validDateUpto = expirationAtMs
-            ? new Date(expirationAtMs)
-            : null;
           // FIX 3+4: resolve plan upfront for both branches
           const renewalPlan = await findPlan();
+          // Stacking: extend from current validEndsAt if in the future
+          const _rnNow = new Date();
+          const _rnBase = (user.validEndsAt && user.validEndsAt > _rnNow) ? new Date(user.validEndsAt) : _rnNow;
+          const renewalValidDateUpto = new Date(_rnBase);
+          renewalValidDateUpto.setDate(renewalValidDateUpto.getDate() + (renewalPlan?.validDays || 30));
+          renewalValidDateUpto.setUTCHours(23, 59, 59, 999);
           const existingResult = await db
             .select()
             .from(userSubscriptions)
@@ -5336,15 +5364,9 @@ export async function registerRoutes(
           if (existingResult.length > 0) {
             // FIX 3: reset minutes to fresh plan allocation for new billing period
             const freshMinutes = renewalPlan?.validTotalMinutes || 0;
-            const updates: Record<string, any> = {
-              status: "active",
-              minutesUsed: 0,
-              minutesRemaining: String(freshMinutes),
-            };
-            if (validDateUpto) updates.validDateUpto = validDateUpto;
             await db
               .update(userSubscriptions)
-              .set(updates)
+              .set({ status: "active", minutesUsed: 0, minutesRemaining: String(freshMinutes), validDateUpto: renewalValidDateUpto })
               .where(eq(userSubscriptions.id, existingResult[0].id));
           } else {
             if (renewalPlan) {
@@ -5358,17 +5380,10 @@ export async function registerRoutes(
                     eq(userSubscriptions.status, "active"),
                   ),
                 );
-              const d =
-                validDateUpto ||
-                (() => {
-                  const dt = new Date();
-                  dt.setDate(dt.getDate() + renewalPlan.validDays);
-                  return dt;
-                })();
               await db.insert(userSubscriptions).values({
                 userId: user.id,
                 planId: renewalPlan.id,
-                validDateUpto: d,
+                validDateUpto: renewalValidDateUpto,
                 minutesUsed: 0,
                 chunksUsed: 0,
                 minutesRemaining: String(renewalPlan.validTotalMinutes || 0),
@@ -5376,6 +5391,12 @@ export async function registerRoutes(
                 status: "active",
               });
             }
+          }
+          // Update mvp_users validity tracking
+          if (renewalPlan) {
+            await db.update(users)
+              .set({ validEndsAt: renewalValidDateUpto, currentPackage: renewalPlan.name, updatedAt: new Date() })
+              .where(eq(users.id, user.id));
           }
           await refreshUserRole(user.id);
           console.log(`[RC Webhook] RENEWAL: User ${user.id} renewed`);
@@ -5680,8 +5701,8 @@ export async function registerRoutes(
             username: users.username,
             email: users.email,
             role: users.role,
-            trialStartsAt: users.trialStartsAt,
-            trialEndsAt: users.trialEndsAt,
+            appStartsAt: users.appStartsAt,
+            validEndsAt: users.validEndsAt,
             trialUsed: users.trialUsed,
             stripeCustomerId: users.stripeCustomerId,
             stripeSubscriptionId: users.stripeSubscriptionId,
@@ -6281,14 +6302,14 @@ export async function registerRoutes(
         .where(
           and(
             eq(users.trialUsed, false),
-            gte(users.trialEndsAt, now),
-            sql`${users.trialEndsAt} <= ${sevenDaysFromNow}`,
+            gte(users.validEndsAt, now),
+            sql`${users.validEndsAt} <= ${sevenDaysFromNow}`,
           ),
         );
 
       for (const user of usersWithTrials) {
-        if (!user.trialEndsAt) continue;
-        const trialExpiry = new Date(user.trialEndsAt);
+        if (!user.validEndsAt) continue;
+        const trialExpiry = new Date(user.validEndsAt);
         const daysUntilExpiry = Math.ceil(
           (trialExpiry.getTime() - now.getTime()) / oneDayMs,
         );
@@ -7017,8 +7038,8 @@ export async function registerRoutes(
           role: users.role,
           audioMinutesAdded: users.audioMinutesAdded,
           audioMinutesUsed: users.audioMinutesUsed,
-          trialStartsAt: users.trialStartsAt,
-          trialEndsAt: users.trialEndsAt,
+          appStartsAt: users.appStartsAt,
+          validEndsAt: users.validEndsAt,
           trialUsed: users.trialUsed,
         })
         .from(users)
@@ -7041,8 +7062,8 @@ export async function registerRoutes(
           minutes_total: minutesTotal,
           minutes_used: minutesUsed,
           minutes_remaining: Math.max(0, minutesTotal - minutesUsed),
-          starts_at: u.trialStartsAt,
-          ends_at: u.trialEndsAt,
+          starts_at: u.appStartsAt,
+          ends_at: u.validEndsAt,
           trial_used: u.trialUsed,
         },
       });
@@ -7447,8 +7468,9 @@ export async function registerRoutes(
               email: normalizedEmail,
               passwordHash: crypto.randomUUID(),
               role: "USER" as const,
-              trialStartsAt: new Date(),
-              trialEndsAt: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+              appStartsAt: new Date(),
+              validEndsAt: (() => { const d = new Date(); d.setDate(d.getDate() + 7); d.setUTCHours(23, 59, 59, 999); return d; })(),
+              currentPackage: "TRIAL",
               audioMinutesAdded: 90,
             })
             .returning();
@@ -7508,8 +7530,8 @@ export async function registerRoutes(
           .select({
             audioMinutesAdded: users.audioMinutesAdded,
             audioMinutesUsed: users.audioMinutesUsed,
-            trialStartsAt: users.trialStartsAt,
-            trialEndsAt: users.trialEndsAt,
+            appStartsAt: users.appStartsAt,
+            validEndsAt: users.validEndsAt,
             trialUsed: users.trialUsed,
           })
           .from(users)
@@ -7535,8 +7557,8 @@ export async function registerRoutes(
           stats: {
             audioMinutesAdded: u.audioMinutesAdded || 90,
             audioMinutesUsed: parseFloat(String(u.audioMinutesUsed || "0")),
-            trialStartsAt: u.trialStartsAt,
-            trialEndsAt: u.trialEndsAt,
+            appStartsAt: u.appStartsAt,
+            validEndsAt: u.validEndsAt,
             trialUsed: u.trialUsed,
             totalTranscriptions: totalLogs[0]?.count || 0,
             totalUsageSeconds: totalLogs[0]?.totalSeconds || 0,
@@ -7694,8 +7716,8 @@ export async function registerRoutes(
           .json({ success: false, error: "User not found" });
 
       const now = new Date();
-      const trialEndsAt = user.trialEndsAt ? new Date(user.trialEndsAt) : null;
-      const hasTimeRemaining = trialEndsAt && trialEndsAt > now;
+      const validEndsAt = user.validEndsAt ? new Date(user.validEndsAt) : null;
+      const hasTimeRemaining = validEndsAt && validEndsAt > now;
       if (!hasTimeRemaining) {
         const activeSub = await db
           .select()
