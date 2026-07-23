@@ -50,8 +50,8 @@ interface UsageStats {
   audioMinutesUsed: number;
   totalTranscriptions: number;
   totalUsageSeconds: number;
-  trialStartsAt: string | null;
-  trialEndsAt: string | null;
+  appStartsAt: string | null;
+  validEndsAt: string | null;
   trialUsed: boolean;
 }
 
@@ -101,6 +101,8 @@ export default function AccountSettings() {
   const { data: subData, isLoading: subLoading } = useQuery<{
     success: boolean;
     has_active_subscription: boolean;
+    current_package: string | null;
+    valid_ends_at: string | null;
     subscription: SubscriptionInfo | null;
   }>({
     queryKey: ["/api/v1/a/subscription-status"],
@@ -121,6 +123,12 @@ export default function AccountSettings() {
   const hasSub = subData?.has_active_subscription ?? false;
   const autoRenewOn = hasSub && sub ? !sub.cancel_at_period_end : false;
   const pendingCancellation = hasSub && sub ? sub.cancel_at_period_end : false;
+
+  // Determine whether a non-subscriber's validity has expired (or was never set).
+  const trialExpired =
+    !hasSub &&
+    subData !== undefined &&
+    (!subData.valid_ends_at || new Date(subData.valid_ends_at) < new Date());
 
   const cancelMutation = useMutation({
     mutationFn: async () => {
@@ -427,11 +435,24 @@ export default function AccountSettings() {
                   <Skeleton className="h-9 w-32" />
                 </div>
               ) : !hasSub ? (
-                <div className="flex items-center justify-between gap-4 flex-wrap">
-                  <div>
-                    <p className="text-sm text-muted-foreground">You don't have an active subscription.</p>
+                <div className="space-y-3">
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="font-medium text-sm" data-testid="text-current-package">
+                      {subData?.current_package ?? "TRIAL"}
+                    </span>
+                    {trialExpired ? (
+                      <Badge variant="destructive" data-testid="status-plan-expired">Expired</Badge>
+                    ) : (
+                      <Badge variant="secondary" data-testid="status-plan-trial">Active</Badge>
+                    )}
                   </div>
-                  <Button variant="default" size="sm" asChild>
+                  <div className="flex items-center justify-between text-sm flex-wrap gap-2">
+                    <span className="text-muted-foreground">Valid until</span>
+                    <span className="font-medium" data-testid="text-valid-ends-at">
+                      {formatDate(subData?.valid_ends_at)}
+                    </span>
+                  </div>
+                  <Button variant="default" size="sm" asChild data-testid="button-view-plans">
                     <a href="/pricing">View plans</a>
                   </Button>
                 </div>

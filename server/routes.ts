@@ -3510,10 +3510,12 @@ export async function registerRoutes(
         });
       }
 
-      // Stacking: extend from current validEndsAt if in the future
+      // Stacking: extend from current validEndsAt only when user is on a paid plan.
+      // If still on TRIAL, start from today so trial days are not added on top.
       const _subNow = new Date();
-      const _subUserRow = await db.select({ validEndsAt: users.validEndsAt }).from(users).where(eq(users.id, userId)).limit(1);
-      const _subBase = (_subUserRow[0]?.validEndsAt && _subUserRow[0].validEndsAt > _subNow) ? new Date(_subUserRow[0].validEndsAt) : _subNow;
+      const _subUserRow = await db.select({ validEndsAt: users.validEndsAt, currentPackage: users.currentPackage }).from(users).where(eq(users.id, userId)).limit(1);
+      const _subIsPaid = _subUserRow[0]?.currentPackage && _subUserRow[0].currentPackage !== "TRIAL";
+      const _subBase = (_subIsPaid && _subUserRow[0]?.validEndsAt && _subUserRow[0].validEndsAt > _subNow) ? new Date(_subUserRow[0].validEndsAt) : _subNow;
       const validDateUpto = new Date(_subBase);
       validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
       validDateUpto.setUTCHours(23, 59, 59, 999);
@@ -5284,7 +5286,8 @@ export async function registerRoutes(
             validDateUpto = new Date("2099-12-31T23:59:59Z");
           } else {
             const _rcNow = new Date();
-            const _rcBase = (user.validEndsAt && user.validEndsAt > _rcNow) ? new Date(user.validEndsAt) : _rcNow;
+            const _rcIsPaid = user.currentPackage && user.currentPackage !== "TRIAL";
+            const _rcBase = (_rcIsPaid && user.validEndsAt && user.validEndsAt > _rcNow) ? new Date(user.validEndsAt) : _rcNow;
             validDateUpto = new Date(_rcBase);
             validDateUpto.setDate(validDateUpto.getDate() + plan.validDays);
             validDateUpto.setUTCHours(23, 59, 59, 999);
