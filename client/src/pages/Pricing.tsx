@@ -2,12 +2,14 @@ import { useState, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Check, X, Mic, Zap, CreditCard } from "lucide-react";
-import { motion } from "framer-motion";
+import { Check, X, Mic, Zap, CreditCard, Clock } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 import { Link } from "wouter";
 import Header from "@/components/landing/Header";
 import Footer from "@/components/landing/Footer";
 import { useAuth } from "@/contexts/AuthContext";
+import { useQuery } from "@tanstack/react-query";
+import { getQueryFn } from "@/lib/queryClient";
 
 const MONTHLY_PRICE = 15;
 const YEARLY_PRICE = Math.round(MONTHLY_PRICE * 0.8); // 20% off
@@ -95,9 +97,168 @@ function CellContent({ value, isProCol }: { value: CellValue; isProCol: boolean 
   );
 }
 
+interface UsageStats {
+  audioMinutesAdded: number;
+  audioMinutesUsed: number;
+  trialStartsAt: string | null;
+  trialEndsAt: string | null;
+  trialUsed: boolean;
+}
+
+interface SubscriptionStatus {
+  success: boolean;
+  has_active_subscription: boolean;
+  has_active_trial: boolean;
+  trial: {
+    is_active: boolean;
+    days_remaining: number;
+    minutes_remaining: number;
+    minutes_used: number;
+    trial_ends_at: string | null;
+  } | null;
+  subscription: {
+    minutes_remaining: number;
+    plan_name: string;
+    status: string;
+  } | null;
+}
+
+function BalanceRow({
+  subData,
+  stats,
+}: {
+  subData: SubscriptionStatus | null;
+  stats: UsageStats | null;
+}) {
+  const isSubscribed = subData?.has_active_subscription ?? false;
+  const isTrial = subData?.has_active_trial ?? false;
+
+  // Mobile-style priority chain: subscription ? trial ? usage-stats fallback
+  let remaining: number | null = null;
+  if (isSubscribed && subData?.subscription?.minutes_remaining != null) {
+    remaining = subData.subscription.minutes_remaining;
+  } else if (isTrial && subData?.trial?.minutes_remaining != null) {
+    remaining = subData.trial.minutes_remaining;
+  } else if (stats) {
+    remaining = Math.max(0, stats.audioMinutesAdded - stats.audioMinutesUsed);
+  }
+
+  if (remaining === null) return null;
+
+  const total = stats?.audioMinutesAdded ?? 90;
+  const isLow = remaining <= 10;
+
+  if (isTrial && !isSubscribed) {
+    const pct = total > 0 ? Math.min(1, remaining / total) : 0;
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ delay: 0.15 }}
+        className="max-w-3xl mx-auto mb-10"
+        data-testid="balance-row-trial"
+      >
+        <Card className="px-6 py-4">
+          <div className="flex items-center gap-4 flex-wrap mb-3">
+            <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+              <Clock className="w-4 h-4 text-primary" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium text-foreground">Trial minutes remaining</p>
+              <p className="text-xs text-muted-foreground">Upgrade to Pro for 3,000 mins/month</p>
+            </div>
+            <span
+              className={`text-sm font-semibold shrink-0 ${isLow ? "text-destructive" : "text-foreground"}`}
+              data-testid="balance-minutes-remaining"
+            >
+              <AnimatePresence mode="wait">
+                <motion.span
+                  key={Math.floor(remaining)}
+                  initial={{ opacity: 0, y: -6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 6 }}
+                  transition={{ duration: 0.25 }}
+                  style={{ display: "inline-block" }}
+                >
+                  {Math.floor(remaining)}
+                </motion.span>
+              </AnimatePresence>
+              {" / "}{total} min
+            </span>
+          </div>
+          <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${isLow ? "bg-destructive" : "bg-primary"}`}
+              style={{ width: `${pct * 100}%` }}
+              data-testid="balance-progress-bar"
+            />
+          </div>
+        </Card>
+      </motion.div>
+    );
+  }
+
+  const label = isSubscribed ? "Resets with your next billing cycle" : "Top up anytime to add more minutes";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: 0.15 }}
+      className="max-w-3xl mx-auto mb-10"
+      data-testid={isSubscribed ? "balance-row-subscribed" : "balance-row-balance"}
+    >
+      <Card className="px-6 py-4 flex items-center gap-4 flex-wrap">
+        <div className="w-8 h-8 rounded-md bg-primary/10 flex items-center justify-center shrink-0">
+          <Clock className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-medium text-foreground">Your remaining minutes</p>
+          <p className="text-xs text-muted-foreground">{label}</p>
+        </div>
+        <Badge
+          variant={isLow ? "destructive" : "secondary"}
+          className="text-sm font-semibold shrink-0"
+          data-testid="balance-minutes-remaining"
+        >
+          <AnimatePresence mode="wait">
+            <motion.span
+              key={Math.floor(remaining)}
+              initial={{ opacity: 0, y: -6 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: 6 }}
+              transition={{ duration: 0.25 }}
+              style={{ display: "inline-block" }}
+            >
+              {Math.floor(remaining)}
+            </motion.span>
+          </AnimatePresence>
+          {" min remaining"}
+        </Badge>
+      </Card>
+    </motion.div>
+  );
+}
+
 export default function Pricing() {
   const [isYearly, setIsYearly] = useState(false);
   const { user } = useAuth();
+
+  const { data: usageData } = useQuery<{ success: boolean; stats: UsageStats }>({
+    queryKey: ["/api/v1/a/usage-stats"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: !!user,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
+
+  const { data: subData } = useQuery<SubscriptionStatus>({
+    queryKey: ["/api/v1/a/subscription-status"],
+    queryFn: getQueryFn({ on401: "returnNull" }),
+    enabled: !!user,
+    staleTime: 60 * 1000,
+    refetchOnWindowFocus: true,
+  });
 
   const displayPrice = isYearly ? YEARLY_PRICE : MONTHLY_PRICE;
 
@@ -160,6 +321,14 @@ export default function Pricing() {
               </button>
             </motion.div>
           </div>
+
+          {/* -- Balance row (authenticated users only) -- */}
+          {user && (subData || usageData?.stats) && (
+            <BalanceRow
+              subData={subData ?? null}
+              stats={usageData?.stats ?? null}
+            />
+          )}
 
           {/* -- Plan cards -- */}
           <div className="grid md:grid-cols-2 gap-6 max-w-3xl mx-auto mb-20">

@@ -434,7 +434,7 @@ const PLAN_DEFINITIONS = [
     recordingsAvailableDays: 90,
     chunksCount: 90,
     offlineRecording: true,
-    priceMonthly: 2499,
+    priceMonthly: 1500,
   },
   {
     name: "Top-Up",
