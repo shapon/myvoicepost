@@ -7319,52 +7319,60 @@ async function handleRCWebhook(req: Request, res: Response) {
       }
 
       case "RENEWAL": {
-        // FIX 3+4: resolve plan upfront for both branches
         const renewalPlan = await findPlan();
-        // Stacking: extend from current validEndsAt if in the future
-        const _rnNow = new Date();
-        const _rnBase = (user.validEndsAt && user.validEndsAt > _rnNow) ? new Date(user.validEndsAt) : _rnNow;
-        const renewalValidDateUpto = new Date(_rnBase);
-        renewalValidDateUpto.setDate(renewalValidDateUpto.getDate() + (renewalPlan?.validDays || 30));
-        renewalValidDateUpto.setUTCHours(23, 59, 59, 999);
-        const existingResult = await db.select().from(userSubscriptions)
-          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, paymentToken))).limit(1);
+        if (!renewalPlan) break;
 
-        if (existingResult.length > 0) {
-          // FIX 3: reset minutes to fresh plan allocation for new billing period
-          const freshMinutes = renewalPlan?.validTotalMinutes || 0;
-          await db.update(userSubscriptions)
-            .set({ status: "active", minutesUsed: 0, minutesRemaining: String(freshMinutes), validDateUpto: renewalValidDateUpto })
-            .where(eq(userSubscriptions.id, existingResult[0].id));
-        } else {
-          if (renewalPlan) {
-            // FIX 4: supersede any existing active sub before inserting the new renewal row
-            await db.update(userSubscriptions)
-              .set({ status: "superseded" })
-              .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active")));
-            await db.insert(userSubscriptions).values({
-              userId: user.id, planId: renewalPlan.id, validDateUpto: renewalValidDateUpto,
-              minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(renewalPlan.validTotalMinutes || 0),
-              paymentToken, status: "active",
-            });
-          }
+        // Use transactionId (unique per billing period) NOT originalTransactionId
+        // (originalTransactionId is shared across every renewal of the same sub → causes stacking bug)
+        const renewalToken = transactionId || eventId || "";
+
+        // Use RC's actual expiry date directly — never stack from current valid_ends_at
+        const renewalValidDateUpto = (() => {
+          const d = expirationAtMs
+            ? new Date(expirationAtMs)
+            : (() => { const n = new Date(); n.setDate(n.getDate() + (renewalPlan.validDays || 30)); return n; })();
+          d.setUTCHours(23, 59, 59, 999);
+          return d;
+        })();
+
+        // Idempotency: skip if this exact renewal transaction was already processed
+        const existingRenewal = await db.select().from(userSubscriptions)
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.paymentToken, renewalToken)))
+          .limit(1);
+
+        if (existingRenewal.length > 0) {
+          console.log(`[RC Webhook] RENEWAL: already processed token ${renewalToken}, skipping`);
+          break;
         }
-        // Update mvp_users validity tracking
-        if (renewalPlan) {
+
+        // Supersede any existing active subscription
+        await db.update(userSubscriptions)
+          .set({ status: "superseded" })
+          .where(and(eq(userSubscriptions.userId, user.id), eq(userSubscriptions.status, "active")));
+
+        // Insert a fresh row for this renewal period
+        await db.insert(userSubscriptions).values({
+          userId: user.id, planId: renewalPlan.id, validDateUpto: renewalValidDateUpto,
+          minutesUsed: 0, chunksUsed: 0, minutesRemaining: String(renewalPlan.validTotalMinutes || 0),
+          paymentToken: renewalToken, status: "active",
+        });
+
+        // Only extend mvp_users.valid_ends_at — never reduce it
+        if (!user.validEndsAt || renewalValidDateUpto > user.validEndsAt) {
           await db.update(users)
             .set({ validEndsAt: renewalValidDateUpto, currentPackage: renewalPlan.name, updatedAt: new Date() })
             .where(eq(users.id, user.id));
         }
+
         await refreshUserRole(user.id);
-        console.log(`[RC Webhook] RENEWAL: User ${user.id} renewed`);
+        console.log(`[RC Webhook] RENEWAL: User ${user.id} renewed until ${renewalValidDateUpto.toISOString()}`);
 
         (async () => {
-          const plan = await findPlan();
-          const planName = plan?.name ?? "Pro";
+          const planName = renewalPlan.name ?? "Pro";
           await fireNotification(
             "subscription_renewed", "Subscription Renewed",
             `Your ${planName} plan has been renewed. Enjoy your recording minutes!`,
-            `rc_renewal_${paymentToken}_${expirationAtMs || Date.now()}`,
+            `rc_renewal_${renewalToken}`,
             () => sendSubscriptionRenewedEmail(user.email!, planName),
           );
         })();
