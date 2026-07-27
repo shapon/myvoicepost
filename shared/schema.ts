@@ -58,7 +58,7 @@ export const insertUserSsoAccountSchema = createInsertSchema(userSsoAccounts).om
 export type InsertUserSsoAccount = z.infer<typeof insertUserSsoAccountSchema>;
 export type UserSsoAccount = typeof userSsoAccounts.$inferSelect;
 
-// Supported languages for translation
+// Supported languages for translation — kept in sync with mobile/src/lib/constants.ts
 export const supportedLanguages = [
   { code: "en", name: "English", flag: "US" },
   { code: "es", name: "Spanish", flag: "ES" },
@@ -66,21 +66,82 @@ export const supportedLanguages = [
   { code: "de", name: "German", flag: "DE" },
   { code: "it", name: "Italian", flag: "IT" },
   { code: "pt", name: "Portuguese", flag: "PT" },
-  { code: "nl", name: "Dutch", flag: "NL" },
   { code: "ru", name: "Russian", flag: "RU" },
   { code: "zh", name: "Chinese", flag: "CN" },
   { code: "ja", name: "Japanese", flag: "JP" },
   { code: "ko", name: "Korean", flag: "KR" },
   { code: "ar", name: "Arabic", flag: "SA" },
   { code: "hi", name: "Hindi", flag: "IN" },
-  { code: "tr", name: "Turkish", flag: "TR" },
+  { code: "bn", name: "Bengali", flag: "BD" },
+  { code: "pa", name: "Punjabi", flag: "IN" },
+  { code: "nl", name: "Dutch", flag: "NL" },
   { code: "pl", name: "Polish", flag: "PL" },
+  { code: "tr", name: "Turkish", flag: "TR" },
   { code: "vi", name: "Vietnamese", flag: "VN" },
+  { code: "te", name: "Telugu", flag: "IN" },
+  { code: "ta", name: "Tamil", flag: "IN" },
+  { code: "mr", name: "Marathi", flag: "IN" },
+  { code: "gu", name: "Gujarati", flag: "IN" },
+  { code: "kn", name: "Kannada", flag: "IN" },
+  { code: "ml", name: "Malayalam", flag: "IN" },
+  { code: "or", name: "Odia", flag: "IN" },
+  { code: "ur", name: "Urdu", flag: "PK" },
   { code: "th", name: "Thai", flag: "TH" },
   { code: "id", name: "Indonesian", flag: "ID" },
+  { code: "ms", name: "Malay", flag: "MY" },
+  { code: "tl", name: "Filipino", flag: "PH" },
+  { code: "sv", name: "Swedish", flag: "SE" },
+  { code: "da", name: "Danish", flag: "DK" },
+  { code: "no", name: "Norwegian", flag: "NO" },
+  { code: "fi", name: "Finnish", flag: "FI" },
+  { code: "el", name: "Greek", flag: "GR" },
+  { code: "cs", name: "Czech", flag: "CZ" },
+  { code: "sk", name: "Slovak", flag: "SK" },
+  { code: "ro", name: "Romanian", flag: "RO" },
+  { code: "hu", name: "Hungarian", flag: "HU" },
+  { code: "bg", name: "Bulgarian", flag: "BG" },
+  { code: "hr", name: "Croatian", flag: "HR" },
+  { code: "sr", name: "Serbian", flag: "RS" },
+  { code: "sl", name: "Slovenian", flag: "SI" },
+  { code: "uk", name: "Ukrainian", flag: "UA" },
+  { code: "he", name: "Hebrew", flag: "IL" },
+  { code: "fa", name: "Persian", flag: "IR" },
+  { code: "sw", name: "Swahili", flag: "KE" },
+  { code: "af", name: "Afrikaans", flag: "ZA" },
+  { code: "ca", name: "Catalan", flag: "ES" },
+  { code: "eu", name: "Basque", flag: "ES" },
+  { code: "gl", name: "Galician", flag: "ES" },
+  { code: "lt", name: "Lithuanian", flag: "LT" },
+  { code: "lv", name: "Latvian", flag: "LV" },
+  { code: "et", name: "Estonian", flag: "EE" },
+  { code: "is", name: "Icelandic", flag: "IS" },
+  { code: "mk", name: "Macedonian", flag: "MK" },
+  { code: "sq", name: "Albanian", flag: "AL" },
+  { code: "bs", name: "Bosnian", flag: "BA" },
+  { code: "cy", name: "Welsh", flag: "GB" },
+  { code: "ga", name: "Irish", flag: "IE" },
+  { code: "mt", name: "Maltese", flag: "MT" },
+  { code: "ne", name: "Nepali", flag: "NP" },
+  { code: "si", name: "Sinhala", flag: "LK" },
+  { code: "km", name: "Khmer", flag: "KH" },
+  { code: "lo", name: "Lao", flag: "LA" },
+  { code: "my", name: "Myanmar", flag: "MM" },
+  { code: "ka", name: "Georgian", flag: "GE" },
+  { code: "am", name: "Amharic", flag: "ET" },
+  { code: "az", name: "Azerbaijani", flag: "AZ" },
+  { code: "kk", name: "Kazakh", flag: "KZ" },
+  { code: "uz", name: "Uzbek", flag: "UZ" },
+  { code: "mn", name: "Mongolian", flag: "MN" },
+  { code: "hy", name: "Armenian", flag: "AM" },
 ] as const;
 
 export type LanguageCode = typeof supportedLanguages[number]["code"];
+
+/** Returns the display name for a language code. "auto" maps to "Auto-detect". */
+export function getLanguageName(code: string): string {
+  if (code === "auto") return "Auto-detect";
+  return supportedLanguages.find((l) => l.code === code)?.name || code;
+}
 
 export const OUTPUT_FORMATS = [
   { value: "professional", label: "Professional" },
@@ -96,10 +157,6 @@ export const OUTPUT_TYPES = [
   { value: "post", label: "Post" },
   { value: "journal", label: "Journal" },
 ] as const;
-
-export function getLanguageName(code: string): string {
-  return supportedLanguages.find((l) => l.code === code)?.name || code;
-}
 
 // Translation request schema for API validation
 export const translateRequestSchema = z.object({

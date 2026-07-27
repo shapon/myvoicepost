@@ -33,7 +33,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
 import { Separator } from "@/components/ui/separator";
-import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle, Bell, Clock } from "lucide-react";
+import { Shield, User, Lock, Loader2, Check, CreditCard, RefreshCw, AlertTriangle, Bell, Clock, ExternalLink, Receipt } from "lucide-react";
 
 interface SubscriptionInfo {
   id: string;
@@ -83,6 +83,130 @@ const passwordSchema = z
     path: ["confirmPassword"],
   });
 type PasswordValues = z.infer<typeof passwordSchema>;
+
+// ── Payment History section ────────────────────────────────────────────────────
+
+interface PaymentRecord {
+  id: string;
+  type: string;
+  planName: string;
+  amount: number;
+  currency: string;
+  status: string;
+  minutesAdded: number | null;
+  date: string | null;
+  cardBrand: string | null;
+  cardLast4: string | null;
+  receiptUrl: string | null;
+  refunded: boolean;
+}
+
+function PaymentHistorySection() {
+  const { data, isLoading } = useQuery<{ success: boolean; payments: PaymentRecord[] }>({
+    queryKey: ["/api/v1/a/payment-history"],
+    staleTime: 5 * 60 * 1000,
+  });
+
+  const payments = (data?.payments ?? []).slice(0, 10);
+
+  function formatAmount(amount: number, currency: string) {
+    const dollars = amount / 100;
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency.toUpperCase(),
+      minimumFractionDigits: 2,
+    }).format(dollars);
+  }
+
+  return (
+    <Card>
+      <CardHeader className="pb-3">
+        <div className="flex items-center gap-2">
+          <Receipt className="w-4 h-4 text-muted-foreground" />
+          <CardTitle className="text-base">Payment History</CardTitle>
+        </div>
+        <CardDescription>Your last 10 payments</CardDescription>
+      </CardHeader>
+      <CardContent>
+        {isLoading ? (
+          <div className="space-y-3">
+            {[1, 2, 3].map((i) => <Skeleton key={i} className="h-12 w-full" />)}
+          </div>
+        ) : payments.length === 0 ? (
+          <p className="text-sm text-muted-foreground" data-testid="text-no-payments">
+            No payments yet.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {payments.map((p) => (
+              <div
+                key={p.id}
+                className="flex items-center gap-3 rounded-lg border p-3 text-sm"
+                data-testid={`payment-row-${p.id}`}
+              >
+                {/* Date */}
+                <div className="shrink-0 text-xs text-muted-foreground w-20">
+                  {p.date ? new Date(p.date).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "—"}
+                </div>
+
+                {/* Plan + card */}
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium truncate">{p.planName}</p>
+                  {p.cardBrand && p.cardLast4 && (
+                    <p className="text-xs text-muted-foreground">
+                      {p.cardBrand.charAt(0).toUpperCase() + p.cardBrand.slice(1)} ···{p.cardLast4}
+                    </p>
+                  )}
+                </div>
+
+                {/* Minutes */}
+                {p.minutesAdded != null && (
+                  <span className="text-xs text-muted-foreground shrink-0">
+                    +{p.minutesAdded} min
+                  </span>
+                )}
+
+                {/* Amount */}
+                <span className="font-semibold shrink-0">
+                  {p.amount > 0 ? formatAmount(p.amount, p.currency) : "Free"}
+                </span>
+
+                {/* Status badge */}
+                <Badge
+                  variant={
+                    p.refunded
+                      ? "destructive"
+                      : p.status === "active" || p.status === "succeeded"
+                      ? "secondary"
+                      : "outline"
+                  }
+                  className="shrink-0 text-xs"
+                  data-testid={`payment-status-${p.id}`}
+                >
+                  {p.refunded ? "Refunded" : p.status}
+                </Badge>
+
+                {/* Receipt link */}
+                {p.receiptUrl && (
+                  <a
+                    href={p.receiptUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 text-primary hover:underline"
+                    data-testid={`payment-receipt-${p.id}`}
+                    title="View receipt"
+                  >
+                    <ExternalLink className="h-4 w-4" />
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
@@ -581,6 +705,11 @@ export default function AccountSettings() {
               )}
             </CardContent>
           </Card>
+
+          <Separator />
+
+          {/* Payment History */}
+          <PaymentHistorySection />
 
           <Separator />
 

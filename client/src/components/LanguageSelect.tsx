@@ -13,6 +13,8 @@ interface LanguageSelectProps {
   label?: string;
   placeholder?: string;
   testIdPrefix?: string;
+  /** When true, prepends an "Auto-detect" option (code: "auto"). Use for source language only. */
+  showAutoDetect?: boolean;
 }
 
 export default function LanguageSelect({
@@ -21,6 +23,7 @@ export default function LanguageSelect({
   label,
   placeholder = "Language",
   testIdPrefix = "lang",
+  showAutoDetect = false,
 }: LanguageSelectProps) {
   return (
     <div className="space-y-1.5">
@@ -30,6 +33,11 @@ export default function LanguageSelect({
           <SelectValue placeholder={placeholder} />
         </SelectTrigger>
         <SelectContent>
+          {showAutoDetect && (
+            <SelectItem value="auto" data-testid={`option-${testIdPrefix}-auto`}>
+              ?? Auto-detect
+            </SelectItem>
+          )}
           {supportedLanguages.map((lang) => (
             <SelectItem
               key={lang.code}

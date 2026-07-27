@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+_<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
@@ -174,7 +174,7 @@
 
 <h1>MyVoicePost — API Endpoint Reference</h1>
 <p class="subtitle">
-  Last updated: <strong>2026-06-16</strong> &nbsp;|&nbsp;
+  Last updated: <strong>2026-07-22</strong> &nbsp;|&nbsp;
   Both <strong>server/routes.ts</strong> (local dev) and <strong>api/index.ts</strong> (Vercel production) must contain every endpoint.
   Auth header for <span class="badge badge-auth">Authenticated</span> routes: <code style="color:#7dd3fc">Authorization: Bearer &lt;jwt&gt;</code>
 </p>
@@ -201,6 +201,7 @@
     <li><a href="#saved">Saved Texts</a></li>
     <li><a href="#subscriptions">Subscriptions</a></li>
     <li><a href="#payments">Payments / Stripe</a></li>
+    <li><a href="#revenuecat">RevenueCat</a></li>
     <li><a href="#settings">User Settings</a></li>
     <li><a href="#push">Push Tokens</a></li>
     <li><a href="#support">Support / Errors</a></li>
@@ -683,6 +684,9 @@
         <li><span class="key">success</span> <span class="type">bool</span></li>
         <li><span class="key">originalText</span> <span class="type">string</span></li>
         <li><span class="key">detectedLanguage</span> <span class="type">string</span> <span class="opt">optional</span></li>
+        <li><span class="key">audio_minutes_added</span> <span class="type">number</span> <span class="opt">optional</span> — total minutes on account</li>
+        <li><span class="key">audio_minutes_used</span> <span class="type">number</span> <span class="opt">optional</span> — minutes consumed</li>
+        <li><span class="key">is_subscribed</span> <span class="type">bool</span> <span class="opt">optional</span></li>
       </ul></td>
       <td><span class="note">Auto language, no guest limits</span></td>
     </tr>
@@ -699,6 +703,9 @@
         <li><span class="key">success</span> <span class="type">bool</span></li>
         <li><span class="key">originalText</span> <span class="type">string</span></li>
         <li><span class="key">language</span> <span class="type">string</span></li>
+        <li><span class="key">audio_minutes_added</span> <span class="type">number</span> <span class="opt">optional</span> — total minutes on account</li>
+        <li><span class="key">audio_minutes_used</span> <span class="type">number</span> <span class="opt">optional</span> — minutes consumed</li>
+        <li><span class="key">is_subscribed</span> <span class="type">bool</span> <span class="opt">optional</span></li>
       </ul></td>
       <td><span class="note">Language-specific, no guest limits</span></td>
     </tr>
@@ -1009,7 +1016,12 @@
       <td><span class="note">—</span></td>
       <td><ul class="field-list">
         <li><span class="key">success</span> <span class="type">bool</span></li>
-        <li><span class="key">subscription</span> <span class="type">object | null</span></li>
+        <li><span class="key">subscription</span> <span class="type">object | null</span> — active plan details</li>
+        <li><span class="key">trial</span> <span class="type">object | null</span></li>
+        <li><span class="key">trial.audio_minutes_added</span> <span class="type">number</span> — quota granted to account</li>
+        <li><span class="key">trial.audio_minutes_used</span> <span class="type">number</span> — minutes consumed</li>
+        <li><span class="key">trial.minutes_remaining</span> <span class="type">number</span></li>
+        <li><span class="key">trial.is_active</span> <span class="type">bool</span></li>
       </ul></td>
       <td><span class="note">Current subscription details</span></td>
     </tr>
@@ -1060,7 +1072,13 @@
       <td><span class="note">—</span></td>
       <td><ul class="field-list">
         <li><span class="key">success</span> <span class="type">bool</span></li>
-        <li><span class="key">stats</span> <span class="type">object</span> — minutes used, remaining, etc.</li>
+        <li><span class="key">stats.audio_minutes_added</span> <span class="type">number</span> — total minutes added to account</li>
+        <li><span class="key">stats.audio_minutes_used</span> <span class="type">number</span> — minutes consumed</li>
+        <li><span class="key">stats.trialStartsAt</span> <span class="type">string | null</span></li>
+        <li><span class="key">stats.trialEndsAt</span> <span class="type">string | null</span></li>
+        <li><span class="key">stats.trialUsed</span> <span class="type">bool</span></li>
+        <li><span class="key">stats.totalTranscriptions</span> <span class="type">number</span></li>
+        <li><span class="key">stats.totalUsageSeconds</span> <span class="type">number</span></li>
       </ul></td>
       <td><span class="note">Usage quota stats for current subscription period</span></td>
     </tr>
@@ -1176,6 +1194,53 @@
       <td><span class="note">Raw Stripe webhook event body</span></td>
       <td><span class="note">{ received: true }</span></td>
       <td><span class="note highlight">Verified by Stripe-Signature header. Do NOT call manually.</span></td>
+    </tr>
+  </tbody>
+</table>
+</div>
+
+<!-- ================================================================
+     REVENUECAT
+     ================================================================ -->
+<div id="revenuecat" class="section-header">
+  <span class="section-icon">📱</span>
+  <h2>RevenueCat — /api/v1/a/revenuecat-*</h2>
+</div>
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr>
+      <th>Method</th>
+      <th>Path</th>
+      <th>Auth</th>
+      <th>Request Body / Params</th>
+      <th>Response</th>
+      <th>Notes</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><span class="method POST">POST</span></td>
+      <td><span class="path">/api/v1/a/revenuecat-webhook</span></td>
+      <td><span class="badge badge-cron">RC Webhook</span></td>
+      <td>
+        <ul class="field-list">
+          <li><span class="key">event.type</span> <span class="type">string</span> — e.g. <code style="color:#7dd3fc">INITIAL_PURCHASE</code>, <code style="color:#7dd3fc">NON_RENEWING_PURCHASE</code>, <code style="color:#7dd3fc">RENEWAL</code>, <code style="color:#7dd3fc">CANCELLATION</code>, <code style="color:#7dd3fc">EXPIRATION</code></li>
+          <li><span class="key">event.app_user_id</span> <span class="type">string</span> — maps to our <code style="color:#7dd3fc">users.id</code></li>
+          <li><span class="key">event.product_id</span> <span class="type">string</span> — RC product identifier (e.g. <code style="color:#7dd3fc">mvp_monthly:monthly</code>; split on <code style="color:#7dd3fc">:</code> to normalise)</li>
+          <li><span class="key">event.expiration_at_ms</span> <span class="type">number</span> <span class="opt">optional</span> — epoch ms</li>
+          <li><span class="key">event.environment</span> <span class="type">string</span> — <code style="color:#7dd3fc">PRODUCTION</code> or <code style="color:#7dd3fc">SANDBOX</code></li>
+        </ul>
+      </td>
+      <td><span class="note">{ received: true }</span></td>
+      <td>
+        <span class="note">
+          Verified via <code style="color:#7dd3fc">Authorization</code> header = <code style="color:#fbbf24">REVENUECAT_WEBHOOK_SECRET</code> env var (skipped if var is unset).<br>
+          <span class="highlight">Do NOT call manually.</span><br>
+          Handles: activation on <code>INITIAL_PURCHASE</code> / <code>NON_RENEWING_PURCHASE</code>; renewal extension on <code>RENEWAL</code>; status update on <code>CANCELLATION</code> / <code>EXPIRATION</code>.<br>
+          Test Store product IDs (<code>monthly</code>, <code>yearly</code>, <code>lifetime</code>) are automatically mapped to DB identifiers (<code>mvp_monthly</code>, <code>mvp_yearly</code>, <code>mvp_lifetime</code>).
+        </span>
+      </td>
     </tr>
   </tbody>
 </table>
@@ -1518,7 +1583,7 @@
 </div>
 
 <p style="color: #334155; font-size: 11px; margin-top: 20px; text-align: center;">
-  MyVoicePost API Reference · Generated 2026-06-16 · server/routes.ts + api/index.ts
+  MyVoicePost API Reference · Generated 2026-07-22 · server/routes.ts + api/index.ts
 </p>
 
 </body>

@@ -4691,9 +4691,40 @@ export async function registerRoutes(
                     status: "active",
                   });
 
+                  // Sync plan name + expiry to mvp_users so subscription-status API
+                  // returns correct plan name and valid_ends_at for web users.
+                  // Only extend the date — never shorten it.
+                  const freshUser = await db
+                    .select()
+                    .from(users)
+                    .where(eq(users.id, user.id))
+                    .limit(1);
+                  const currentValidEndsAt = freshUser[0]?.validEndsAt;
+                  if (
+                    !currentValidEndsAt ||
+                    validDateUpto > currentValidEndsAt
+                  ) {
+                    await db
+                      .update(users)
+                      .set({
+                        validEndsAt: validDateUpto,
+                        currentPackage: matchedPlan.name,
+                        updatedAt: new Date(),
+                      })
+                      .where(eq(users.id, user.id));
+                  } else {
+                    await db
+                      .update(users)
+                      .set({
+                        currentPackage: matchedPlan.name,
+                        updatedAt: new Date(),
+                      })
+                      .where(eq(users.id, user.id));
+                  }
+
                   await refreshUserRole(user.id);
                   console.log(
-                    `[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}`,
+                    `[Stripe Webhook] invoice.paid: User ${user.id} activated plan ${matchedPlan.name}, access until ${validDateUpto.toISOString()}`,
                   );
 
                   // Fire-and-forget push — must never block webhook 200 response

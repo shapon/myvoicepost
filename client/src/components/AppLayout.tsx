@@ -53,6 +53,7 @@ import {
   Bell,
   Mail,
   Smartphone,
+  ImageIcon,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -74,6 +75,7 @@ const navItems = [
   { label: "Translate", href: "/translate", icon: Languages },
   { label: "Transcribe", href: "/process", icon: FileAudio },
   { label: "Doc AI", href: "/doc-ai", icon: BrainCircuit },
+  { label: "Imagine", href: "/imagine", icon: ImageIcon },
   { label: "Saved", href: "/saved", icon: Bookmark },
   { label: "Help", href: "/help", icon: HelpCircle },
 ];

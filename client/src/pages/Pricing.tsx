@@ -1,4 +1,4 @@
-import { useState, Fragment } from "react";
+import { useState, useEffect, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -8,8 +8,8 @@ import { Link } from "wouter";
 import Header from "@/components/landing/Header";
 import Footer from "@/components/landing/Footer";
 import { useAuth } from "@/contexts/AuthContext";
-import { useQuery } from "@tanstack/react-query";
-import { getQueryFn } from "@/lib/queryClient";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { getQueryFn, apiRequest } from "@/lib/queryClient";
 
 const MONTHLY_PRICE = 15;
 const YEARLY_PRICE = Math.round(MONTHLY_PRICE * 0.8); // 20% off
@@ -109,6 +109,8 @@ interface SubscriptionStatus {
   success: boolean;
   has_active_subscription: boolean;
   has_active_trial: boolean;
+  valid_ends_at?: string | null;
+  current_package?: string | null;
   trial: {
     is_active: boolean;
     days_remaining: number;
@@ -120,7 +122,17 @@ interface SubscriptionStatus {
     minutes_remaining: number;
     plan_name: string;
     status: string;
+    valid_date_upto?: string | null;
   } | null;
+}
+
+function formatValidUntil(iso: string | null | undefined): string | null {
+  if (!iso) return null;
+  return new Date(iso).toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
 }
 
 function BalanceRow({
@@ -148,6 +160,15 @@ function BalanceRow({
   const total = stats?.audioMinutesAdded ?? 90;
   const isLow = remaining <= 10;
 
+  // Resolve "valid until" date from wherever it's available
+  const validUntilIso =
+    subData?.valid_ends_at ||
+    subData?.subscription?.valid_date_upto ||
+    subData?.trial?.trial_ends_at ||
+    stats?.trialEndsAt ||
+    null;
+  const validUntilStr = formatValidUntil(validUntilIso);
+
   if (isTrial && !isSubscribed) {
     const pct = total > 0 ? Math.min(1, remaining / total) : 0;
     return (
@@ -164,8 +185,12 @@ function BalanceRow({
               <Clock className="w-4 h-4 text-primary" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-medium text-foreground">Trial minutes remaining</p>
-              <p className="text-xs text-muted-foreground">Upgrade to Pro for 3,000 mins/month</p>
+              <p className="text-sm font-medium text-foreground">Balance Minutes</p>
+              {validUntilStr ? (
+                <p className="text-xs text-muted-foreground">Valid until {validUntilStr}</p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Upgrade to Pro for 3,000 mins/month</p>
+              )}
             </div>
             <span
               className={`text-sm font-semibold shrink-0 ${isLow ? "text-destructive" : "text-foreground"}`}
@@ -198,7 +223,13 @@ function BalanceRow({
     );
   }
 
-  const label = isSubscribed ? "Resets with your next billing cycle" : "Top up anytime to add more minutes";
+  const sublabel = isSubscribed
+    ? validUntilStr
+      ? `Valid until ${validUntilStr}`
+      : "Resets with your next billing cycle"
+    : validUntilStr
+    ? `Valid until ${validUntilStr}`
+    : "Top up anytime to add more minutes";
 
   return (
     <motion.div
@@ -213,8 +244,8 @@ function BalanceRow({
           <Clock className="w-4 h-4 text-primary" />
         </div>
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-medium text-foreground">Your remaining minutes</p>
-          <p className="text-xs text-muted-foreground">{label}</p>
+          <p className="text-sm font-medium text-foreground">Balance Minutes</p>
+          <p className="text-xs text-muted-foreground">{sublabel}</p>
         </div>
         <Badge
           variant={isLow ? "destructive" : "secondary"}
@@ -243,6 +274,58 @@ function BalanceRow({
 export default function Pricing() {
   const [isYearly, setIsYearly] = useState(false);
   const { user } = useAuth();
+  const queryClient = useQueryClient();
+
+  // -- Post-checkout polling ---------------------------------------------------
+  // When user lands back from Stripe Checkout with ?session_id= or ?checkout=success,
+  // poll subscription-status every 2s (max 10×) until the plan changes.
+  useEffect(() => {
+    if (!user) return;
+    const params = new URLSearchParams(window.location.search);
+    const hasCheckout =
+      params.has("session_id") ||
+      params.get("checkout") === "success" ||
+      params.has("payment_intent");
+    if (!hasCheckout) return;
+
+    // Strip the Stripe params from the URL without a hard reload
+    const cleanUrl = window.location.pathname;
+    window.history.replaceState({}, "", cleanUrl);
+
+    let attempts = 0;
+    const MAX = 10;
+    let prevPlan: string | undefined;
+
+    const poll = async () => {
+      attempts++;
+      try {
+        const res = await apiRequest("GET", "/api/v1/a/subscription-status");
+        const data: SubscriptionStatus = await res.json();
+        const currentPlan =
+          data.current_package ||
+          data.subscription?.plan_name ||
+          (data.has_active_trial ? "TRIAL" : undefined);
+
+        if (prevPlan === undefined) {
+          prevPlan = currentPlan;
+        } else if (currentPlan !== prevPlan) {
+          // Plan changed ? refresh queries and stop
+          queryClient.invalidateQueries({ queryKey: ["/api/v1/a/subscription-status"] });
+          queryClient.invalidateQueries({ queryKey: ["/api/v1/a/usage-stats"] });
+          return;
+        }
+      } catch {
+        // silently ignore network errors during poll
+      }
+      if (attempts < MAX) {
+        setTimeout(poll, 2000);
+      }
+    };
+
+    // Start polling after a short delay to let webhook arrive
+    setTimeout(poll, 1500);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user]);
 
   const { data: usageData } = useQuery<{ success: boolean; stats: UsageStats }>({
     queryKey: ["/api/v1/a/usage-stats"],

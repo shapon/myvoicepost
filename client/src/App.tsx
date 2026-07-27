@@ -33,6 +33,7 @@ import ResetPassword from "@/pages/ResetPassword";
 import Subscribe from "@/pages/Subscribe";
 import SubscribeSuccess from "@/pages/SubscribeSuccess";
 import Reviews from "@/pages/Reviews";
+import Imagine from "@/pages/Imagine";
 
 function AppSkeleton() {
   return (
@@ -150,6 +151,9 @@ function Router() {
       </Route>
       <Route path="/doc-ai">
         {() => <ProtectedRoute component={DocAI} />}
+      </Route>
+      <Route path="/imagine">
+        {() => <ProtectedRoute component={Imagine} />}
       </Route>
       <Route path="/profile">
         {() => <ProtectedRoute component={Profile} />}
