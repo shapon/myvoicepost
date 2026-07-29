@@ -3730,16 +3730,8 @@ async function mobileAuthMiddleware(req: Request, res: Response, next: NextFunct
       });
     }
 
-    if (decoded.sessionId && decoded.userId) {
-      const isValidSession = await validateSessionId(decoded.userId, decoded.sessionId);
-      if (!isValidSession) {
-        return res.status(401).json({
-          success: false,
-          error: "SESSION_REPLACED",
-          message: "Your account has been logged in on another device. You have been logged out from this device.",
-        });
-      }
-    }
+    // Multi-device support: session ID is stored for audit purposes but
+    // multiple simultaneous sessions are allowed — no single-device enforcement.
 
     next();
   } catch (err: any) {
