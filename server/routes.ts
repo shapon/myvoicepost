@@ -2159,12 +2159,20 @@ export async function registerRoutes(
         });
       }
 
+      // Accept both 'text' (mobile client) and 'originalText' (older web client)
+      const rawText = req.body.originalText || req.body.text;
       const schema = z.object({
-        originalText: z.string().min(1, "Original text is required"),
         sourceLanguage: z.string().optional().default("en"),
         targetLanguage: z.string().min(1, "Target language is required"),
         outputFormat: z.string().optional().default("paragraph"),
       });
+
+      if (!rawText || typeof rawText !== 'string' || rawText.trim().length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Text is required (provide 'text' or 'originalText')",
+        });
+      }
 
       const parseResult = schema.safeParse(req.body);
       if (!parseResult.success) {
@@ -2175,8 +2183,8 @@ export async function registerRoutes(
         });
       }
 
-      const { originalText, sourceLanguage, targetLanguage, outputFormat } =
-        parseResult.data;
+      const originalText = rawText.trim();
+      const { sourceLanguage, targetLanguage, outputFormat } = parseResult.data;
 
       console.log(
         `[Mobile Translate] User: ${userId}, ${sourceLanguage} -> ${targetLanguage}`,
