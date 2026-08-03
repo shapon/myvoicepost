@@ -14,24 +14,28 @@ const ai = new GoogleGenAI({
 
 // Language name mapping for prompts
 const languageNames: Record<string, string> = {
-  en: "English",
-  es: "Spanish",
-  fr: "French",
-  de: "German",
-  it: "Italian",
-  pt: "Portuguese",
-  nl: "Dutch",
-  ru: "Russian",
-  zh: "Chinese",
-  ja: "Japanese",
-  ko: "Korean",
-  ar: "Arabic",
-  hi: "Hindi",
-  tr: "Turkish",
-  pl: "Polish",
-  vi: "Vietnamese",
-  th: "Thai",
-  id: "Indonesian",
+  en: "English", es: "Spanish", fr: "French", de: "German", it: "Italian",
+  pt: "Portuguese", nl: "Dutch", ru: "Russian", zh: "Chinese", ja: "Japanese",
+  ko: "Korean", ar: "Arabic", hi: "Hindi", tr: "Turkish", pl: "Polish",
+  vi: "Vietnamese", th: "Thai", id: "Indonesian",
+  // Indian languages
+  te: "Telugu", ta: "Tamil", mr: "Marathi", gu: "Gujarati", kn: "Kannada",
+  ml: "Malayalam", or: "Odia", bn: "Bengali", pa: "Punjabi", ur: "Urdu",
+  ne: "Nepali", si: "Sinhala",
+  // South-East Asian
+  ms: "Malay", tl: "Filipino", km: "Khmer", lo: "Lao", my: "Myanmar",
+  // European
+  sv: "Swedish", da: "Danish", no: "Norwegian", fi: "Finnish", el: "Greek",
+  cs: "Czech", sk: "Slovak", ro: "Romanian", hu: "Hungarian", bg: "Bulgarian",
+  hr: "Croatian", sr: "Serbian", sl: "Slovenian", uk: "Ukrainian",
+  lt: "Lithuanian", lv: "Latvian", et: "Estonian", is: "Icelandic",
+  mk: "Macedonian", sq: "Albanian", bs: "Bosnian", cy: "Welsh",
+  ga: "Irish", mt: "Maltese", ca: "Catalan", eu: "Basque", gl: "Galician",
+  // Middle-Eastern / Central Asian
+  he: "Hebrew", fa: "Persian", ka: "Georgian", hy: "Armenian",
+  az: "Azerbaijani", kk: "Kazakh", uz: "Uzbek", mn: "Mongolian",
+  // African
+  sw: "Swahili", af: "Afrikaans", am: "Amharic",
 };
 
 // Tone/format instructions
