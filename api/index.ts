@@ -1788,9 +1788,15 @@ This is a transcription task for ${langName} ONLY. Output ONLY the ${langName} s
 }
 
 async function polishText(text: string, language: string, outputFormat: string, outputType: string): Promise<string> {
-  const langName = languageNames[language] || language;
+  // "none"/"auto" have no entry in languageNames, so let the model detect the
+  // actual language of the source text instead of forcing an ambiguous label.
+  const isAutoDetect = !language || language === "none" || language === "auto";
+  const langName = languageNames[language] || (isAutoDetect ? undefined : language);
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
   const typeGuide = outputTypeInstructions[outputType] || outputTypeInstructions.message;
+  const languageInstruction = langName
+    ? `The source text is expected to be in ${langName}. Write the polished output in that same language; if the source text is actually written in a different language, keep the output in the language it is actually written in — never translate it.`
+    : `Detect the language the source text is written in, and write the polished output in that exact same language. Never translate it into a different language.`;
 
   // Use concurrency limiter to prevent overwhelming the AI API under high load
   return aiRequestLimiter(() => pRetry(async () => {
@@ -1798,7 +1804,8 @@ async function polishText(text: string, language: string, outputFormat: string, 
       const response = await ai.models.generateContent({
         model: "gemini-2.5-flash",
         contents: `Transform this speech transcription into well-written ${outputType}.
-Language: ${langName}, Tone: ${toneGuide}, Format: ${typeGuide}
+Language: ${languageInstruction}
+Tone: ${toneGuide}, Format: ${typeGuide}
 Return JSON: {"polishedText": "the polished text"}
 Text: ${text}`,
         config: {

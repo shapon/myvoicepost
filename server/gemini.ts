@@ -881,7 +881,10 @@ export async function polishText(
   outputType: string,
   template?: string
 ): Promise<string> {
-  const langName = languageNames[language] || language;
+  // "none" (Auto-detect) has no entry in languageNames, so let the model detect the
+  // actual language of the source text instead of forcing an ambiguous "none" label.
+  const isAutoDetect = !language || language === "none";
+  const langName = languageNames[language] || (isAutoDetect ? undefined : language);
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
   const typeGuide = outputTypeInstructions[outputType] || outputTypeInstructions.message;
   const templateGuide = template && template !== "none" ? templateInstructions[template] || "" : "";
@@ -890,16 +893,19 @@ export async function polishText(
     async () => {
       try {
         const templateSection = templateGuide ? `\n\nTemplate Format:\n${templateGuide}` : "";
-        
+        const languageInstruction = langName
+          ? `Language: The source text is expected to be in ${langName}. Write the polished output in that same language. If the source text is actually written in a different language, keep the output in the language the source text is actually written in — never translate it into another language.`
+          : `Language: Detect the language the source text is written in, and write the polished output in that exact same language. Never translate it into a different language.`;
+
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
           contents: `You are an expert writer and editor. Transform the following speech transcription into well-written ${outputType}.
 
-Language: ${langName}
+${languageInstruction}
 Tone: ${toneGuide}
 Format: ${typeGuide}${templateSection}
 
-Make the text clear, well-structured, and grammatically correct while preserving the original meaning and intent.
+Make the text clear, well-structured, and grammatically correct while preserving the original meaning, intent, and language of the source text.
 
 Return your response as JSON with this exact format:
 {"polishedText": "the polished text here"}
