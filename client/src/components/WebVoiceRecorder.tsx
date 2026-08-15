@@ -15,6 +15,7 @@ interface WebVoiceRecorderProps {
   maxDuration?: number;
   chunkDuration?: number;
   disabled?: boolean;
+  sourceLanguage?: string;
 }
 
 export default function WebVoiceRecorder({
@@ -23,6 +24,7 @@ export default function WebVoiceRecorder({
   maxDuration = 300,
   chunkDuration = 60,
   disabled = false,
+  sourceLanguage = "auto",
 }: WebVoiceRecorderProps) {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -76,13 +78,24 @@ export default function WebVoiceRecorder({
 
   async function transcribeBlob(blob: Blob): Promise<string> {
     const audio = await blobToBase64(blob);
-    const res = await fetch("/api/v1/p/transcribe", {
+    const normalizedSourceLanguage = sourceLanguage === "none" ? "auto" : sourceLanguage;
+    const useAutoDetect = !normalizedSourceLanguage || normalizedSourceLanguage === "auto";
+    const endpoint = useAutoDetect ? "/api/v1/p/transcribe" : "/api/v1/p/transcribe_l";
+    const body = useAutoDetect
+      ? {
+          audio,
+          mimeType: blob.type || "audio/webm",
+        }
+      : {
+          audio,
+          mimeType: blob.type || "audio/webm",
+          language: normalizedSourceLanguage,
+        };
+
+    const res = await fetch(endpoint, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        audio,
-        mimeType: blob.type || "audio/webm",
-      }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: "Transcription failed" }));

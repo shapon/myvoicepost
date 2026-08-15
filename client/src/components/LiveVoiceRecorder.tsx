@@ -37,7 +37,7 @@ export default function LiveVoiceRecorder({
   const durationRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const bcp47Language = toBcp47(language);
+  const bcp47Language = toBcp47(language === "auto" || language === "none" ? "en" : language);
 
   const { isSupported, isListening, error, start, stop } = useLiveDictation({
     language: bcp47Language,
@@ -85,6 +85,7 @@ export default function LiveVoiceRecorder({
         maxDuration={maxDuration}
         chunkDuration={chunkDuration}
         disabled={disabled}
+        sourceLanguage={language}
       />
     );
   }

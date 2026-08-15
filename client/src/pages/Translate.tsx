@@ -257,7 +257,7 @@ export default function Translate() {
                   maxDuration={user ? 300 : 55}
                   chunkDuration={60}
                   disabled={translateMutation.isPending}
-                  language={sourceLanguage === "auto" ? "en" : sourceLanguage}
+                  language={sourceLanguage}
                 />
                 {text && (
                   <div className="rounded-md border p-3">

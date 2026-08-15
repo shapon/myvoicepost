@@ -630,15 +630,20 @@ export async function translateAndPolish(
   targetLanguage: string,
   outputFormat: string
 ): Promise<{ translatedText: string; polishedText: string }> {
-  const sourceLang = languageNames[sourceLanguage] || sourceLanguage;
+  // "none"/"auto"/empty are auto-detect sentinels from clients — never map
+  // these into languageNames as if they were real language codes.
+  const isAutoSource = !sourceLanguage || sourceLanguage === "none" || sourceLanguage === "auto";
+  const sourceLang = isAutoSource ? undefined : (languageNames[sourceLanguage] || sourceLanguage);
   const targetLang = languageNames[targetLanguage] || targetLanguage;
   const toneGuide = toneInstructions[outputFormat] || toneInstructions.professional;
 
   return pRetry(
     async () => {
       try {
-        // If source and target are the same, just polish the text
-        if (sourceLanguage === targetLanguage) {
+        // If source and target are explicitly the same, just polish the text.
+        // Skip this shortcut for auto-detected source — we don't actually know
+        // the spoken language yet, so it may differ from the target.
+        if (!isAutoSource && sourceLanguage === targetLanguage) {
           const response = await ai.models.generateContent({
             model: "gemini-2.5-flash",
             contents: `You are an expert writer and editor. Polish the following text to make it clear, well-structured, and grammatically correct. ${toneGuide}
@@ -667,13 +672,17 @@ ${text}`,
           };
         }
 
+        const sourceLangInstruction = isAutoSource
+          ? "The text below may be in any language — first detect what language it is actually written in, then proceed."
+          : `The user will provide text in ${sourceLang}.`;
+
         // Translate and polish in one call
         const response = await ai.models.generateContent({
           model: "gemini-2.5-flash",
-          contents: `You are an expert translator and writer. The user will provide text in ${sourceLang}. 
+          contents: `You are an expert translator and writer. ${sourceLangInstruction}
 
 Your task:
-1. Translate the text accurately to ${targetLang}
+1. Translate the text accurately to ${targetLang}. If the text is already in ${targetLang}, return it unchanged as the translation.
 2. Polish the translation to make it natural, fluent, and well-structured
 3. ${toneGuide}
 
@@ -682,18 +691,18 @@ Return your response as JSON with this exact format:
 
 Text to translate:
 ${text}`,
-          config: {
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                translatedText: { type: Type.STRING },
-                polishedText: { type: Type.STRING }
-              },
-              required: ["translatedText", "polishedText"]
+            config: {
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.OBJECT,
+                properties: {
+                  translatedText: { type: Type.STRING },
+                  polishedText: { type: Type.STRING }
+                },
+                required: ["translatedText", "polishedText"]
+              }
             }
-          }
-        });
+          });
 
         const result = safeJsonParse(response.text || "{}", { translatedText: text, polishedText: text });
         
