@@ -1,4 +1,5 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { sanitizePayload } from "./sanitize";
 
 const TOKEN_KEY = "mvp_auth_token";
 
@@ -53,15 +54,17 @@ export async function apiRequest(
   const headers: Record<string, string> = {
     ...getAuthHeaders(),
   };
-  
-  if (data) {
+
+  const sanitizedData = data !== undefined ? sanitizePayload(data) : data;
+
+  if (sanitizedData) {
     headers["Content-Type"] = "application/json";
   }
 
   const res = await fetch(url, {
     method,
     headers,
-    body: data ? JSON.stringify(data) : undefined,
+    body: sanitizedData ? JSON.stringify(sanitizedData) : undefined,
     credentials: "include",
   });
 

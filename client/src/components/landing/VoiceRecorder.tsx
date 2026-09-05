@@ -21,6 +21,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useLocation } from "wouter";
 import type { TranslationResult, SavedText } from "@shared/schema";
 import { retryWithBackoff } from "@/lib/pendingRecordings";
+import { stripHtmlTags } from "@/lib/sanitize";
 
 // Auth helpers — use JWT token from localStorage when available
 function getVRToken(): string | null {
@@ -352,8 +353,8 @@ function PolishRecorder() {
         credentials: "include",
         body: JSON.stringify({
           type: "polish",
-          originalText: data.originalText,
-          polishedText: data.polishedText,
+          originalText: stripHtmlTags(data.originalText),
+          polishedText: stripHtmlTags(data.polishedText),
           sourceLanguage: language,
           outputFormat,
           outputType,
@@ -1657,9 +1658,9 @@ function TranslateRecorder() {
         credentials: "include",
         body: JSON.stringify({
           type: "translate",
-          originalText: data.originalText,
-          polishedText: data.polishedText,
-          translatedText: data.translatedText,
+          originalText: stripHtmlTags(data.originalText),
+          polishedText: stripHtmlTags(data.polishedText),
+          translatedText: stripHtmlTags(data.translatedText),
           sourceLanguage,
           targetLanguage,
           outputFormat,
