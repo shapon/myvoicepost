@@ -1,4 +1,9 @@
-import "dotenv/config";
+// Load .env only in local development. In production (Vercel), env vars are
+// injected by the platform, and the static "dotenv/config" import breaks the
+// esbuild bundle because dotenv's exports map doesn't resolve the subpath.
+if (process.env.NODE_ENV !== "production") {
+  import("dotenv/config").catch(() => {});
+}
 import express, { type Request, Response, NextFunction } from "express";
 import session from "express-session";
 import { registerRoutes } from "./routes";
