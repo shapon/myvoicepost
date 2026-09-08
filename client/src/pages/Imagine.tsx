@@ -83,10 +83,16 @@ export default function Imagine() {
         .filter(Boolean)
         .join(". ");
 
+      const sizeMap: Record<Shape, string> = {
+        square: "1024x1024",
+        portrait: "1024x1792",
+        landscape: "1792x1024",
+      };
+
       const res = await apiRequest("POST", "/api/v1/a/generate-image-web", {
         prompt: fullPrompt,
         quality,
-        shape,
+        size: sizeMap[shape],
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
@@ -95,7 +101,19 @@ export default function Imagine() {
       return res.json();
     },
     onSuccess: (data) => {
-      setImageUrl(data.imageUrl || data.url || null);
+      const url =
+        data.imageUrl ||
+        data.url ||
+        (data.imageBase64 ? `data:image/png;base64,${data.imageBase64}` : null);
+      if (!url) {
+        toast({
+          title: "Generation failed",
+          description: "No image was returned by the server. Please try again.",
+          variant: "destructive",
+        });
+        return;
+      }
+      setImageUrl(url);
       startCooldown();
       toast({ title: "Image created!", description: "Your image has been generated." });
     },
@@ -121,6 +139,15 @@ export default function Imagine() {
   async function handleDownload() {
     if (!imageUrl) return;
     try {
+      if (imageUrl.startsWith("data:")) {
+        const a = document.createElement("a");
+        a.href = imageUrl;
+        a.download = `myvoicepost-imagine-${Date.now()}.png`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        return;
+      }
       const res = await fetch(imageUrl);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -136,15 +163,31 @@ export default function Imagine() {
 
   async function handleShare() {
     if (!imageUrl) return;
-    if (navigator.share) {
-      try {
-        await navigator.share({ title: "Generated with MyVoicePost", url: imageUrl });
-      } catch {
-        // user cancelled — silent
+    try {
+      if (imageUrl.startsWith("data:")) {
+        const res = await fetch(imageUrl);
+        const blob = await res.blob();
+        const file = new File([blob], `myvoicepost-imagine-${Date.now()}.png`, {
+          type: blob.type || "image/png",
+        });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) {
+          await navigator.share({ title: "Generated with MyVoicePost", files: [file] });
+        } else {
+          toast({
+            title: "Sharing not supported",
+            description: "This browser can't share images directly. Please use Download instead.",
+          });
+        }
+        return;
       }
-    } else {
-      await navigator.clipboard.writeText(imageUrl);
-      toast({ title: "Link copied", description: "Image URL copied to clipboard." });
+      if (navigator.share) {
+        await navigator.share({ title: "Generated with MyVoicePost", url: imageUrl });
+      } else {
+        await navigator.clipboard.writeText(imageUrl);
+        toast({ title: "Link copied", description: "Image URL copied to clipboard." });
+      }
+    } catch {
+      // user cancelled — silent
     }
   }
 
