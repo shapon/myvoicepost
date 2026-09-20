@@ -18,7 +18,7 @@ const footerLinks = {
   ],
   download: [
     { label: "iOS", href: "#" },
-    { label: "Android", href: "#" },
+    { label: "Android", href: "https://play.google.com/store/apps/details?id=com.serpiancetech.myvoicepost" },
     { label: "Mac", href: "#" },
     { label: "Web App", href: "#" },
   ],
@@ -124,7 +124,7 @@ export default function Footer() {
             (c) 2024 MyVoicePost. All rights reserved.
           </p>
           <p className="text-sm text-muted-foreground">
-            Get in touch: <a href="mailto:hi@myvoicepost.com" className="text-primary hover:underline">hi@myvoicepost.com</a>
+            Get in touch: <a href="mailto:support@myvoicepost.com" className="text-primary hover:underline">support@myvoicepost.com</a>
           </p>
         </div>
       </div>
