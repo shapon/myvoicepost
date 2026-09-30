@@ -370,6 +370,59 @@ async function storeSessionId(userId: string, sessionId: string): Promise<void> 
   await db.update(users).set({ activeSessionId: sessionId }).where(eq(users.id, userId));
 }
 
+// ============ APPLE SIGN-IN TOKEN VERIFICATION ============
+// Bundle ID is the default audience for the native (expo-apple-authentication) flow;
+// override with APPLE_CLIENT_ID if a Services ID (web) flow is added later.
+const APPLE_ISSUER = "https://appleid.apple.com";
+const APPLE_CLIENT_ID = process.env.APPLE_CLIENT_ID || "com.myvoicepost.app";
+const APPLE_JWKS_TTL_MS = 60 * 60 * 1000;
+let appleJwksCache: { pemByKid: Map<string, string>; fetchedAt: number } | null = null;
+
+async function getApplePublicKeyPem(kid: string): Promise<string> {
+  const isStale = !appleJwksCache || Date.now() - appleJwksCache.fetchedAt > APPLE_JWKS_TTL_MS;
+  if (isStale) {
+    const response = await fetch(`${APPLE_ISSUER}/auth/keys`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch Apple's public keys (status ${response.status})`);
+    }
+    const { keys } = await response.json() as { keys: Array<Record<string, string>> };
+    const pemByKid = new Map<string, string>();
+    for (const jwk of keys) {
+      pemByKid.set(jwk.kid, crypto.createPublicKey({ key: jwk, format: "jwk" }).export({ type: "spki", format: "pem" }) as string);
+    }
+    appleJwksCache = { pemByKid, fetchedAt: Date.now() };
+  }
+
+  const pem = appleJwksCache!.pemByKid.get(kid);
+  if (!pem) {
+    appleJwksCache = null; // Key rotated since our last fetch - force a refresh on the next attempt.
+    throw new Error(`No matching Apple public key found for kid=${kid}`);
+  }
+  return pem;
+}
+
+interface AppleIdTokenPayload {
+  sub: string;
+  email?: string;
+  email_verified?: string | boolean;
+}
+
+async function verifyAppleIdentityToken(identityToken: string): Promise<AppleIdTokenPayload> {
+  const decoded = jwt.decode(identityToken, { complete: true });
+  const kid = decoded && typeof decoded === "object" ? decoded.header?.kid : undefined;
+  if (!kid) {
+    throw new Error("Apple identity token is missing a key ID");
+  }
+
+  const publicKeyPem = await getApplePublicKeyPem(kid);
+
+  return jwt.verify(identityToken, publicKeyPem, {
+    algorithms: ["RS256"],
+    issuer: APPLE_ISSUER,
+    audience: APPLE_CLIENT_ID,
+  }) as AppleIdTokenPayload;
+}
+
 type UserRole = "ADMIN" | "USER" | "GUEST" | "TRIAL";
 
 async function refreshUserRole(userId: string): Promise<UserRole> {
@@ -2412,6 +2465,10 @@ async function sendOtpEmail(email: string, otp: string): Promise<void> {
   console.log(`[OTP EMAIL] Verification code sent to ${email}`);
 }
 
+// Per-email cooldown prevents rapid re-sends from hammering the SMTP provider.
+const OTP_RESEND_COOLDOWN_MS = 60 * 1000;
+const otpResendCooldown: Record<string, number> = {};
+
 app.post("/api/v1/p/mail_otp", async (req, res) => {
   try {
     const schema = z.object({
@@ -2430,6 +2487,20 @@ app.post("/api/v1/p/mail_otp", async (req, res) => {
     const { email } = parseResult.data;
     const normalizedEmail = email.toLowerCase().trim();
     console.log(`[DEBUG /p/mail_otp] INPUT: email_domain=${normalizedEmail.split("@")[1] ?? "unknown"}`);
+
+    const nextAllowedAt = otpResendCooldown[normalizedEmail];
+    if (nextAllowedAt) {
+      const remainingMs = nextAllowedAt - Date.now();
+      if (remainingMs > 0) {
+        const retryAfterSeconds = Math.ceil(remainingMs / 1000);
+        return res.status(429).json({
+          success: false,
+          error: `Please wait ${retryAfterSeconds}s before requesting another code.`,
+          retryAfterSeconds,
+        });
+      }
+      delete otpResendCooldown[normalizedEmail];
+    }
 
     const existingEmail = await db.select().from(users).where(eq(users.email, normalizedEmail)).limit(1);
     if (existingEmail.length > 0) {
@@ -2459,12 +2530,14 @@ app.post("/api/v1/p/mail_otp", async (req, res) => {
     }
 
     await sendOtpEmail(normalizedEmail, otp);
+    otpResendCooldown[normalizedEmail] = Date.now() + OTP_RESEND_COOLDOWN_MS;
 
     console.log(`[OTP] Code generated for ${normalizedEmail}, expires at ${expiresAt.toISOString()}`);
 
     res.json({
       success: true,
       message: "Verification code sent to your email",
+      retryAfterSeconds: OTP_RESEND_COOLDOWN_MS / 1000,
     });
   } catch (error: any) {
     console.error("[OTP] Error sending OTP:", error);
@@ -2844,6 +2917,13 @@ app.post("/api/v1/a/account/delete", mobileAuthMiddleware, async (req: any, res)
     await db.delete(savedTexts).where(eq(savedTexts.userId, userId));
     await db.delete(userSettings).where(eq(userSettings.userId, userId));
     await db.delete(userSubscriptions).where(eq(userSubscriptions.userId, userId));
+    await db.delete(audioLogs).where(eq(audioLogs.userId, userId));
+    await db.delete(pushTokens).where(eq(pushTokens.userId, userId));
+    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
+    await db.delete(crashReports).where(eq(crashReports.userId, userId));
+    await db.delete(notificationLog).where(eq(notificationLog.userId, userId));
+    await db.delete(supportRequests).where(eq(supportRequests.userId, userId));
+    await db.delete(errorLogs).where(eq(errorLogs.userId, userId));
     await db.delete(users).where(eq(users.id, userId));
     console.log(`[DeleteAccount] Account deleted successfully for user: ${userId}`);
     res.json({ success: true, message: "Account deleted successfully" });
@@ -3355,6 +3435,191 @@ app.post("/api/v1/p/auth/google", async (req, res) => {
     res.status(500).json({
       success: false,
       error: "Google sign-in failed. Please try again.",
+    });
+  }
+});
+
+// ============================================================
+// APPLE SSO ENDPOINT - /api/v1/p/auth/apple
+// Native Sign in with Apple (expo-apple-authentication): client sends the
+// identityToken directly; verified here against Apple's public JWKS.
+// ============================================================
+app.post("/api/v1/p/auth/apple", async (req, res) => {
+  try {
+    const schema = z.object({
+      identityToken: z.string().min(1, "Apple identity token is required"),
+      fullName: z.object({
+        givenName: z.string().nullable().optional(),
+        familyName: z.string().nullable().optional(),
+      }).optional(),
+    });
+
+    const parseResult = schema.safeParse(req.body);
+    if (!parseResult.success) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid request",
+        details: parseResult.error.errors,
+      });
+    }
+
+    const { identityToken, fullName } = parseResult.data;
+
+    let applePayload: AppleIdTokenPayload;
+    try {
+      applePayload = await verifyAppleIdentityToken(identityToken);
+    } catch (verifyErr: any) {
+      console.error("[Apple Sign-In] Token verification failed:", verifyErr.message);
+      return res.status(401).json({
+        success: false,
+        error: "Invalid Apple sign-in token. Please try again.",
+      });
+    }
+
+    if (!applePayload.email) {
+      return res.status(401).json({
+        success: false,
+        error: "Apple did not provide an email address for this account.",
+      });
+    }
+
+    const normalizedEmail = applePayload.email.toLowerCase().trim();
+    const appleId = applePayload.sub;
+
+    console.log(`[Apple Sign-In] Verified Apple user: email=${normalizedEmail}, appleId=${appleId}`);
+
+    const existingSso = await db.select().from(userSsoAccounts)
+      .where(and(eq(userSsoAccounts.provider, "apple"), eq(userSsoAccounts.providerUserId, appleId)))
+      .limit(1);
+
+    if (existingSso.length > 0) {
+      const sso = existingSso[0];
+      const userRows = await db.select().from(users).where(eq(users.id, sso.userId)).limit(1);
+      if (userRows.length > 0) {
+        const user = userRows[0];
+        const ssoSessionId = generateSessionId();
+        await storeSessionId(user.id, ssoSessionId);
+        const token = jwt.sign(
+          { userId: user.id, email: user.email, username: user.username, sessionId: ssoSessionId },
+          JWT_SECRET,
+          { expiresIn: "60d" }
+        );
+
+        await db.update(userSsoAccounts)
+          .set({ providerEmail: normalizedEmail, updatedAt: new Date() })
+          .where(eq(userSsoAccounts.id, sso.id));
+
+        return res.json({
+          success: true,
+          token,
+          expiresIn: 60 * 24 * 60 * 60,
+          user: { id: user.id, email: user.email, username: user.username },
+          isNewUser: false,
+        });
+      }
+    }
+
+    const existingEmailUser = await db.select().from(users)
+      .where(eq(users.email, normalizedEmail))
+      .limit(1);
+
+    if (existingEmailUser.length > 0) {
+      const user = existingEmailUser[0];
+
+      await db.insert(userSsoAccounts).values({
+        userId: user.id,
+        provider: "apple",
+        providerUserId: appleId,
+        providerEmail: normalizedEmail,
+      }).onConflictDoNothing();
+
+      const emailSsoSessionId = generateSessionId();
+      await storeSessionId(user.id, emailSsoSessionId);
+      const token = jwt.sign(
+        { userId: user.id, email: user.email, username: user.username, sessionId: emailSsoSessionId },
+        JWT_SECRET,
+        { expiresIn: "60d" }
+      );
+
+      return res.json({
+        success: true,
+        token,
+        expiresIn: 60 * 24 * 60 * 60,
+        user: { id: user.id, email: user.email, username: user.username },
+        isNewUser: false,
+      });
+    }
+
+    const appleName = [fullName?.givenName, fullName?.familyName].filter(Boolean).join(" ") || normalizedEmail.split("@")[0];
+    let baseUsername = appleName.toLowerCase().replace(/[^a-z0-9]/g, "").substring(0, 20);
+    if (baseUsername.length < 3) baseUsername = "user" + baseUsername;
+
+    let finalUsername = baseUsername;
+    let suffix = 1;
+    while (true) {
+      const existing = await db.select().from(users)
+        .where(eq(users.username, finalUsername))
+        .limit(1);
+      if (existing.length === 0) break;
+      finalUsername = `${baseUsername}${suffix}`;
+      suffix++;
+      if (suffix > 100) {
+        finalUsername = `user_${randomUUID().substring(0, 8)}`;
+        break;
+      }
+    }
+
+    const randomPassword = randomUUID();
+    const hashedPassword = await bcrypt.hash(randomPassword, 10);
+
+    const appStartsAt = new Date();
+    const validEndsAt = new Date(appStartsAt);
+    validEndsAt.setDate(validEndsAt.getDate() + 7);
+    validEndsAt.setUTCHours(23, 59, 59, 999);
+
+    const result = await db.insert(users).values({
+      username: finalUsername,
+      email: normalizedEmail,
+      passwordHash: hashedPassword,
+      appStartsAt,
+      validEndsAt,
+      trialUsed: false,
+      currentPackage: "TRIAL",
+      audioMinutesAdded: 90,
+      audioMinutesUsed: "0",
+    }).returning();
+
+    const newUser = result[0];
+
+    await db.insert(userSsoAccounts).values({
+      userId: newUser.id,
+      provider: "apple",
+      providerUserId: appleId,
+      providerEmail: normalizedEmail,
+    });
+
+    const newUserSessionId = generateSessionId();
+    await storeSessionId(newUser.id, newUserSessionId);
+    const token = jwt.sign(
+      { userId: newUser.id, email: newUser.email, username: newUser.username, sessionId: newUserSessionId },
+      JWT_SECRET,
+      { expiresIn: "60d" }
+    );
+
+    console.log(`[Apple Sign-In] New user created: userId=${newUser.id}, username=${newUser.username}`);
+
+    res.status(201).json({
+      success: true,
+      token,
+      expiresIn: 60 * 24 * 60 * 60,
+      user: { id: newUser.id, email: newUser.email, username: newUser.username },
+      isNewUser: true,
+    });
+  } catch (error: any) {
+    console.error("[Apple Sign-In] POST Error:", error);
+    res.status(500).json({
+      success: false,
+      error: "Apple sign-in failed. Please try again.",
     });
   }
 });
