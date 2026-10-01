@@ -2937,7 +2937,6 @@ app.post("/api/v1/a/account/delete", mobileAuthMiddleware, async (req: any, res)
       await deleteUserRows("mvp_audio_log", audioLogs);
       await deleteUserRows("mvp_push_tokens", pushTokens);
       await deleteUserRows("mvp_password_reset_tokens", passwordResetTokens);
-      await deleteUserRows("mvp_crash_reports", crashReports);
       await deleteUserRows("mvp_notification_log", notificationLog);
       await deleteUserRows("mvp_notification_preferences", notificationPreferences);
       await deleteUserRows("mvp_support_requests", supportRequests);

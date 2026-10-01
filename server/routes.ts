@@ -1928,7 +1928,6 @@ export async function registerRoutes(
         await db
           .delete(passwordResetTokens)
           .where(eq(passwordResetTokens.userId, userId));
-        await db.delete(crashReports).where(eq(crashReports.userId, userId));
         await db
           .delete(notificationLog)
           .where(eq(notificationLog.userId, userId));
