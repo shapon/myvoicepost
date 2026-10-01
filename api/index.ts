@@ -208,6 +208,15 @@ const notificationLog = pgTable("mvp_notification_log", {
   readAt: timestamp("read_at"),
 });
 
+const notificationPreferences = pgTable("mvp_notification_preferences", {
+  id: uuid("id").defaultRandom().primaryKey(),
+  userId: uuid("user_id").notNull(),
+  notificationType: varchar("notification_type", { length: 50 }).notNull(),
+  pushEnabled: boolean("push_enabled").notNull().default(true),
+  emailEnabled: boolean("email_enabled").notNull().default(true),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
 const supportRequests = pgTable("mvp_support_requests", {
   id: uuid("id").primaryKey().default(sql`gen_random_uuid()`),
   userId: uuid("user_id"),
@@ -2908,27 +2917,41 @@ app.get("/api/v1/a/auth/me", mobileAuthMiddleware, async (req, res) => {
 });
 
 app.post("/api/v1/a/account/delete", mobileAuthMiddleware, async (req: any, res) => {
+  let deletingTable = "unknown";
   try {
     const userId = req.jwtUser?.userId;
     if (!userId) {
       return res.status(401).json({ success: false, error: "Not authenticated" });
     }
     console.log(`[DeleteAccount] Starting account deletion for user: ${userId}`);
-    await db.delete(savedTexts).where(eq(savedTexts.userId, userId));
-    await db.delete(userSettings).where(eq(userSettings.userId, userId));
-    await db.delete(userSubscriptions).where(eq(userSubscriptions.userId, userId));
-    await db.delete(audioLogs).where(eq(audioLogs.userId, userId));
-    await db.delete(pushTokens).where(eq(pushTokens.userId, userId));
-    await db.delete(passwordResetTokens).where(eq(passwordResetTokens.userId, userId));
-    await db.delete(crashReports).where(eq(crashReports.userId, userId));
-    await db.delete(notificationLog).where(eq(notificationLog.userId, userId));
-    await db.delete(supportRequests).where(eq(supportRequests.userId, userId));
-    await db.delete(errorLogs).where(eq(errorLogs.userId, userId));
-    await db.delete(users).where(eq(users.id, userId));
+
+    await db.transaction(async (tx) => {
+      const deleteUserRows = async (tableName: string, table: any) => {
+        deletingTable = tableName;
+        await tx.delete(table).where(eq(table.userId, userId));
+      };
+
+      await deleteUserRows("mvp_saved_texts", savedTexts);
+      await deleteUserRows("mvp_user_settings", userSettings);
+      await deleteUserRows("mvp_user_subscriptions", userSubscriptions);
+      await deleteUserRows("mvp_audio_log", audioLogs);
+      await deleteUserRows("mvp_push_tokens", pushTokens);
+      await deleteUserRows("mvp_password_reset_tokens", passwordResetTokens);
+      await deleteUserRows("mvp_crash_reports", crashReports);
+      await deleteUserRows("mvp_notification_log", notificationLog);
+      await deleteUserRows("mvp_notification_preferences", notificationPreferences);
+      await deleteUserRows("mvp_support_requests", supportRequests);
+      await deleteUserRows("mvp_error_logs", errorLogs);
+      await deleteUserRows("mvp_user_sso_accounts", userSsoAccounts);
+
+      deletingTable = "mvp_users";
+      await tx.delete(users).where(eq(users.id, userId));
+    });
+
     console.log(`[DeleteAccount] Account deleted successfully for user: ${userId}`);
     res.json({ success: true, message: "Account deleted successfully" });
   } catch (err) {
-    console.error("[DeleteAccount] Error:", err);
+    console.error(`[DeleteAccount] Failed while deleting ${deletingTable}:`, err);
     res.status(500).json({ success: false, error: "Failed to delete account" });
   }
 });
