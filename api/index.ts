@@ -2592,9 +2592,10 @@ app.post("/api/v1/p/login", async (req, res) => {
 
     const user = result[0];
     if (!user) {
-      return res.status(401).json({
+      console.log(`[DEBUG /p/forgot-password] INPUT: email=${email}, userFound=false`);
+      return res.status(404).json({
         success: false,
-        error: "No account found with this email. Please check your email or sign up.",
+        error: "user not exist with the emailid",
       });
     }
 
